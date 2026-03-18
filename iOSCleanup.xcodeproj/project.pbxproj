@@ -25,6 +25,7 @@
 		AA0000010000000000000100 /* FileScanEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000101 /* FileScanEngineTests.swift */; };
 		AA000002000000000000001A /* PurchaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001B /* PurchaseManager.swift */; };
 		AA000002000000000000002A /* iOSCleanup.storekit in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000002B /* iOSCleanup.storekit */; };
+		AA000003000000000000001A /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000003000000000000001B /* OnboardingView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -49,6 +50,7 @@
 		AA0000010000000000000401 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA000002000000000000001B /* PurchaseManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PurchaseManager.swift; sourceTree = "<group>"; };
 		AA000002000000000000002B /* iOSCleanup.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = iOSCleanup.storekit; sourceTree = "<group>"; };
+		AA000003000000000000001B /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -83,6 +85,7 @@
 				AA0000010000000000000606 /* Utilities */,
 				AA000002000000000000003A /* Store */,
 				AA000002000000000000004A /* Configuration */,
+				AA000003000000000000002A /* Views */,
 			);
 			path = iOSCleanup;
 			sourceTree = "<group>";
@@ -93,6 +96,14 @@
 				AA000002000000000000001B /* PurchaseManager.swift */,
 			);
 			path = Store;
+			sourceTree = "<group>";
+		};
+		AA000003000000000000002A /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				AA000003000000000000001B /* OnboardingView.swift */,
+			);
+			path = Views;
 			sourceTree = "<group>";
 		};
 		AA000002000000000000004A /* Configuration */ = {
@@ -273,6 +284,7 @@
 				AA000001000000000000009A /* ContactScanEngine.swift in Sources */,
 				AA00000100000000000000AA /* FileScanEngine.swift in Sources */,
 				AA000002000000000000001A /* PurchaseManager.swift in Sources */,
+				AA000003000000000000001A /* OnboardingView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
