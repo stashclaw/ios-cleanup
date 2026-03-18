@@ -17,14 +17,15 @@ actor PhotoScanEngine {
                     var completed = 0
 
                     await withTaskGroup(of: (String, VNFeaturePrintObservation?).self) { group in
+                        var nextIndex = 0
                         var inFlight = 0
-                        var assetIterator = assets.makeIterator()
 
                         // Seed up to 4
-                        while inFlight < 4, let asset = assetIterator.next() {
-                            let a = asset
-                            group.addTask { [weak self] in
-                                let fp = await self?.featurePrint(for: a)
+                        while inFlight < 4, nextIndex < assets.count {
+                            let a = assets[nextIndex]
+                            nextIndex += 1
+                            group.addTask {
+                                let fp = await self.featurePrint(for: a)
                                 return (a.localIdentifier, fp)
                             }
                             inFlight += 1
@@ -36,14 +37,13 @@ actor PhotoScanEngine {
                             }
                             completed += 1
                             if completed % 50 == 0 {
-                                // progress update (internal)
                                 _ = ScanProgress(phase: "Generating embeddings", completed: completed, total: total)
                             }
-                            // Enqueue next
-                            if let asset = assetIterator.next() {
-                                let a = asset
-                                group.addTask { [weak self] in
-                                    let fp = await self?.featurePrint(for: a)
+                            if nextIndex < assets.count {
+                                let a = assets[nextIndex]
+                                nextIndex += 1
+                                group.addTask {
+                                    let fp = await self.featurePrint(for: a)
                                     return (a.localIdentifier, fp)
                                 }
                             }

@@ -61,7 +61,7 @@ actor FileScanEngine {
                 options: [.skipsHiddenFiles]
             ) else { continue }
 
-            for case let url as URL in enumerator {
+            while let url = enumerator.nextObject() as? URL {
                 let resourceValues = try? url.resourceValues(forKeys: [.fileSizeKey, .creationDateKey, .isDirectoryKey])
                 if resourceValues?.isDirectory == true { continue }
                 guard let size = resourceValues?.fileSize, Int64(size) >= FileScanEngine.minimumFileSizeBytes else { continue }

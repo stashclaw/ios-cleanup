@@ -19,8 +19,7 @@ actor ContactScanEngine {
             CNContactPhoneNumbersKey as CNKeyDescriptor,
             CNContactEmailAddressesKey as CNKeyDescriptor,
             CNContactBirthdayKey as CNKeyDescriptor,
-            CNContactImageDataAvailableKey as CNKeyDescriptor,
-            CNContactMetadataKey as CNKeyDescriptor
+            CNContactImageDataAvailableKey as CNKeyDescriptor
         ]
 
         let request = CNContactFetchRequest(keysToFetch: keys)
@@ -138,12 +137,6 @@ actor ContactScanEngine {
     private func determinePrimary(_ a: CNContact, _ b: CNContact) -> (primary: CNContact, duplicate: CNContact) {
         let countA = filledFieldCount(a)
         let countB = filledFieldCount(b)
-        if countA != countB {
-            return countA > countB ? (a, b) : (b, a)
-        }
-        // Fall back to most recently modified
-        let dateA = a.metadata?.lastModifiedDate ?? .distantPast
-        let dateB = b.metadata?.lastModifiedDate ?? .distantPast
-        return dateA >= dateB ? (a, b) : (b, a)
+        return countA >= countB ? (a, b) : (b, a)
     }
 }

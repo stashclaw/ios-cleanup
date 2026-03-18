@@ -12,11 +12,13 @@ struct ContentView: View {
                     .padding()
             }
             .toolbar {
+                #if os(iOS)
                 ToolbarItemGroup(placement: .bottomBar) {
                     Button("Photos") { Task { await runPhotoScan() } }
                     Button("Contacts") { Task { await runContactScan() } }
                     Button("Files") { Task { await runFileScan() } }
                 }
+                #endif
             }
             .navigationTitle("iOSCleanup Debug")
         }
