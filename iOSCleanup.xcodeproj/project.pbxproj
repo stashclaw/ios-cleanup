@@ -31,6 +31,8 @@
 		AA000005000000000000001A /* PaywallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000005000000000000001B /* PaywallView.swift */; };
 		AA000006000000000000001A /* PhotoResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000006000000000000001B /* PhotoResultsView.swift */; };
 		AA000006000000000000002A /* PhotoGroupDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000006000000000000002B /* PhotoGroupDetailView.swift */; };
+		AA000007000000000000001A /* SwipeModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000007000000000000001B /* SwipeModeView.swift */; };
+		AA000007000000000000002A /* SwipeModeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000007000000000000002B /* SwipeModeViewModel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -61,6 +63,8 @@
 		AA000005000000000000001B /* PaywallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaywallView.swift; sourceTree = "<group>"; };
 		AA000006000000000000001B /* PhotoResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoResultsView.swift; sourceTree = "<group>"; };
 		AA000006000000000000002B /* PhotoGroupDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoGroupDetailView.swift; sourceTree = "<group>"; };
+		AA000007000000000000001B /* SwipeModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeModeView.swift; sourceTree = "<group>"; };
+		AA000007000000000000002B /* SwipeModeViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeModeViewModel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -125,6 +129,8 @@
 			children = (
 				AA000006000000000000001B /* PhotoResultsView.swift */,
 				AA000006000000000000002B /* PhotoGroupDetailView.swift */,
+				AA000007000000000000001B /* SwipeModeView.swift */,
+				AA000007000000000000002B /* SwipeModeViewModel.swift */,
 			);
 			path = Photos;
 			sourceTree = "<group>";
@@ -313,6 +319,8 @@
 				AA000005000000000000001A /* PaywallView.swift in Sources */,
 				AA000006000000000000001A /* PhotoResultsView.swift in Sources */,
 				AA000006000000000000002A /* PhotoGroupDetailView.swift in Sources */,
+				AA000007000000000000001A /* SwipeModeView.swift in Sources */,
+				AA000007000000000000002A /* SwipeModeViewModel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
