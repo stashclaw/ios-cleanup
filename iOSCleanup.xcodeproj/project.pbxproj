@@ -29,6 +29,8 @@
 		AA000004000000000000001A /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000004000000000000001B /* HomeView.swift */; };
 		AA000004000000000000002A /* HomeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000004000000000000002B /* HomeViewModel.swift */; };
 		AA000005000000000000001A /* PaywallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000005000000000000001B /* PaywallView.swift */; };
+		AA000006000000000000001A /* PhotoResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000006000000000000001B /* PhotoResultsView.swift */; };
+		AA000006000000000000002A /* PhotoGroupDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000006000000000000002B /* PhotoGroupDetailView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -57,6 +59,8 @@
 		AA000004000000000000001B /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		AA000004000000000000002B /* HomeViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeViewModel.swift; sourceTree = "<group>"; };
 		AA000005000000000000001B /* PaywallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaywallView.swift; sourceTree = "<group>"; };
+		AA000006000000000000001B /* PhotoResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoResultsView.swift; sourceTree = "<group>"; };
+		AA000006000000000000002B /* PhotoGroupDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoGroupDetailView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -111,8 +115,18 @@
 				AA000004000000000000001B /* HomeView.swift */,
 				AA000004000000000000002B /* HomeViewModel.swift */,
 				AA000005000000000000001B /* PaywallView.swift */,
+				AA000006000000000000003A /* Photos */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		AA000006000000000000003A /* Photos */ = {
+			isa = PBXGroup;
+			children = (
+				AA000006000000000000001B /* PhotoResultsView.swift */,
+				AA000006000000000000002B /* PhotoGroupDetailView.swift */,
+			);
+			path = Photos;
 			sourceTree = "<group>";
 		};
 		AA000002000000000000004A /* Configuration */ = {
@@ -297,6 +311,8 @@
 				AA000004000000000000001A /* HomeView.swift in Sources */,
 				AA000004000000000000002A /* HomeViewModel.swift in Sources */,
 				AA000005000000000000001A /* PaywallView.swift in Sources */,
+				AA000006000000000000001A /* PhotoResultsView.swift in Sources */,
+				AA000006000000000000002A /* PhotoGroupDetailView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
