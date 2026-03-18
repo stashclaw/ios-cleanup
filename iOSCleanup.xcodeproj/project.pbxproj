@@ -23,6 +23,8 @@
 		AA00000100000000000000EA /* PhotoScanEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000EB /* PhotoScanEngineTests.swift */; };
 		AA00000100000000000000FA /* ContactScanEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000FB /* ContactScanEngineTests.swift */; };
 		AA0000010000000000000100 /* FileScanEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000101 /* FileScanEngineTests.swift */; };
+		AA000002000000000000001A /* PurchaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001B /* PurchaseManager.swift */; };
+		AA000002000000000000002A /* iOSCleanup.storekit in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000002B /* iOSCleanup.storekit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +47,8 @@
 		AA0000010000000000000201 /* iOSCleanup.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iOSCleanup.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000010000000000000301 /* iOSCleanupTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iOSCleanupTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000010000000000000401 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AA000002000000000000001B /* PurchaseManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PurchaseManager.swift; sourceTree = "<group>"; };
+		AA000002000000000000002B /* iOSCleanup.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = iOSCleanup.storekit; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -77,8 +81,26 @@
 				AA0000010000000000000604 /* Engines */,
 				AA0000010000000000000605 /* Models */,
 				AA0000010000000000000606 /* Utilities */,
+				AA000002000000000000003A /* Store */,
+				AA000002000000000000004A /* Configuration */,
 			);
 			path = iOSCleanup;
+			sourceTree = "<group>";
+		};
+		AA000002000000000000003A /* Store */ = {
+			isa = PBXGroup;
+			children = (
+				AA000002000000000000001B /* PurchaseManager.swift */,
+			);
+			path = Store;
+			sourceTree = "<group>";
+		};
+		AA000002000000000000004A /* Configuration */ = {
+			isa = PBXGroup;
+			children = (
+				AA000002000000000000002B /* iOSCleanup.storekit */,
+			);
+			path = Configuration;
 			sourceTree = "<group>";
 		};
 		AA0000010000000000000602 /* iOSCleanupTests */ = {
@@ -229,6 +251,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA000002000000000000002A /* iOSCleanup.storekit in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -249,6 +272,7 @@
 				AA000001000000000000008A /* PhotoScanEngine.swift in Sources */,
 				AA000001000000000000009A /* ContactScanEngine.swift in Sources */,
 				AA00000100000000000000AA /* FileScanEngine.swift in Sources */,
+				AA000002000000000000001A /* PurchaseManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

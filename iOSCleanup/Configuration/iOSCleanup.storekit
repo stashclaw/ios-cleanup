@@ -1,0 +1,42 @@
+{
+  "identifier" : "com.yourname.iOSCleanup.storekit",
+  "nonConsumableProducts" : [
+    {
+      "displayPrice" : "2.99",
+      "familySharable" : true,
+      "internalID" : "com.yourname.iOSCleanup.unlock",
+      "localizations" : [
+        {
+          "description" : "Unlock all cleanup features: photo deletion, contact merge, and video compression.",
+          "displayName" : "iOSCleanup Unlock",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.yourname.iOSCleanup.unlock",
+      "referenceName" : "iOSCleanup Unlock",
+      "type" : "NonConsumable"
+    }
+  ],
+  "settings" : {
+    "_storeKitErrors" : [
+      {
+        "current" : null,
+        "enabled" : false,
+        "kind" : "Load",
+        "on" : false,
+        "randomMilliseconds" : 0
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "kind" : "Purchase",
+        "on" : false,
+        "randomMilliseconds" : 0
+      }
+    ]
+  },
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}
