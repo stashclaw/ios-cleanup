@@ -37,6 +37,8 @@
 		AA000008000000000000002A /* ContactMergePreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000008000000000000002B /* ContactMergePreviewView.swift */; };
 		AA000009000000000000001A /* VideoCompressionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000009000000000000001B /* VideoCompressionEngine.swift */; };
 		AA000009000000000000002A /* VideoCompressionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000009000000000000002B /* VideoCompressionEngineTests.swift */; };
+		AA00000A000000000000001A /* FileResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000A000000000000001B /* FileResultsView.swift */; };
+		AA00000A000000000000002A /* VideoCompressionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000A000000000000002B /* VideoCompressionView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -73,6 +75,8 @@
 		AA000008000000000000002B /* ContactMergePreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactMergePreviewView.swift; sourceTree = "<group>"; };
 		AA000009000000000000001B /* VideoCompressionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionEngine.swift; sourceTree = "<group>"; };
 		AA000009000000000000002B /* VideoCompressionEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionEngineTests.swift; sourceTree = "<group>"; };
+		AA00000A000000000000001B /* FileResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileResultsView.swift; sourceTree = "<group>"; };
+		AA00000A000000000000002B /* VideoCompressionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -129,8 +133,18 @@
 				AA000005000000000000001B /* PaywallView.swift */,
 				AA000006000000000000003A /* Photos */,
 				AA000008000000000000003A /* Contacts */,
+				AA00000A000000000000003A /* Files */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		AA00000A000000000000003A /* Files */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000A000000000000001B /* FileResultsView.swift */,
+				AA00000A000000000000002B /* VideoCompressionView.swift */,
+			);
+			path = Files;
 			sourceTree = "<group>";
 		};
 		AA000008000000000000003A /* Contacts */ = {
@@ -344,6 +358,8 @@
 				AA000008000000000000001A /* ContactResultsView.swift in Sources */,
 				AA000008000000000000002A /* ContactMergePreviewView.swift in Sources */,
 				AA000009000000000000001A /* VideoCompressionEngine.swift in Sources */,
+				AA00000A000000000000001A /* FileResultsView.swift in Sources */,
+				AA00000A000000000000002A /* VideoCompressionView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
