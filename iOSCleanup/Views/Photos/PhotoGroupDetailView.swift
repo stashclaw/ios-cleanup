@@ -246,9 +246,7 @@ private struct AssetCompareCell: View {
 // MARK: - PHAsset Hashable for dictionary key
 
 extension PHAsset: @retroactive Hashable {
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(localIdentifier)
-    }
+    public override var hash: Int { localIdentifier.hashValue }
     public static func == (lhs: PHAsset, rhs: PHAsset) -> Bool {
         lhs.localIdentifier == rhs.localIdentifier
     }
