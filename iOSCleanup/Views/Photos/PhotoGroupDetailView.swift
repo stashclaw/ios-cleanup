@@ -16,8 +16,15 @@ struct PhotoGroupDetailView: View {
     var body: some View {
         Group {
             if isDeleted {
-                ContentUnavailableView("Cleaned!", systemImage: "checkmark.circle.fill")
-                    .tint(.green)
+                VStack(spacing: 16) {
+                    Spacer()
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 64))
+                        .foregroundStyle(.green)
+                    Text("Cleaned!")
+                        .font(.title2.bold())
+                    Spacer()
+                }
             } else {
                 ScrollView {
                     VStack(spacing: 16) {
@@ -90,7 +97,7 @@ struct PhotoGroupDetailView: View {
                     .frame(maxWidth: .infinity)
                     .padding()
                     .background(.orange)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.white)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
             }
             .disabled(isDeleting)
@@ -110,7 +117,7 @@ struct PhotoGroupDetailView: View {
                 .frame(maxWidth: .infinity)
                 .padding()
                 .background(selectedAssets.isEmpty ? Color.secondary.opacity(0.15) : Color.red)
-                .foregroundStyle(selectedAssets.isEmpty ? .secondary : .white)
+                .foregroundStyle(selectedAssets.isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.white))
                 .clipShape(RoundedRectangle(cornerRadius: 14))
             }
             .disabled(isDeleting || (purchaseManager.isPurchased && selectedAssets.isEmpty))
@@ -232,7 +239,7 @@ private struct AssetCompareCell: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 3)
                         .background(.green)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.white)
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                         .padding(6)
                 }
@@ -243,11 +250,3 @@ private struct AssetCompareCell: View {
     }
 }
 
-// MARK: - PHAsset Hashable for dictionary key
-
-extension PHAsset: @retroactive Hashable {
-    public override var hash: Int { localIdentifier.hashValue }
-    public static func == (lhs: PHAsset, rhs: PHAsset) -> Bool {
-        lhs.localIdentifier == rhs.localIdentifier
-    }
-}
