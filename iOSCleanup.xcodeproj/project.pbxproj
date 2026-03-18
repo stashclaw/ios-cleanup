@@ -35,6 +35,8 @@
 		AA000007000000000000002A /* SwipeModeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000007000000000000002B /* SwipeModeViewModel.swift */; };
 		AA000008000000000000001A /* ContactResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000008000000000000001B /* ContactResultsView.swift */; };
 		AA000008000000000000002A /* ContactMergePreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000008000000000000002B /* ContactMergePreviewView.swift */; };
+		AA000009000000000000001A /* VideoCompressionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000009000000000000001B /* VideoCompressionEngine.swift */; };
+		AA000009000000000000002A /* VideoCompressionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000009000000000000002B /* VideoCompressionEngineTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -69,6 +71,8 @@
 		AA000007000000000000002B /* SwipeModeViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeModeViewModel.swift; sourceTree = "<group>"; };
 		AA000008000000000000001B /* ContactResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactResultsView.swift; sourceTree = "<group>"; };
 		AA000008000000000000002B /* ContactMergePreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactMergePreviewView.swift; sourceTree = "<group>"; };
+		AA000009000000000000001B /* VideoCompressionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionEngine.swift; sourceTree = "<group>"; };
+		AA000009000000000000002B /* VideoCompressionEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionEngineTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -163,6 +167,7 @@
 				AA00000100000000000000EB /* PhotoScanEngineTests.swift */,
 				AA00000100000000000000FB /* ContactScanEngineTests.swift */,
 				AA0000010000000000000101 /* FileScanEngineTests.swift */,
+				AA000009000000000000002B /* VideoCompressionEngineTests.swift */,
 			);
 			path = iOSCleanupTests;
 			sourceTree = "<group>";
@@ -182,6 +187,7 @@
 				AA000001000000000000008B /* PhotoScanEngine.swift */,
 				AA000001000000000000009B /* ContactScanEngine.swift */,
 				AA00000100000000000000AB /* FileScanEngine.swift */,
+				AA000009000000000000001B /* VideoCompressionEngine.swift */,
 			);
 			path = Engines;
 			sourceTree = "<group>";
@@ -337,6 +343,7 @@
 				AA000007000000000000002A /* SwipeModeViewModel.swift in Sources */,
 				AA000008000000000000001A /* ContactResultsView.swift in Sources */,
 				AA000008000000000000002A /* ContactMergePreviewView.swift in Sources */,
+				AA000009000000000000001A /* VideoCompressionEngine.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -347,6 +354,7 @@
 				AA00000100000000000000EA /* PhotoScanEngineTests.swift in Sources */,
 				AA00000100000000000000FA /* ContactScanEngineTests.swift in Sources */,
 				AA0000010000000000000100 /* FileScanEngineTests.swift in Sources */,
+				AA000009000000000000002A /* VideoCompressionEngineTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
