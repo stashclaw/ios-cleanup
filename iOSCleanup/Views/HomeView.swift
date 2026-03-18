@@ -191,7 +191,7 @@ private struct ScanCard<Destination: View>: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
                         .background(color)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.white)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
 
@@ -232,7 +232,7 @@ private struct ScanCard<Destination: View>: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
                         .background(color)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.white)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
             }

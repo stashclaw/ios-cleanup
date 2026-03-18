@@ -78,7 +78,7 @@ struct PaywallView: View {
                         .frame(maxWidth: .infinity)
                         .padding()
                         .background(.blue)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.white)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
                     .disabled(purchaseManager.isLoading || purchaseManager.product == nil)

@@ -204,7 +204,7 @@ private struct CompletionScreen: View {
                     .frame(maxWidth: .infinity)
                     .padding()
                     .background(.blue)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.white)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
             }
             .padding(.horizontal, 32)
@@ -266,7 +266,7 @@ private struct CircleButton: View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.title)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.white)
                 .padding(20)
                 .background(color)
                 .clipShape(Circle())

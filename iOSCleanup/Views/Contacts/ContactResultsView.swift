@@ -11,11 +11,7 @@ struct ContactResultsView: View {
     var body: some View {
         Group {
             if matches.isEmpty {
-                ContentUnavailableView(
-                    "No Duplicates Found",
-                    systemImage: "person.2.fill",
-                    description: Text("Your contacts look clean.")
-                )
+                EmptyStateView(title: "No Duplicates Found", icon: "person.2.fill", message: "Your contacts look clean.")
             } else {
                 List {
                     if !certain.isEmpty {

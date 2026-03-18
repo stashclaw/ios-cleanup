@@ -17,11 +17,7 @@ struct FileResultsView: View {
     var body: some View {
         Group {
             if visibleFiles.isEmpty {
-                ContentUnavailableView(
-                    "No Large Files",
-                    systemImage: "doc.fill",
-                    description: Text("No files or videos over 50 MB were found.")
-                )
+                EmptyStateView(title: "No Large Files", icon: "doc.fill", message: "No files or videos over 50 MB were found.")
             } else {
                 List(visibleFiles) { file in
                     FileRow(

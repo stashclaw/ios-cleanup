@@ -16,11 +16,7 @@ struct PhotoResultsView: View {
     var body: some View {
         Group {
             if groups.isEmpty {
-                ContentUnavailableView(
-                    "No Duplicates Found",
-                    systemImage: "photo.on.rectangle.angled",
-                    description: Text("Your photo library looks clean.")
-                )
+                EmptyStateView(title: "No Duplicates Found", icon: "photo.on.rectangle.angled", message: "Your photo library looks clean.")
             } else {
                 ScrollView {
                     if let error = deletionError {
@@ -129,7 +125,7 @@ private struct GroupThumbnail: View {
                 .font(.caption2.bold())
                 .padding(4)
                 .background(.black.opacity(0.6))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.white)
                 .clipShape(RoundedRectangle(cornerRadius: 4))
                 .padding(4)
 

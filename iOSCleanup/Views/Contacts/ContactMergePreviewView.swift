@@ -14,7 +14,7 @@ struct ContactMergePreviewView: View {
     var body: some View {
         Group {
             if isMerged {
-                ContentUnavailableView("Merged!", systemImage: "checkmark.circle.fill")
+                EmptyStateView(title: "Merged!", icon: "checkmark.circle.fill", message: "")
                     .tint(.green)
             } else {
                 ScrollView {
@@ -140,7 +140,7 @@ struct ContactMergePreviewView: View {
                 .frame(maxWidth: .infinity)
                 .padding()
                 .background(.blue)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.white)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
             }
             .disabled(isMerging)

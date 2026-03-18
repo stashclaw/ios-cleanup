@@ -148,7 +148,7 @@ private struct OnboardingPrimaryButton: View {
                 .frame(maxWidth: .infinity)
                 .padding()
                 .background(color)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.white)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
         }
         .padding(.horizontal, 32)

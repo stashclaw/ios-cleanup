@@ -114,7 +114,7 @@ struct VideoCompressionView: View {
                 .frame(maxWidth: .infinity)
                 .padding()
                 .background(.purple)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.white)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
         }
     }
