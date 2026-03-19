@@ -31,6 +31,9 @@ final class SwipeModeViewModel: ObservableObject {
     private(set) var deletedCount = 0
     private(set) var deletedBytes: Int64 = 0
 
+    var keptCount: Int { keptAssets.count }
+    var duckedCount: Int { toDeleteAssets.count + deletedCount }
+
     init(groups: [PhotoGroup]) {
         buildQueue(from: groups)
     }

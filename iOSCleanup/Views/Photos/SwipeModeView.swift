@@ -16,16 +16,18 @@ struct SwipeModeView: View {
         NavigationStack {
             Group {
                 if viewModel.isComplete {
-                    CompletionScreen(viewModel: viewModel, onDismiss: { dismiss() })
+                    DuckModeCompletion(viewModel: viewModel, onDismiss: { dismiss() })
                 } else {
                     cardStack
                 }
             }
-            .navigationTitle("Swipe Mode")
+            .background(Color.duckBlush.ignoresSafeArea())
+            .navigationTitle("Duck Mode")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
+                        .foregroundStyle(Color.duckRose)
                 }
             }
         }
@@ -34,86 +36,90 @@ struct SwipeModeView: View {
     // MARK: - Card Stack
 
     @State private var dragOffset: CGSize = .zero
-    @State private var isDragging = false
 
     private var swipeThreshold: CGFloat { 100 }
 
     private var cardStack: some View {
-        ZStack {
-            // Month header above card
-            if let header = currentMonthHeader {
-                VStack {
+        VStack(spacing: 0) {
+            // Tally + progress
+            HStack {
+                Label("\(viewModel.keptCount) keep", systemImage: "heart.fill")
+                    .font(.duckCaption)
+                    .foregroundStyle(.green)
+                Spacer()
+                Label("\(viewModel.duckedCount) ducked", systemImage: "trash.fill")
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.duckPink)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+
+            DuckProgressBar(progress: viewModel.progress, color: .duckPink)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+
+            Spacer()
+
+            ZStack {
+                if let header = currentMonthHeader {
                     Text(header)
-                        .font(.caption.bold())
-                        .foregroundStyle(.secondary)
+                        .font(.duckCaption)
+                        .foregroundStyle(Color.duckRose)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 4)
-                        .background(.secondary.opacity(0.15), in: Capsule())
-                    Spacer()
+                        .background(Color.duckSoftPink.opacity(0.3), in: Capsule())
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .padding(.top, 8)
                 }
-                .padding(.top, 8)
-            }
 
-            // Cards (show top 2 for depth)
-            ForEach(upcomingEntries.reversed().prefix(2), id: \.id) { entry in
-                if case .asset(let asset, _) = entry {
-                    AssetCard(asset: asset)
-                        .opacity(entry.id == viewModel.current?.id ? 1 : 0.6)
-                        .scaleEffect(entry.id == viewModel.current?.id ? 1 : 0.95)
+                ForEach(upcomingEntries.reversed().prefix(2), id: \.id) { entry in
+                    if case .asset(let asset, _) = entry {
+                        DuckAssetCard(asset: asset)
+                            .opacity(entry.id == viewModel.current?.id ? 1 : 0.6)
+                            .scaleEffect(entry.id == viewModel.current?.id ? 1 : 0.95)
+                    }
                 }
-            }
 
-            // Top card with drag
-            if let current = viewModel.current, case .asset(let asset, _) = current {
-                AssetCard(asset: asset)
-                    .offset(dragOffset)
-                    .rotationEffect(.degrees(Double(dragOffset.width) / 20))
-                    .gesture(
-                        DragGesture()
-                            .onChanged { value in
-                                dragOffset = value.translation
-                                isDragging = true
-                            }
-                            .onEnded { value in
-                                withAnimation(.spring()) {
-                                    if value.translation.width < -swipeThreshold {
-                                        swipeLeft()
-                                    } else if value.translation.width > swipeThreshold {
-                                        swipeRight()
-                                    } else {
-                                        dragOffset = .zero
+                if let current = viewModel.current, case .asset(let asset, _) = current {
+                    DuckAssetCard(asset: asset)
+                        .offset(dragOffset)
+                        .rotationEffect(.degrees(Double(dragOffset.width) / 20))
+                        .gesture(
+                            DragGesture()
+                                .onChanged { dragOffset = $0.translation }
+                                .onEnded { value in
+                                    withAnimation(.spring()) {
+                                        if value.translation.width < -swipeThreshold { swipeLeft() }
+                                        else if value.translation.width > swipeThreshold { swipeRight() }
+                                        else { dragOffset = .zero }
                                     }
                                 }
-                                isDragging = false
-                            }
-                    )
-                    .overlay(swipeIndicators)
+                        )
+                        .overlay(swipeIndicators)
+                }
             }
+            .padding(.horizontal)
 
-            // Tap buttons below cards
-            VStack {
-                Spacer()
-                actionButtons
-                    .padding(.bottom, 32)
-            }
+            Spacer()
+
+            actionButtons
+                .padding(.horizontal, 32)
+                .padding(.bottom, 32)
         }
-        .padding()
     }
 
     // MARK: - Swipe indicators
 
     private var swipeIndicators: some View {
         HStack {
-            // Left = delete
-            Image(systemName: "trash.fill")
-                .font(.largeTitle)
-                .foregroundStyle(.red)
+            Text("Duck it ←")
+                .font(.duckHeading)
+                .foregroundStyle(Color.duckPink)
                 .opacity(leftIndicatorOpacity)
                 .padding()
             Spacer()
-            // Right = keep
-            Image(systemName: "heart.fill")
-                .font(.largeTitle)
+            Text("→ Keep it")
+                .font(.duckHeading)
                 .foregroundStyle(.green)
                 .opacity(rightIndicatorOpacity)
                 .padding()
@@ -133,9 +139,9 @@ struct SwipeModeView: View {
     // MARK: - Action buttons
 
     private var actionButtons: some View {
-        HStack(spacing: 40) {
-            CircleButton(icon: "trash.fill", color: .red) { swipeLeft() }
-            CircleButton(icon: "heart.fill", color: .green) { swipeRight() }
+        HStack(spacing: 16) {
+            DuckOutlineButton(title: "✕ Duck it", color: .duckPink) { swipeLeft() }
+            DuckPrimaryButton(title: "✓ Keep it") { swipeRight() }
         }
     }
 
@@ -146,7 +152,6 @@ struct SwipeModeView: View {
     }
 
     private var currentMonthHeader: String? {
-        // Find the most recent header before current index
         let preceding = viewModel.queue.prefix(viewModel.currentIndex + 1)
         return preceding.reversed().compactMap { entry -> String? in
             if case .monthHeader(let s) = entry { return s }
@@ -155,67 +160,48 @@ struct SwipeModeView: View {
     }
 
     private func swipeLeft() {
-        withAnimation(.easeOut(duration: 0.25)) {
-            dragOffset = CGSize(width: -500, height: 0)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            dragOffset = .zero
-            viewModel.delete()
-        }
+        withAnimation(.easeOut(duration: 0.25)) { dragOffset = CGSize(width: -500, height: 0) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { dragOffset = .zero; viewModel.delete() }
     }
 
     private func swipeRight() {
-        withAnimation(.easeOut(duration: 0.25)) {
-            dragOffset = CGSize(width: 500, height: 0)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            dragOffset = .zero
-            viewModel.keep()
-        }
+        withAnimation(.easeOut(duration: 0.25)) { dragOffset = CGSize(width: 500, height: 0) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { dragOffset = .zero; viewModel.keep() }
     }
 }
 
 // MARK: - Completion Screen
 
-private struct CompletionScreen: View {
+private struct DuckModeCompletion: View {
     @ObservedObject var viewModel: SwipeModeViewModel
     let onDismiss: () -> Void
 
     var body: some View {
         VStack(spacing: 24) {
             Spacer()
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 72))
-                .foregroundStyle(.green)
-            Text("All Done!")
-                .font(.largeTitle.bold())
-            Text("Deleted \(viewModel.deletedCount) photo\(viewModel.deletedCount == 1 ? "" : "s")")
-                .font(.title3)
-                .foregroundStyle(.secondary)
+            RoundedRectangle(cornerRadius: 28)
+                .fill(Color.duckYellow)
+                .frame(width: 160, height: 160)
+            Text("All Done! ✦")
+                .font(.duckDisplay)
+                .foregroundStyle(Color.duckBerry)
+            Text("Ducked \(viewModel.duckedCount) photo\(viewModel.duckedCount == 1 ? "" : "s")")
+                .font(.duckBody)
+                .foregroundStyle(Color.duckRose)
             if let error = viewModel.deleteError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                Text(error).font(.duckCaption).foregroundStyle(.red)
             }
             Spacer()
-            Button(action: onDismiss) {
-                Text("Done")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(.blue)
-                    .foregroundStyle(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-            }
-            .padding(.horizontal, 32)
-            .padding(.bottom, 40)
+            DuckPrimaryButton(title: "✓ Back to Library", action: onDismiss)
+                .padding(.horizontal, 32)
+                .padding(.bottom, 40)
         }
     }
 }
 
-// MARK: - Asset Card
+// MARK: - Duck Asset Card
 
-private struct AssetCard: View {
+private struct DuckAssetCard: View {
     let asset: PHAsset
     @State private var image: UIImage?
 
@@ -226,18 +212,20 @@ private struct AssetCard: View {
                     .resizable()
                     .scaledToFit()
             } else {
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(Color.gray.opacity(0.2))
-                    .overlay(ProgressView())
+                RoundedRectangle(cornerRadius: 24)
+                    .fill(Color.duckSoftPink.opacity(0.3))
+                    .overlay(ProgressView().tint(Color.duckPink))
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 420)
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 4)
-        .task {
-            image = await loadImage(for: asset)
-        }
+        .frame(height: 400)
+        .clipShape(RoundedRectangle(cornerRadius: 24))
+        .overlay(
+            RoundedRectangle(cornerRadius: 24)
+                .strokeBorder(Color.duckPink, lineWidth: 1)
+        )
+        .shadow(color: Color.duckPink.opacity(0.12), radius: 12, x: 0, y: 6)
+        .task { image = await loadImage(for: asset) }
     }
 
     private func loadImage(for asset: PHAsset) async -> UIImage? {
@@ -246,31 +234,9 @@ private struct AssetCard: View {
             options.deliveryMode = .opportunistic
             options.isNetworkAccessAllowed = true
             PHImageManager.default().requestImage(
-                for: asset,
-                targetSize: CGSize(width: 600, height: 800),
-                contentMode: .aspectFit,
-                options: options
+                for: asset, targetSize: CGSize(width: 600, height: 800),
+                contentMode: .aspectFit, options: options
             ) { image, _ in continuation.resume(returning: image) }
-        }
-    }
-}
-
-// MARK: - Circle button
-
-private struct CircleButton: View {
-    let icon: String
-    let color: Color
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.title)
-                .foregroundStyle(Color.white)
-                .padding(20)
-                .background(color)
-                .clipShape(Circle())
-                .shadow(color: color.opacity(0.4), radius: 8, x: 0, y: 4)
         }
     }
 }

@@ -4,242 +4,271 @@ struct HomeView: View {
     @StateObject private var viewModel = HomeViewModel()
     @EnvironmentObject private var purchaseManager: PurchaseManager
 
+    @State private var showPaywall = false
+    @State private var showCompletion = false
+
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 16) {
-                    // Summary bar — shown once any scan completes
-                    if viewModel.hasAnyResult {
-                        SummaryBar(
-                            reclaimableBytes: viewModel.reclaimableBytes,
-                            photoGroupCount: viewModel.photoGroups.count,
-                            contactMatchCount: viewModel.contactMatches.count,
-                            largeFileCount: viewModel.largeFiles.count
-                        )
-                        .padding(.horizontal)
-                    }
-
-                    // Scan cards
-                    PhotoScanCard(viewModel: viewModel)
-                    ContactScanCard(viewModel: viewModel)
-                    FileScanCard(viewModel: viewModel)
+                VStack(spacing: 20) {
+                    storageCard
+                    categoryGrid
+                    scanButton
                 }
-                .padding(.vertical)
+                .padding(.horizontal)
+                .padding(.vertical, 16)
             }
-            .navigationTitle("iOSCleanup")
+            .background(Color.duckBlush.ignoresSafeArea())
+            .navigationTitle("PhotoDuck")
+            .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if !purchaseManager.isPurchased {
-                        Button("Unlock") {
-                            showPaywall = true
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
+                        Button("Unlock 🔒") { showPaywall = true }
+                            .font(.duckCaption)
+                            .foregroundStyle(Color.duckPink)
                     }
                 }
             }
         }
-        .sheet(isPresented: $showPaywall) {
-            PaywallView()
+        .sheet(isPresented: $showPaywall) { PaywallView().environmentObject(purchaseManager) }
+        .sheet(isPresented: $showCompletion) { CompletionOverlay(viewModel: viewModel) }
+        .onChange(of: viewModel.isAllDone) { done in
+            if done { showCompletion = true }
         }
     }
 
-    @State private var showPaywall = false
-}
+    // MARK: - Storage Card
 
-// MARK: - Summary Bar
+    private var storageCard: some View {
+        DuckCard {
+            VStack(alignment: .leading, spacing: 14) {
+                LinearGradient(
+                    colors: [Color.duckPink, Color.duckRose],
+                    startPoint: .leading, endPoint: .trailing
+                )
+                .frame(height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .overlay(
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Reclaimable Space")
+                                .font(.duckCaption)
+                                .foregroundStyle(Color.white.opacity(0.85))
+                            Text(viewModel.reclaimableFormatted)
+                                .font(.duckTitle)
+                                .foregroundStyle(Color.white)
+                        }
+                        Spacer()
+                        Image(systemName: "externaldrive.fill")
+                            .font(.title2)
+                            .foregroundStyle(Color.white.opacity(0.8))
+                    }
+                    .padding(.horizontal, 16)
+                )
 
-private struct SummaryBar: View {
-    let reclaimableBytes: Int64
-    let photoGroupCount: Int
-    let contactMatchCount: Int
-    let largeFileCount: Int
+                DuckProgressBar(progress: viewModel.storageUsedFraction, color: .duckPink)
+                    .padding(.horizontal, 2)
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Reclaimable Space")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(ByteCountFormatter.string(fromByteCount: reclaimableBytes, countStyle: .file))
-                .font(.title2.bold())
-            HStack(spacing: 12) {
-                if photoGroupCount > 0 {
-                    Label("\(photoGroupCount) photo groups", systemImage: "photo.on.rectangle.angled")
-                }
-                if contactMatchCount > 0 {
-                    Label("\(contactMatchCount) duplicates", systemImage: "person.2")
-                }
-                if largeFileCount > 0 {
-                    Label("\(largeFileCount) large files", systemImage: "doc.fill")
+                HStack {
+                    Text(viewModel.storageUsedFormatted)
+                        .font(.duckCaption)
+                        .foregroundStyle(Color.duckRose)
+                    Spacer()
+                    Text(viewModel.storageTotalFormatted)
+                        .font(.duckCaption)
+                        .foregroundStyle(Color.duckBerry)
                 }
             }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
+            .padding(16)
         }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 14))
-    }
-}
-
-// MARK: - Photo Scan Card
-
-private struct PhotoScanCard: View {
-    @ObservedObject var viewModel: HomeViewModel
-
-    var body: some View {
-        ScanCard(
-            title: "Similar Photos",
-            subtitle: "Find duplicates and burst shots",
-            icon: "photo.stack.fill",
-            color: .orange,
-            state: viewModel.photoScanState,
-            resultLabel: resultLabel,
-            destination: { PhotoResultsView(groups: viewModel.photoGroups) },
-            onScan: { await viewModel.scanPhotos() }
-        )
     }
 
-    private var resultLabel: String {
-        let n = viewModel.photoGroups.count
-        return n == 0 ? "No duplicates found" : "\(n) group\(n == 1 ? "" : "s") found"
-    }
-}
+    // MARK: - Category Grid
 
-// MARK: - Contact Scan Card
-
-private struct ContactScanCard: View {
-    @ObservedObject var viewModel: HomeViewModel
-
-    var body: some View {
-        ScanCard(
-            title: "Duplicate Contacts",
-            subtitle: "Merge contacts with shared info",
-            icon: "person.2.fill",
-            color: .green,
-            state: viewModel.contactScanState,
-            resultLabel: resultLabel,
-            destination: { ContactResultsView(matches: viewModel.contactMatches) },
-            onScan: { await viewModel.scanContacts() }
-        )
-    }
-
-    private var resultLabel: String {
-        let n = viewModel.contactMatches.count
-        return n == 0 ? "No duplicates found" : "\(n) duplicate\(n == 1 ? "" : "s") found"
-    }
-}
-
-// MARK: - File Scan Card
-
-private struct FileScanCard: View {
-    @ObservedObject var viewModel: HomeViewModel
-
-    var body: some View {
-        ScanCard(
-            title: "Large Files",
-            subtitle: "Videos and files over 50 MB",
-            icon: "doc.fill",
-            color: .purple,
-            state: viewModel.fileScanState,
-            resultLabel: resultLabel,
-            destination: { FileResultsView(files: viewModel.largeFiles) },
-            onScan: { await viewModel.scanFiles() }
-        )
+    private var categoryGrid: some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
+            CategoryCell(
+                icon: "photo.on.rectangle", color: .duckPink,
+                name: "Duplicates",
+                count: viewModel.photoGroups.count,
+                state: viewModel.photoScanState,
+                destination: { PhotoResultsView(groups: viewModel.photoGroups).environmentObject(purchaseManager) }
+            )
+            CategoryCell(
+                icon: "rectangle.stack", color: .duckOrange,
+                name: "Similar",
+                count: viewModel.photoGroups.filter { $0.reason == .visuallySimilar }.count,
+                state: viewModel.photoScanState,
+                destination: { PhotoResultsView(groups: viewModel.photoGroups).environmentObject(purchaseManager) }
+            )
+            CategoryCell(
+                icon: "person.2.fill", color: .duckRose,
+                name: "Contacts",
+                count: viewModel.contactMatches.count,
+                state: viewModel.contactScanState,
+                destination: { ContactResultsView(matches: viewModel.contactMatches).environmentObject(purchaseManager) }
+            )
+            CategoryCell(
+                icon: "video.fill", color: .duckOrange,
+                name: "Large Videos",
+                count: viewModel.largeFiles.count,
+                state: viewModel.fileScanState,
+                destination: { FileResultsView(files: viewModel.largeFiles).environmentObject(purchaseManager) }
+            )
+        }
     }
 
-    private var resultLabel: String {
-        let n = viewModel.largeFiles.count
-        if n == 0 { return "No large files found" }
-        let total = viewModel.largeFiles.reduce(Int64(0)) { $0 + $1.byteSize }
-        return "\(n) file\(n == 1 ? "" : "s") — \(ByteCountFormatter.string(fromByteCount: total, countStyle: .file))"
-    }
-}
+    // MARK: - Scan button
 
-// MARK: - Generic Scan Card
-
-private struct ScanCard<Destination: View>: View {
-    let title: String
-    let subtitle: String
-    let icon: String
-    let color: Color
-    let state: HomeViewModel.ScanState
-    let resultLabel: String
-    @ViewBuilder let destination: () -> Destination
-    let onScan: () async -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: icon)
-                    .font(.title2)
-                    .foregroundStyle(color)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.headline)
-                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-
-            Divider()
-
-            switch state {
-            case .idle:
-                Button(action: { Task { await onScan() } }) {
-                    Text("Scan Now")
-                        .font(.subheadline.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(color)
-                        .foregroundStyle(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                }
-
-            case .scanning:
-                HStack(spacing: 8) {
-                    ProgressView()
+    private var scanButton: some View {
+        VStack(spacing: 8) {
+            if viewModel.isAnyScanning {
+                HStack(spacing: 10) {
+                    ProgressView().tint(Color.duckPink)
                     Text("Scanning…")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(.duckBody)
+                        .foregroundStyle(Color.duckRose)
                 }
                 .frame(maxWidth: .infinity)
-
-            case .done:
-                NavigationLink(destination: destination) {
-                    HStack {
-                        Text(resultLabel)
-                            .font(.subheadline)
-                            .foregroundStyle(.primary)
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                .padding(.vertical, 15)
+                .background(Color.duckSoftPink.opacity(0.4), in: RoundedRectangle(cornerRadius: 50))
+            } else {
+                DuckPrimaryButton(title: "✦ Start Cleaning") {
+                    Task {
+                        await withTaskGroup(of: Void.self) { group in
+                            group.addTask { await viewModel.scanPhotos() }
+                            group.addTask { await viewModel.scanContacts() }
+                            group.addTask { await viewModel.scanFiles() }
+                        }
                     }
-                }
-                Button(action: { Task { await onScan() } }) {
-                    Text("Re-scan")
-                        .font(.caption)
-                        .foregroundStyle(color)
-                }
-
-            case .failed(let message):
-                Text("Error: \(message)")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                Button(action: { Task { await onScan() } }) {
-                    Text("Retry")
-                        .font(.subheadline.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(color)
-                        .foregroundStyle(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
             }
         }
-        .padding()
-        .background(.background, in: RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(0.06), radius: 6, x: 0, y: 2)
-        .padding(.horizontal)
+    }
+}
+
+// MARK: - Category Cell
+
+private struct CategoryCell<Destination: View>: View {
+    let icon: String
+    let color: Color
+    let name: String
+    let count: Int
+    let state: HomeViewModel.ScanState
+    @ViewBuilder let destination: () -> Destination
+
+    var body: some View {
+        DuckCard {
+            Group {
+                if case .done = state, count > 0 {
+                    NavigationLink(destination: destination) { cellContent }
+                } else {
+                    cellContent
+                }
+            }
+            .padding(14)
+        }
+    }
+
+    private var cellContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: icon)
+                    .font(.title3)
+                    .foregroundStyle(color)
+                Spacer()
+                if case .done = state {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.bold())
+                        .foregroundStyle(Color.duckSoftPink)
+                }
+            }
+            Text(name)
+                .font(.duckBody)
+                .foregroundStyle(Color.duckBerry)
+            stateLabel
+        }
+    }
+
+    @ViewBuilder
+    private var stateLabel: some View {
+        switch state {
+        case .idle:
+            Text("—")
+                .font(.duckHeading)
+                .foregroundStyle(Color.duckSoftPink)
+        case .scanning:
+            ProgressView().tint(color).scaleEffect(0.75)
+        case .done:
+            Text("\(count)")
+                .font(Font.custom("FredokaOne-Regular", size: 20))
+                .foregroundStyle(count > 0 ? color : Color.duckSoftPink)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+        }
+    }
+}
+
+// MARK: - Completion Overlay
+
+private struct CompletionOverlay: View {
+    @ObservedObject var viewModel: HomeViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 28) {
+                RoundedRectangle(cornerRadius: 28)
+                    .fill(Color.duckYellow)
+                    .frame(width: 160, height: 160)
+                    .padding(.top, 40)
+
+                VStack(spacing: 6) {
+                    Text("All cleaned up! ✦")
+                        .font(.duckDisplay)
+                        .foregroundStyle(Color.duckBerry)
+                    Text("Your library is looking fresh.")
+                        .font(.duckCaption)
+                        .foregroundStyle(Color.duckRose)
+                }
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
+                    StatCell(label: "GB Freed", value: viewModel.reclaimableFormatted, color: .duckPink)
+                    StatCell(label: "Photos Removed", value: "\(viewModel.photoGroups.count)", color: .duckOrange)
+                    StatCell(label: "Contacts Merged", value: "\(viewModel.contactMatches.count)", color: .duckBerry)
+                    StatCell(label: "Videos Compressed", value: "\(viewModel.largeFiles.count)", color: .green)
+                }
+                .padding(.horizontal)
+
+                DuckPrimaryButton(title: "✦ Back to Library") { dismiss() }
+                    .padding(.horizontal)
+                    .padding(.bottom, 32)
+            }
+        }
+        .background(Color.duckCream.ignoresSafeArea())
+    }
+}
+
+private struct StatCell: View {
+    let label: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        DuckCard {
+            VStack(spacing: 4) {
+                Text(value)
+                    .font(Font.custom("FredokaOne-Regular", size: 20))
+                    .foregroundStyle(color)
+                Text(label)
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.duckBerry)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity)
+        }
     }
 }

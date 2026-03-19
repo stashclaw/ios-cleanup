@@ -20,8 +20,49 @@ final class HomeViewModel: ObservableObject {
         largeFiles.reduce(0) { $0 + $1.byteSize }
     }
 
+    var reclaimableFormatted: String {
+        ByteCountFormatter.string(fromByteCount: reclaimableBytes, countStyle: .file)
+    }
+
     var hasAnyResult: Bool {
         !photoGroups.isEmpty || !contactMatches.isEmpty || !largeFiles.isEmpty
+    }
+
+    var isAnyScanning: Bool {
+        [photoScanState, contactScanState, fileScanState].contains { if case .scanning = $0 { return true }; return false }
+    }
+
+    var isAllDone: Bool {
+        let states = [photoScanState, contactScanState, fileScanState]
+        return states.allSatisfy { if case .done = $0 { return true }; return false }
+    }
+
+    // MARK: - Storage usage
+
+    var storageUsedFraction: Double {
+        let total = storageTotalBytes
+        guard total > 0 else { return 0 }
+        return Double(storageUsedBytes) / Double(total)
+    }
+
+    var storageUsedFormatted: String {
+        ByteCountFormatter.string(fromByteCount: storageUsedBytes, countStyle: .file) + " used"
+    }
+
+    var storageTotalFormatted: String {
+        ByteCountFormatter.string(fromByteCount: storageTotalBytes, countStyle: .file) + " total"
+    }
+
+    private var storageUsedBytes: Int64 {
+        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        let total = (attrs?[.systemSize] as? Int64) ?? 0
+        let free  = (attrs?[.systemFreeSize] as? Int64) ?? 0
+        return total - free
+    }
+
+    private var storageTotalBytes: Int64 {
+        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        return (attrs?[.systemSize] as? Int64) ?? 0
     }
 
     // MARK: - Scans

@@ -7,7 +7,7 @@ final class VideoCompressionEngineTests: XCTestCase {
     // MARK: - Helpers
 
     /// Creates a short synthetic video (1 second, solid colour) in the temp directory.
-    private func makeSyntheticVideo(duration: CMTime = CMTimeMake(value: 1, timescale: 1)) throws -> URL {
+    private func makeSyntheticVideo(duration: CMTime = CMTimeMake(value: 1, timescale: 1)) async throws -> URL {
         let outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("test_input_\(UUID().uuidString).mov")
 
@@ -79,7 +79,7 @@ final class VideoCompressionEngineTests: XCTestCase {
         var lastProgress: Double = 0
         var outputURL: URL?
 
-        let stream = engine.compress(asset: asset, preset: .p720)
+        let stream = await engine.compress(asset: asset, preset: .p720)
         for await event in stream {
             switch event {
             case .progress(let p): lastProgress = p

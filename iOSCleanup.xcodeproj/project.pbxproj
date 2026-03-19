@@ -40,6 +40,13 @@
 		AA00000A000000000000001A /* FileResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000A000000000000001B /* FileResultsView.swift */; };
 		AA00000A000000000000002A /* VideoCompressionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000A000000000000002B /* VideoCompressionView.swift */; };
 		AA00000B000000000000001A /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000B000000000000001B /* EmptyStateView.swift */; };
+		AA00000C000000000000001A /* Font+PhotoDuck.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000C000000000000001B /* Font+PhotoDuck.swift */; };
+		AA00000C000000000000003A /* DuckComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000C000000000000003B /* DuckComponents.swift */; };
+		AA00000D000000000000001A /* FredokaOne-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000001B /* FredokaOne-Regular.ttf */; };
+		AA00000D000000000000002A /* Nunito-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000002B /* Nunito-Regular.ttf */; };
+		AA00000D000000000000003A /* Nunito-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000003B /* Nunito-SemiBold.ttf */; };
+		AA00000D000000000000004A /* Nunito-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000004B /* Nunito-Bold.ttf */; };
+		AA00000D000000000000005A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000005B /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -89,6 +96,13 @@
 		AA00000A000000000000001B /* FileResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileResultsView.swift; sourceTree = "<group>"; };
 		AA00000A000000000000002B /* VideoCompressionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionView.swift; sourceTree = "<group>"; };
 		AA00000B000000000000001B /* EmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyStateView.swift; sourceTree = "<group>"; };
+		AA00000C000000000000001B /* Font+PhotoDuck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Font+PhotoDuck.swift"; sourceTree = "<group>"; };
+		AA00000C000000000000003B /* DuckComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuckComponents.swift; sourceTree = "<group>"; };
+		AA00000D000000000000001B /* FredokaOne-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "FredokaOne-Regular.ttf"; sourceTree = "<group>"; };
+		AA00000D000000000000002B /* Nunito-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-Regular.ttf"; sourceTree = "<group>"; };
+		AA00000D000000000000003B /* Nunito-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-SemiBold.ttf"; sourceTree = "<group>"; };
+		AA00000D000000000000004B /* Nunito-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-Bold.ttf"; sourceTree = "<group>"; };
+		AA00000D000000000000005B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -118,9 +132,11 @@
 				AA000001000000000000001B /* iOSCleanupApp.swift */,
 				AA000001000000000000002B /* ContentView.swift */,
 				AA0000010000000000000401 /* Info.plist */,
+				AA00000D000000000000005B /* Assets.xcassets */,
 				AA0000010000000000000604 /* Engines */,
 				AA0000010000000000000605 /* Models */,
 				AA0000010000000000000606 /* Utilities */,
+				AA00000D000000000000006A /* Fonts */,
 				AA000002000000000000003A /* Store */,
 				AA000002000000000000004A /* Configuration */,
 				AA000003000000000000002A /* Views */,
@@ -174,8 +190,20 @@
 			children = (
 				AA000001000000000000006B /* PhoneNormalizer.swift */,
 				AA000001000000000000007B /* NameMatcher.swift */,
+				AA00000C000000000000001B /* Font+PhotoDuck.swift */,
 			);
 			path = Utilities;
+			sourceTree = "<group>";
+		};
+		AA00000D000000000000006A /* Fonts */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000D000000000000001B /* FredokaOne-Regular.ttf */,
+				AA00000D000000000000002B /* Nunito-Regular.ttf */,
+				AA00000D000000000000003B /* Nunito-SemiBold.ttf */,
+				AA00000D000000000000004B /* Nunito-Bold.ttf */,
+			);
+			path = Fonts;
 			sourceTree = "<group>";
 		};
 		AA0000010000000000000607 /* Frameworks */ = {
@@ -222,11 +250,20 @@
 				AA000004000000000000002B /* HomeViewModel.swift */,
 				AA000005000000000000001B /* PaywallView.swift */,
 				AA00000B000000000000001B /* EmptyStateView.swift */,
+				AA00000C000000000000006A /* Components */,
 				AA000006000000000000003A /* Photos */,
 				AA000008000000000000003A /* Contacts */,
 				AA00000A000000000000003A /* Files */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		AA00000C000000000000006A /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000C000000000000003B /* DuckComponents.swift */,
+			);
+			path = Components;
 			sourceTree = "<group>";
 		};
 		AA000006000000000000003A /* Photos */ = {
@@ -339,6 +376,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA000002000000000000002A /* iOSCleanup.storekit in Resources */,
+				AA00000D000000000000001A /* FredokaOne-Regular.ttf in Resources */,
+				AA00000D000000000000002A /* Nunito-Regular.ttf in Resources */,
+				AA00000D000000000000003A /* Nunito-SemiBold.ttf in Resources */,
+				AA00000D000000000000004A /* Nunito-Bold.ttf in Resources */,
+				AA00000D000000000000005A /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -374,6 +416,8 @@
 				AA00000A000000000000001A /* FileResultsView.swift in Sources */,
 				AA00000A000000000000002A /* VideoCompressionView.swift in Sources */,
 				AA00000B000000000000001A /* EmptyStateView.swift in Sources */,
+				AA00000C000000000000001A /* Font+PhotoDuck.swift in Sources */,
+				AA00000C000000000000003A /* DuckComponents.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

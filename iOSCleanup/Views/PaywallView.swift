@@ -9,39 +9,47 @@ struct PaywallView: View {
     @Environment(\.dismiss) private var dismiss
 
     private let features: [(icon: String, text: String)] = [
-        ("trash.fill",         "Bulk delete duplicate photos"),
-        ("person.2.fill",      "Merge duplicate contacts"),
+        ("photo.stack.fill",            "Bulk delete duplicate photos"),
+        ("person.2.fill",               "Merge duplicate contacts"),
         ("arrow.triangle.2.circlepath", "Compress videos to save space"),
-        ("checkmark.seal.fill","One-time unlock — no subscription"),
+        ("iphone.gen3",                 "100% on-device — nothing uploaded"),
+        ("checkmark.seal.fill",         "One-time unlock · No subscription"),
     ]
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 28) {
-                    // Hero
+                    // Hero placeholder
+                    RoundedRectangle(cornerRadius: 28)
+                        .fill(Color.duckSoftPink)
+                        .frame(width: 140, height: 140)
+                        .padding(.top, 8)
+
                     VStack(spacing: 8) {
-                        Image(systemName: "lock.open.fill")
-                            .font(.system(size: 56))
-                            .foregroundStyle(.blue)
-                        Text("Unlock iOSCleanup")
-                            .font(.title.bold())
-                        Text("Everything you need to clean your phone.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                        Text("Unlock PhotoDuck")
+                            .font(.duckDisplay)
+                            .foregroundStyle(Color.duckBerry)
+                        Text("One-time purchase · No subscription")
+                            .font(.duckCaption)
+                            .foregroundStyle(Color.duckRose)
                     }
-                    .padding(.top, 8)
 
                     // Feature list
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 14) {
                         ForEach(features, id: \.text) { feature in
                             HStack(spacing: 14) {
-                                Image(systemName: feature.icon)
-                                    .font(.title3)
-                                    .foregroundStyle(.blue)
-                                    .frame(width: 28)
+                                ZStack {
+                                    Circle()
+                                        .fill(Color.duckPink)
+                                        .frame(width: 28, height: 28)
+                                    Image(systemName: "checkmark")
+                                        .font(.caption.bold())
+                                        .foregroundStyle(Color.white)
+                                }
                                 Text(feature.text)
-                                    .font(.body)
+                                    .font(.duckBody)
+                                    .foregroundStyle(Color.duckBerry)
                             }
                         }
                     }
@@ -50,36 +58,43 @@ struct PaywallView: View {
                     // Error
                     if let error = purchaseManager.errorMessage {
                         Text(error)
-                            .font(.caption)
+                            .font(.duckCaption)
                             .foregroundStyle(.red)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal)
                     }
 
+                    // Price
+                    if let price = purchaseManager.product?.displayPrice {
+                        Text(price)
+                            .font(Font.custom("FredokaOne-Regular", size: 28))
+                            .foregroundStyle(Color.duckPink)
+                    }
+
                     // Unlock button
-                    Button(action: {
-                        Task {
-                            await purchaseManager.purchase()
-                            if purchaseManager.isPurchased {
-                                NotificationCenter.default.post(name: .purchaseDidSucceed, object: nil)
-                                dismiss()
+                    Group {
+                        if purchaseManager.isLoading {
+                            HStack { ProgressView().tint(Color.white) }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 15)
+                                .background(
+                                    LinearGradient(
+                                        colors: [Color.duckPink, Color(red: 0.831, green: 0.271, blue: 0.541)],
+                                        startPoint: .leading, endPoint: .trailing
+                                    ),
+                                    in: RoundedRectangle(cornerRadius: 50)
+                                )
+                        } else {
+                            DuckPrimaryButton(title: "Unlock PhotoDuck") {
+                                Task {
+                                    await purchaseManager.purchase()
+                                    if purchaseManager.isPurchased {
+                                        NotificationCenter.default.post(name: .purchaseDidSucceed, object: nil)
+                                        dismiss()
+                                    }
+                                }
                             }
                         }
-                    }) {
-                        Group {
-                            if purchaseManager.isLoading {
-                                ProgressView()
-                                    .tint(.white)
-                            } else {
-                                Text(unlockLabel)
-                                    .font(.headline)
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(.blue)
-                        .foregroundStyle(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
                     .disabled(purchaseManager.isLoading || purchaseManager.product == nil)
                     .padding(.horizontal, 32)
@@ -94,20 +109,18 @@ struct PaywallView: View {
                             }
                         }
                     }
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.duckRose)
                     .disabled(purchaseManager.isLoading)
-
-                    Text("One-time purchase. No subscription.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .padding(.bottom)
+                    .padding(.bottom, 32)
                 }
             }
+            .background(Color.duckCream.ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .foregroundStyle(Color.duckRose)
                 }
             }
         }
@@ -116,12 +129,5 @@ struct PaywallView: View {
                 await purchaseManager.loadProduct()
             }
         }
-    }
-
-    private var unlockLabel: String {
-        if let price = purchaseManager.product?.displayPrice {
-            return "Unlock for \(price)"
-        }
-        return "Unlock"
     }
 }

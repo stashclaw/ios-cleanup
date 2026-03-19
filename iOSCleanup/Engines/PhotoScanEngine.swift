@@ -5,7 +5,7 @@ actor PhotoScanEngine {
 
     static let similarityThreshold: Float = 0.12
 
-    func scan() -> AsyncStream<Result<[PhotoGroup], Error>> {
+    nonisolated func scan() -> AsyncStream<Result<[PhotoGroup], Error>> {
         AsyncStream { continuation in
             Task {
                 do {
@@ -117,7 +117,7 @@ actor PhotoScanEngine {
         }
     }
 
-    private func cluster(assets: [PHAsset], prints: [String: VNFeaturePrintObservation]) -> [PhotoGroup] {
+    private nonisolated func cluster(assets: [PHAsset], prints: [String: VNFeaturePrintObservation]) -> [PhotoGroup] {
         let ids = assets.map { $0.localIdentifier }
         var parent = Dictionary(uniqueKeysWithValues: ids.map { ($0, $0) })
 
@@ -172,7 +172,7 @@ actor PhotoScanEngine {
         }
     }
 
-    private func burstGroups(from assets: [PHAsset]) -> [PhotoGroup] {
+    private nonisolated func burstGroups(from assets: [PHAsset]) -> [PhotoGroup] {
         var bursts: [String: [PHAsset]] = [:]
         for asset in assets {
             if let burstId = asset.burstIdentifier {

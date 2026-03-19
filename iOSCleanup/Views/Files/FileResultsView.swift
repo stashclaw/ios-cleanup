@@ -17,29 +17,41 @@ struct FileResultsView: View {
     var body: some View {
         Group {
             if visibleFiles.isEmpty {
-                EmptyStateView(title: "No Large Files", icon: "doc.fill", message: "No files or videos over 50 MB were found.")
+                EmptyStateView(title: "No Large Files", icon: "doc.fill",
+                               message: "No files or videos over 50 MB were found.")
             } else {
-                List(visibleFiles) { file in
-                    FileRow(
-                        file: file,
-                        purchaseManager: purchaseManager,
-                        onDelete: { Task { await deleteFile(file) } },
-                        onCompress: {
-                            guard purchaseManager.isPurchased else { showPaywall = true; return }
-                            compressionTarget = file
+                ScrollView {
+                    VStack(spacing: 12) {
+                        if let error = deletionError {
+                            Text(error).font(.duckCaption).foregroundStyle(.red).padding(.horizontal)
                         }
-                    )
+                        ForEach(visibleFiles) { file in
+                            DuckCard {
+                                DuckFileRow(
+                                    file: file,
+                                    purchaseManager: purchaseManager,
+                                    onDelete: { Task { await deleteFile(file) } },
+                                    onCompress: {
+                                        guard purchaseManager.isPurchased else { showPaywall = true; return }
+                                        compressionTarget = file
+                                    }
+                                )
+                                .padding(14)
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 12)
                 }
-                .listStyle(.insetGrouped)
+                .background(Color.duckBlush.ignoresSafeArea())
             }
         }
         .navigationTitle("Large Files")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $compressionTarget) { file in
-            VideoCompressionView(file: file)
-                .environmentObject(purchaseManager)
+            VideoCompressionView(file: file).environmentObject(purchaseManager)
         }
-        .sheet(isPresented: $showPaywall) { PaywallView() }
+        .sheet(isPresented: $showPaywall) { PaywallView().environmentObject(purchaseManager) }
         .onReceive(NotificationCenter.default.publisher(for: .purchaseDidSucceed)) { _ in
             showPaywall = false
         }
@@ -69,41 +81,40 @@ struct FileResultsView: View {
 
 // MARK: - File Row
 
-private struct FileRow: View {
+private struct DuckFileRow: View {
     let file: LargeFile
     let purchaseManager: PurchaseManager
     let onDelete: () -> Void
     let onCompress: () -> Void
 
     private var isVideo: Bool {
-        if case .photoLibrary(let asset) = file.source {
-            return asset.mediaType == .video
-        }
+        if case .photoLibrary(let asset) = file.source { return asset.mediaType == .video }
         let ext = (file.displayName as NSString).pathExtension.lowercased()
         return ["mp4", "mov", "m4v", "avi", "mkv"].contains(ext)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
                 Image(systemName: isVideo ? "video.fill" : "doc.fill")
                     .font(.title3)
-                    .foregroundStyle(isVideo ? .purple : .blue)
+                    .foregroundStyle(isVideo ? Color.duckOrange : Color.duckPink)
                     .frame(width: 32)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(file.displayName)
-                        .font(.subheadline.bold())
+                        .font(.duckBody)
+                        .foregroundStyle(Color.duckBerry)
                         .lineLimit(1)
                     HStack(spacing: 6) {
                         Text(file.formattedSize)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.duckCaption)
+                            .foregroundStyle(Color.duckRose)
                         typeBadge
                         if let date = file.creationDate {
                             Text(date.formatted(date: .abbreviated, time: .omitted))
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
+                                .font(.duckLabel)
+                                .foregroundStyle(Color.duckSoftPink)
                         }
                     }
                 }
@@ -111,44 +122,24 @@ private struct FileRow: View {
             }
 
             HStack(spacing: 10) {
-                Button(role: .destructive, action: onDelete) {
-                    Label("Delete", systemImage: "trash")
-                        .font(.caption.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                        .background(Color.red.opacity(0.1))
-                        .foregroundStyle(.red)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.plain)
-
+                DuckOutlineButton(title: "Delete", color: .duckRose, action: onDelete)
                 if isVideo {
-                    Button(action: onCompress) {
-                        Label(
-                            purchaseManager.isPurchased ? "Compress" : "Compress 🔒",
-                            systemImage: "arrow.triangle.2.circlepath"
-                        )
-                        .font(.caption.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                        .background(Color.purple.opacity(0.1))
-                        .foregroundStyle(.purple)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
-                    .buttonStyle(.plain)
+                    DuckPrimaryButton(
+                        title: purchaseManager.isPurchased ? "Compress" : "Compress 🔒",
+                        action: onCompress
+                    )
                 }
             }
         }
-        .padding(.vertical, 4)
     }
 
     private var typeBadge: some View {
         Text(isVideo ? "Video" : "File")
-            .font(.caption2.bold())
+            .font(.duckLabel)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(isVideo ? Color.purple.opacity(0.15) : Color.blue.opacity(0.15))
-            .foregroundStyle(isVideo ? .purple : .blue)
+            .background(isVideo ? Color.duckOrange.opacity(0.15) : Color.duckPink.opacity(0.15))
+            .foregroundStyle(isVideo ? Color.duckOrange : Color.duckPink)
             .clipShape(Capsule())
     }
 }

@@ -3,6 +3,7 @@ import Contacts
 
 struct ContactResultsView: View {
     let matches: [ContactMatch]
+    @EnvironmentObject private var purchaseManager: PurchaseManager
 
     private var certain: [ContactMatch]  { matches.filter { $0.confidence == .certain } }
     private var probable: [ContactMatch] { matches.filter { $0.confidence == .probable } }
@@ -11,42 +12,44 @@ struct ContactResultsView: View {
     var body: some View {
         Group {
             if matches.isEmpty {
-                EmptyStateView(title: "No Duplicates Found", icon: "person.2.fill", message: "Your contacts look clean.")
+                EmptyStateView(title: "No Duplicates Found", icon: "person.2.fill",
+                               message: "Your contacts look clean.")
             } else {
-                List {
-                    if !certain.isEmpty {
-                        Section("Certain (\(certain.count))") {
-                            ForEach(certain) { match in
-                                NavigationLink(destination: ContactMergePreviewView(match: match)) {
-                                    ContactMatchRow(match: match)
-                                }
-                            }
+                ScrollView {
+                    VStack(spacing: 20) {
+                        if !certain.isEmpty {
+                            section(title: "Certain (\(certain.count))", items: certain)
+                        }
+                        if !probable.isEmpty {
+                            section(title: "Probable (\(probable.count))", items: probable)
+                        }
+                        if !possible.isEmpty {
+                            section(title: "Possible (\(possible.count))", items: possible)
                         }
                     }
-                    if !probable.isEmpty {
-                        Section("Probable (\(probable.count))") {
-                            ForEach(probable) { match in
-                                NavigationLink(destination: ContactMergePreviewView(match: match)) {
-                                    ContactMatchRow(match: match)
-                                }
-                            }
-                        }
-                    }
-                    if !possible.isEmpty {
-                        Section("Possible (\(possible.count))") {
-                            ForEach(possible) { match in
-                                NavigationLink(destination: ContactMergePreviewView(match: match)) {
-                                    ContactMatchRow(match: match)
-                                }
-                            }
-                        }
-                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 12)
                 }
-                .listStyle(.insetGrouped)
+                .background(Color.duckBlush.ignoresSafeArea())
             }
         }
         .navigationTitle("Duplicate Contacts")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func section(title: String, items: [ContactMatch]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            DuckSectionHeader(title: title)
+            ForEach(items) { match in
+                DuckCard {
+                    NavigationLink(destination: ContactMergePreviewView(match: match)
+                        .environmentObject(purchaseManager)) {
+                        ContactMatchRow(match: match)
+                            .padding(14)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -56,34 +59,39 @@ private struct ContactMatchRow: View {
     let match: ContactMatch
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(fullName(match.primary))
-                    .font(.headline)
-                Spacer()
-                confidenceBadge
+                    .font(.duckBody)
+                    .foregroundStyle(Color.duckBerry)
+                Text(fullName(match.duplicate))
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.duckRose)
+                if !match.reasons.isEmpty {
+                    Text(reasonSummary)
+                        .font(.duckLabel)
+                        .foregroundStyle(Color.duckSoftPink)
+                }
             }
-            Text(fullName(match.duplicate))
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            if !match.reasons.isEmpty {
-                Text(reasonSummary)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+            Spacer()
+            VStack(alignment: .trailing, spacing: 4) {
+                confidenceBadge
+                Image(systemName: "chevron.right")
+                    .font(.caption.bold())
+                    .foregroundStyle(Color.duckSoftPink)
             }
         }
-        .padding(.vertical, 2)
     }
 
     private var confidenceBadge: some View {
         let (label, color): (String, Color) = switch match.confidence {
-        case .certain:  ("Certain", .green)
-        case .probable: ("Probable", .orange)
-        case .possible: ("Possible", .secondary)
+        case .certain:  ("Certain", Color.duckPink)
+        case .probable: ("Probable", Color.duckOrange)
+        case .possible: ("Possible", Color.duckSoftPink)
         }
         return Text(label)
-            .font(.caption2.bold())
-            .padding(.horizontal, 7)
+            .font(.duckLabel)
+            .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(color.opacity(0.15))
             .foregroundStyle(color)
@@ -93,10 +101,10 @@ private struct ContactMatchRow: View {
     private var reasonSummary: String {
         match.reasons.compactMap { reason -> String? in
             switch reason {
-            case .identicalPhone:        return "Same phone"
-            case .identicalEmail:        return "Same email"
-            case .sameNameDifferentFormat: return "Same name"
-            case .fuzzyName(let d):      return "Similar name (±\(d))"
+            case .identicalPhone:           return "Same phone"
+            case .identicalEmail:           return "Same email"
+            case .sameNameDifferentFormat:  return "Same name"
+            case .fuzzyName(let d):         return "Similar name (±\(d))"
             }
         }.joined(separator: " · ")
     }

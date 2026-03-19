@@ -17,6 +17,13 @@ struct OnboardingView: View {
         }
         .tabViewStyle(.page)
         .indexViewStyle(.page(backgroundDisplayMode: .always))
+        .background(Color.duckBlush.ignoresSafeArea())
+        .onAppear {
+            UIPageControl.appearance().currentPageIndicatorTintColor = UIColor(
+                red: 0.973, green: 0.373, blue: 0.639, alpha: 1) // DuckPink
+            UIPageControl.appearance().pageIndicatorTintColor = UIColor(
+                red: 0.973, green: 0.373, blue: 0.639, alpha: 0.3)
+        }
     }
 }
 
@@ -26,23 +33,28 @@ private struct WelcomeStep: View {
     let onNext: () -> Void
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 28) {
             Spacer()
-            Image(systemName: "iphone.gen3.circle.fill")
-                .font(.system(size: 80))
-                .foregroundStyle(.blue)
-            Text("Clean Up Your iPhone")
-                .font(.largeTitle.bold())
-                .multilineTextAlignment(.center)
-            Text("Find duplicate photos, merge contacts, and free up space from large videos — all on-device, never uploaded.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            RoundedRectangle(cornerRadius: 28)
+                .fill(Color.duckSoftPink)
+                .frame(width: 180, height: 180)
+
+            VStack(spacing: 10) {
+                Text("Welcome to PhotoDuck!")
+                    .font(.duckDisplay)
+                    .foregroundStyle(Color.duckBerry)
+                    .multilineTextAlignment(.center)
+                Text("Time to tidy up your camera roll!")
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.duckRose)
+                    .multilineTextAlignment(.center)
+            }
+
+            Spacer()
+            DuckPrimaryButton(title: "Get Started", action: onNext)
                 .padding(.horizontal, 32)
-            Spacer()
-            OnboardingPrimaryButton(title: "Get Started", color: .blue, action: onNext)
+                .padding(.bottom, 60)
         }
-        .padding(.bottom, 60)
     }
 }
 
@@ -54,38 +66,47 @@ private struct PhotoPermissionStep: View {
     @Environment(\.openURL) private var openURL
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 28) {
             Spacer()
-            Image(systemName: "photo.stack.fill")
-                .font(.system(size: 80))
-                .foregroundStyle(.orange)
-            Text("Photo Access")
-                .font(.largeTitle.bold())
-            Text("iOSCleanup scans your photos locally to find duplicates. Nothing leaves your device.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-            Spacer()
-            if status == .denied || status == .restricted {
-                OnboardingPrimaryButton(title: "Open Settings", color: .orange) {
-                    if let url = URL(string: "app-settings:") { openURL(url) }
-                }
-            } else if status == .notDetermined {
-                OnboardingPrimaryButton(title: "Allow Photo Access", color: .orange) {
-                    Task {
-                        status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
-                        if status == .authorized || status == .limited { onNext() }
-                    }
-                }
-            } else {
-                OnboardingPrimaryButton(title: "Continue", color: .orange, action: onNext)
+            RoundedRectangle(cornerRadius: 28)
+                .fill(Color.duckSoftPink)
+                .frame(width: 180, height: 180)
+
+            VStack(spacing: 10) {
+                Text("Duplicates Found!")
+                    .font(.duckDisplay)
+                    .foregroundStyle(Color.duckBerry)
+                    .multilineTextAlignment(.center)
+                Text("We'll find similar photos for you to review.")
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.duckRose)
+                    .multilineTextAlignment(.center)
             }
-            Button("Skip for now", action: onNext)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 60)
+
+            Spacer()
+
+            VStack(spacing: 12) {
+                if status == .denied || status == .restricted {
+                    DuckPrimaryButton(title: "Open Settings") {
+                        if let url = URL(string: "app-settings:") { openURL(url) }
+                    }
+                } else if status == .notDetermined {
+                    DuckPrimaryButton(title: "Allow Photos Access") {
+                        Task {
+                            status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+                            if status == .authorized || status == .limited { onNext() }
+                        }
+                    }
+                } else {
+                    DuckPrimaryButton(title: "Continue", action: onNext)
+                }
+                Button("Skip for now", action: onNext)
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.duckRose)
+            }
+            .padding(.horizontal, 32)
+            .padding(.bottom, 60)
         }
-        .padding(.bottom, 20)
     }
 }
 
@@ -97,60 +118,48 @@ private struct ContactPermissionStep: View {
     @Environment(\.openURL) private var openURL
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 28) {
             Spacer()
-            Image(systemName: "person.2.fill")
-                .font(.system(size: 80))
-                .foregroundStyle(.green)
-            Text("Contacts Access")
-                .font(.largeTitle.bold())
-            Text("iOSCleanup finds duplicate contacts by matching phone numbers and names. No data is shared.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-            Spacer()
-            if status == .denied || status == .restricted {
-                OnboardingPrimaryButton(title: "Open Settings", color: .green) {
-                    if let url = URL(string: "app-settings:") { openURL(url) }
-                }
-            } else if status == .notDetermined {
-                OnboardingPrimaryButton(title: "Allow Contacts Access", color: .green) {
-                    Task {
-                        let store = CNContactStore()
-                        _ = try? await store.requestAccess(for: .contacts)
-                        status = CNContactStore.authorizationStatus(for: .contacts)
-                        onDone()
-                    }
-                }
-            } else {
-                OnboardingPrimaryButton(title: "Done", color: .green, action: onDone)
+            RoundedRectangle(cornerRadius: 28)
+                .fill(Color.duckSoftPink)
+                .frame(width: 180, height: 180)
+
+            VStack(spacing: 10) {
+                Text("All Set!")
+                    .font(.duckDisplay)
+                    .foregroundStyle(Color.duckBerry)
+                    .multilineTextAlignment(.center)
+                Text("PhotoDuck is ready to clean.")
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.duckRose)
+                    .multilineTextAlignment(.center)
             }
-            Button("Skip for now", action: onDone)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 60)
+
+            Spacer()
+
+            VStack(spacing: 12) {
+                if status == .denied || status == .restricted {
+                    DuckPrimaryButton(title: "Open Settings") {
+                        if let url = URL(string: "app-settings:") { openURL(url) }
+                    }
+                } else if status == .notDetermined {
+                    DuckPrimaryButton(title: "Allow Contacts Access") {
+                        Task {
+                            let store = CNContactStore()
+                            _ = try? await store.requestAccess(for: .contacts)
+                            status = CNContactStore.authorizationStatus(for: .contacts)
+                            onDone()
+                        }
+                    }
+                } else {
+                    DuckPrimaryButton(title: "Let's Go", action: onDone)
+                }
+                Button("Skip for now", action: onDone)
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.duckRose)
+            }
+            .padding(.horizontal, 32)
+            .padding(.bottom, 60)
         }
-        .padding(.bottom, 20)
-    }
-}
-
-// MARK: - Shared button style
-
-private struct OnboardingPrimaryButton: View {
-    let title: String
-    let color: Color
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(color)
-                .foregroundStyle(Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-        }
-        .padding(.horizontal, 32)
     }
 }

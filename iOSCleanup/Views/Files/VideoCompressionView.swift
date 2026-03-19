@@ -119,14 +119,17 @@ struct VideoCompressionView: View {
         }
     }
 
+    private var currentProgress: Double {
+        if case .compressing(let p) = compressionState { return p }
+        return 0
+    }
+
     private var progressSection: some View {
         VStack(spacing: 12) {
-            let progress: Double
-            if case .compressing(let p) = compressionState { progress = p } else { progress = 0 }
-            ProgressView(value: progress)
+            ProgressView(value: currentProgress)
                 .tint(.purple)
                 .scaleEffect(x: 1, y: 2)
-            Text("\(Int(progress * 100))% — Compressing…")
+            Text("\(Int(currentProgress * 100))% — Compressing…")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }

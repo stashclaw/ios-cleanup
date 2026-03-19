@@ -78,7 +78,7 @@ struct ContactMergePreviewView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(.separator)
+                .strokeBorder(Color(UIColor.separator))
         )
     }
 
