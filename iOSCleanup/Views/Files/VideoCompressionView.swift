@@ -1,6 +1,6 @@
 import SwiftUI
 import Photos
-import AVFoundation
+@preconcurrency import AVFoundation
 
 struct VideoCompressionView: View {
     let file: LargeFile
@@ -192,7 +192,7 @@ struct VideoCompressionView: View {
             let engine = VideoCompressionEngine()
             var outputURL: URL?
 
-            for await event in await engine.compress(asset: avAsset, preset: selectedPreset) {
+            for await event in engine.compress(asset: avAsset, preset: selectedPreset) {
                 switch event {
                 case .progress(let p):
                     compressionState = .compressing(progress: p)

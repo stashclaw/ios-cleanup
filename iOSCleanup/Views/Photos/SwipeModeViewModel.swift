@@ -26,15 +26,27 @@ final class SwipeModeViewModel: ObservableObject {
     @Published var isComplete = false
     @Published var deleteError: String?
 
+    private let allGroups: [PhotoGroup]
+    private(set) var totalReviewableCount: Int = 0
     private var keptAssets: [PHAsset] = []
-    private var toDeleteAssets: [PHAsset] = []
+    private(set) var toDeleteAssets: [PHAsset] = []
+    private var toDeleteGroupIDsByAssetID: [String: UUID] = [:]
     private(set) var deletedCount = 0
     private(set) var deletedBytes: Int64 = 0
 
     var keptCount: Int { keptAssets.count }
     var duckedCount: Int { toDeleteAssets.count + deletedCount }
+    var reviewedCount: Int { keptCount + duckedCount }
+    var remainingCount: Int { max(totalReviewableCount - reviewedCount, 0) }
+
+    var pendingDeleteBytes: Int64 {
+        toDeleteAssets.reduce(into: Int64(0)) { acc, a in
+            acc += a.estimatedFileSize
+        }
+    }
 
     init(groups: [PhotoGroup]) {
+        allGroups = groups
         buildQueue(from: groups)
     }
 
@@ -44,8 +56,8 @@ final class SwipeModeViewModel: ObservableObject {
     }
 
     var progress: Double {
-        guard !queue.isEmpty else { return 1 }
-        return Double(currentIndex) / Double(queue.count)
+        guard totalReviewableCount > 0 else { return 1 }
+        return Double(reviewedCount) / Double(totalReviewableCount)
     }
 
     // MARK: - Actions
@@ -54,6 +66,17 @@ final class SwipeModeViewModel: ObservableObject {
     func keep() {
         if case .asset(let asset, _) = current {
             keptAssets.append(asset)
+            if case .asset(_, let groupID) = current {
+                Task {
+                    await PhotoFeedbackStore.shared.recordSwipeDecision(
+                        asset: asset,
+                        groupID: groupID,
+                        kind: .swipeKeep,
+                        stage: .committed,
+                        note: "Duck Mode keep"
+                    )
+                }
+            }
         }
         advance()
     }
@@ -62,8 +85,31 @@ final class SwipeModeViewModel: ObservableObject {
     func delete() {
         if case .asset(let asset, _) = current {
             toDeleteAssets.append(asset)
+            if case .asset(_, let groupID) = current {
+                toDeleteGroupIDsByAssetID[asset.localIdentifier] = groupID
+                Task {
+                    await PhotoFeedbackStore.shared.recordSwipeDecision(
+                        asset: asset,
+                        groupID: groupID,
+                        kind: .swipeDelete,
+                        stage: .provisional,
+                        note: "Duck Mode delete"
+                    )
+                }
+            }
         }
         advance()
+    }
+
+    func resetQueue() {
+        keptAssets = []
+        toDeleteAssets = []
+        deletedCount = 0
+        deletedBytes = 0
+        deleteError = nil
+        isComplete = false
+        toDeleteGroupIDsByAssetID.removeAll()
+        buildQueue(from: allGroups)
     }
 
     private func advance() {
@@ -74,7 +120,6 @@ final class SwipeModeViewModel: ObservableObject {
         }
         if currentIndex >= queue.count {
             isComplete = true
-            Task { await commitDeletes() }
         }
     }
 
@@ -83,11 +128,35 @@ final class SwipeModeViewModel: ObservableObject {
     func commitDeletes() async {
         guard !toDeleteAssets.isEmpty else { return }
         do {
-            try await PHPhotoLibrary.shared().performChanges {
-                PHAssetChangeRequest.deleteAssets(self.toDeleteAssets as NSFastEnumeration)
+            let assets = toDeleteAssets
+            let bytes = pendingDeleteBytes
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                PHPhotoLibrary.shared().performChanges({
+                    PHAssetChangeRequest.deleteAssets(assets as NSFastEnumeration)
+                }) { _, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume()
+                    }
+                }
             }
-            deletedCount = toDeleteAssets.count
+            deletedCount += toDeleteAssets.count
+            deletedBytes += bytes
+            for asset in toDeleteAssets {
+                let groupID = toDeleteGroupIDsByAssetID[asset.localIdentifier]
+                Task {
+                    await PhotoFeedbackStore.shared.recordSwipeDecision(
+                        asset: asset,
+                        groupID: groupID,
+                        kind: .swipeDelete,
+                        stage: .committed,
+                        note: "Duck Mode delete committed"
+                    )
+                }
+            }
             toDeleteAssets.removeAll()
+            toDeleteGroupIDsByAssetID.removeAll()
         } catch {
             deleteError = error.localizedDescription
         }
@@ -96,13 +165,31 @@ final class SwipeModeViewModel: ObservableObject {
     // MARK: - Queue building
 
     private func buildQueue(from groups: [PhotoGroup]) {
-        // Gather all non-best assets sorted by creation date
-        let assets: [(PHAsset, UUID)] = groups.flatMap { group in
-            group.assets.dropFirst().map { ($0, group.id) }
-        }
-        .sorted { ($0.0.creationDate ?? .distantPast) < ($1.0.creationDate ?? .distantPast) }
+        let queuedAssets = groups.flatMap { group -> [(PHAsset, UUID)] in
+            let deleteIDs: [String]
+            if !group.deleteCandidateIDs.isEmpty {
+                deleteIDs = group.deleteCandidateIDs
+            } else if let keeperAssetID = group.keeperAssetID {
+                deleteIDs = group.assets.map(\.localIdentifier).filter { $0 != keeperAssetID }
+            } else {
+                deleteIDs = []
+            }
 
-        // Insert month section headers
+            let assetMap = Dictionary(uniqueKeysWithValues: group.assets.map { ($0.localIdentifier, $0) })
+            var result: [(PHAsset, UUID)] = []
+            result.reserveCapacity(deleteIDs.count)
+            for id in deleteIDs {
+                guard let asset = assetMap[id] else { continue }
+                result.append((asset, group.id))
+            }
+            return result
+        }
+
+        let assets = queuedAssets.sorted {
+            ($0.0.creationDate ?? .distantPast) < ($1.0.creationDate ?? .distantPast)
+        }
+        totalReviewableCount = assets.count
+
         let formatter = DateFormatter()
         formatter.dateFormat = "MMMM yyyy"
 
@@ -117,7 +204,6 @@ final class SwipeModeViewModel: ObservableObject {
             entries.append(.asset(asset, groupID: groupID))
         }
 
-        // Start at first asset (skip any leading headers)
         queue = entries
         currentIndex = 0
         while currentIndex < queue.count, case .monthHeader = queue[currentIndex] {

@@ -4,6 +4,7 @@ import Photos
 struct SwipeModeView: View {
     let groups: [PhotoGroup]
     @EnvironmentObject private var purchaseManager: PurchaseManager
+    @EnvironmentObject private var deletionManager: DeletionManager
     @Environment(\.dismiss) private var dismiss
     @StateObject private var viewModel: SwipeModeViewModel
 
@@ -16,7 +17,12 @@ struct SwipeModeView: View {
         NavigationStack {
             Group {
                 if viewModel.isComplete {
-                    DuckModeCompletion(viewModel: viewModel, onDismiss: { dismiss() })
+                    DuckModeCompletion(
+                        viewModel: viewModel,
+                        purchaseManager: purchaseManager,
+                        deletionManager: deletionManager,
+                        onDismiss: { dismiss() }
+                    )
                 } else {
                     cardStack
                 }
@@ -41,22 +47,23 @@ struct SwipeModeView: View {
 
     private var cardStack: some View {
         VStack(spacing: 0) {
-            // Tally + progress
-            HStack {
-                Label("\(viewModel.keptCount) keep", systemImage: "heart.fill")
-                    .font(.duckCaption)
-                    .foregroundStyle(.green)
-                Spacer()
-                Label("\(viewModel.duckedCount) ducked", systemImage: "trash.fill")
-                    .font(.duckCaption)
-                    .foregroundStyle(Color.duckPink)
+            VStack(spacing: 10) {
+                HStack {
+                    StatusBadge(title: "\(viewModel.reviewedCount) / \(viewModel.totalReviewableCount) reviewed", accent: .duckPink)
+                    Spacer()
+                    StatusBadge(title: "\(viewModel.remainingCount) remaining", accent: .duckRose)
+                }
+
+                HStack(spacing: 10) {
+                    StatPill(title: "Kept", value: "\(viewModel.keptCount)", accent: .green, icon: "heart.fill")
+                    StatPill(title: "Ducked", value: "\(viewModel.duckedCount)", accent: .duckPink, icon: "trash.fill")
+                }
+
+                DuckProgressBar(progress: viewModel.progress, color: .duckPink)
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
-
-            DuckProgressBar(progress: viewModel.progress, color: .duckPink)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 10)
+            .padding(.bottom, 10)
 
             Spacer()
 
@@ -117,12 +124,14 @@ struct SwipeModeView: View {
                 .foregroundStyle(Color.duckPink)
                 .opacity(leftIndicatorOpacity)
                 .padding()
+                .accessibilityHidden(true) // Decorative; "Duck it" / "Keep it" buttons below are the accessible equivalent
             Spacer()
             Text("→ Keep it")
                 .font(.duckHeading)
                 .foregroundStyle(.green)
                 .opacity(rightIndicatorOpacity)
                 .padding()
+                .accessibilityHidden(true)
         }
     }
 
@@ -174,27 +183,81 @@ struct SwipeModeView: View {
 
 private struct DuckModeCompletion: View {
     @ObservedObject var viewModel: SwipeModeViewModel
+    let purchaseManager: PurchaseManager
+    let deletionManager: DeletionManager
     let onDismiss: () -> Void
 
+    @State private var showPaywall = false
+
+    private var pendingGB: String {
+        ByteCountFormatter.string(fromByteCount: viewModel.pendingDeleteBytes, countStyle: .file)
+    }
+
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
-            RoundedRectangle(cornerRadius: 28)
-                .fill(Color.duckYellow)
-                .frame(width: 160, height: 160)
-            Text("All Done! ✦")
-                .font(.duckDisplay)
-                .foregroundStyle(Color.duckBerry)
-            Text("Ducked \(viewModel.duckedCount) photo\(viewModel.duckedCount == 1 ? "" : "s")")
-                .font(.duckBody)
-                .foregroundStyle(Color.duckRose)
-            if let error = viewModel.deleteError {
-                Text(error).font(.duckCaption).foregroundStyle(.red)
+        ScrollView {
+            VStack(spacing: 24) {
+                Spacer(minLength: 32)
+
+                RoundedRectangle(cornerRadius: 28)
+                    .fill(Color.duckYellow)
+                    .frame(width: 120, height: 120)
+
+                Text("You ducked \(viewModel.duckedCount) photo\(viewModel.duckedCount == 1 ? "" : "s")")
+                    .font(.duckTitle)
+                    .foregroundStyle(Color.duckBerry)
+
+                if viewModel.pendingDeleteBytes > 0 {
+                    Text("\(pendingGB) to free")
+                        .font(.duckDisplay)
+                        .foregroundStyle(Color.duckPink)
+                }
+
+                if let error = viewModel.deleteError {
+                    Text(error).font(.duckCaption).foregroundStyle(.red)
+                }
+
+                if deletionManager.isDeleting {
+                    VStack(spacing: 12) {
+                        StatusBadge(title: "Freeing your space...", accent: .duckPink)
+                        DuckProgressBar(progress: deletionManager.deletionProgress, color: .duckPink)
+                            .frame(height: 12)
+                            .padding(.horizontal, 20)
+                        Text("\(ByteCountFormatter.string(fromByteCount: deletionManager.bulkProcessedBytes, countStyle: .file)) freed of \(ByteCountFormatter.string(fromByteCount: deletionManager.bulkTotalBytes, countStyle: .file)) total")
+                            .font(.duckBody)
+                            .foregroundStyle(Color.duckRose)
+                        Text("\(deletionManager.bulkProcessedCount) of \(deletionManager.bulkTotalCount) photos")
+                            .font(.duckCaption)
+                            .foregroundStyle(Color.duckBerry)
+                    }
+                } else {
+                    VStack(spacing: 12) {
+                        DuckPrimaryButton(title: "Free the space ✦") {
+                            guard purchaseManager.isPurchased else { showPaywall = true; return }
+                            Task {
+                                try? await deletionManager.bulkDelete(assets: viewModel.toDeleteAssets)
+                            }
+                        }
+                        .padding(.horizontal, 32)
+
+                        DuckOutlineButton(title: "Review again", color: .duckRose) {
+                            viewModel.resetQueue()
+                        }
+                        .padding(.horizontal, 20)
+                    }
+                }
+
+                Spacer(minLength: 32)
+
+                DuckOutlineButton(title: "✓ Back to Library", color: .duckPink) { onDismiss() }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 40)
             }
-            Spacer()
-            DuckPrimaryButton(title: "✓ Back to Library", action: onDismiss)
-                .padding(.horizontal, 32)
-                .padding(.bottom, 40)
+        }
+        .sheet(isPresented: $showPaywall) {
+            PaywallView().environmentObject(purchaseManager)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .purchaseDidSucceed)) { _ in
+            showPaywall = false
         }
     }
 }
@@ -236,7 +299,13 @@ private struct DuckAssetCard: View {
             PHImageManager.default().requestImage(
                 for: asset, targetSize: CGSize(width: 600, height: 800),
                 contentMode: .aspectFit, options: options
-            ) { image, _ in continuation.resume(returning: image) }
+            ) { image, info in
+                // .opportunistic fires twice: degraded first, then final.
+                // Guard prevents resuming the continuation twice → crash.
+                let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) == true
+                guard !isDegraded else { return }
+                continuation.resume(returning: image)
+            }
         }
     }
 }

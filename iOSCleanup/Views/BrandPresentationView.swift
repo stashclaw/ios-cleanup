@@ -12,50 +12,54 @@ import SwiftUI
 import UIKit
 
 struct BrandPresentationView: View {
-    private let palette: [(name: String, hex: String, color: Color)] = [
-        ("Primary Pink", "#F85FA3", .photoduckPrimaryPink),
-        ("Soft Pink", "#F9B6D2", .photoduckSoftPink),
-        ("Blush Background", "#FFF2F8", .photoduckBlushBackground),
-        ("Duck Yellow", "#FFD85A", .photoduckDuckYellow),
-        ("Beak Orange", "#F79A2E", .photoduckBeakOrange),
-        ("Cream", "#FFF8FB", .photoduckCream),
-        ("Rose Text", "#C94C84", .photoduckRoseText),
-        ("Deep Berry", "#9D3C66", .photoduckDeepBerry)
+    private let palette: [BrandPaletteItem] = [
+        .init(name: "Primary Pink", hex: "#F85FA3", color: .photoduckPrimaryPink),
+        .init(name: "Soft Pink", hex: "#F9B6D2", color: .photoduckSoftPink),
+        .init(name: "Blush Background", hex: "#FFF2F8", color: .photoduckBlushBackground),
+        .init(name: "Duck Yellow", hex: "#FFD85A", color: .photoduckDuckYellow),
+        .init(name: "Beak Orange", hex: "#F79A2E", color: .photoduckBeakOrange),
+        .init(name: "Cream", hex: "#FFF8FB", color: .photoduckCream),
+        .init(name: "Rose Text", hex: "#C94C84", color: .photoduckRoseText),
+        .init(name: "Deep Berry", hex: "#9D3C66", color: .photoduckDeepBerry)
     ]
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 22) {
-                heroSection
-                sectionShell(title: "Color Palette", subtitle: "Core brand colors and supportive neutrals") {
-                    paletteGrid
+        GeometryReader { proxy in
+            let isCompactWidth = proxy.size.width < 390
+
+            ScrollView {
+                VStack(spacing: isCompactWidth ? 18 : 22) {
+                    heroSection(isCompactWidth: isCompactWidth)
+                    sectionShell(title: "Color Palette", subtitle: "Core brand colors and supportive neutrals") {
+                        paletteGrid(isCompactWidth: isCompactWidth)
+                    }
+                    sectionShell(title: "Typography Scale", subtitle: "Custom font fallbacks keep the system polished on every install") {
+                        typographyStack(isCompactWidth: isCompactWidth)
+                    }
+                    sectionShell(title: "Component Showcase", subtitle: "Buttons, badges, progress, and a sample card") {
+                        componentShowcase(isCompactWidth: isCompactWidth)
+                    }
+                    sectionShell(title: "Mini Product Mockups", subtitle: "Three tiny phone scenes using supplied assets when available") {
+                        miniMockups(isCompactWidth: isCompactWidth)
+                    }
+                    closingBrandMoment
                 }
-                sectionShell(title: "Typography Scale", subtitle: "Custom font fallbacks keep the system polished on every install") {
-                    typographyStack
-                }
-                sectionShell(title: "Component Showcase", subtitle: "Buttons, badges, progress, and a sample card") {
-                    componentShowcase
-                }
-                sectionShell(title: "Mini Product Mockups", subtitle: "Three tiny phone scenes using supplied assets when available") {
-                    miniMockups
-                }
-                closingBrandMoment
+                .padding(.horizontal, 16)
+                .padding(.vertical, 18)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 18)
+            .background(Color.photoduckBlushBackground.ignoresSafeArea())
         }
-        .background(Color.photoduckBlushBackground.ignoresSafeArea())
     }
 
-    private var heroSection: some View {
+    private func heroSection(isCompactWidth: Bool) -> some View {
         BrandCardContainer {
             ZStack(alignment: .topTrailing) {
                 heroBackgroundGlow
 
-                VStack(spacing: 18) {
+                VStack(spacing: isCompactWidth ? 14 : 18) {
                     lockupVisual
 
-                    VStack(spacing: 10) {
+                    VStack(spacing: 8) {
                         BrandWordmark()
 
                         Text("Keep the best. Duck the rest.")
@@ -66,9 +70,9 @@ struct BrandPresentationView: View {
                     .frame(maxWidth: .infinity)
 
                     MascotAccentBadge()
-                        .padding(.top, 4)
+                        .padding(.top, isCompactWidth ? 0 : 4)
                 }
-                .padding(24)
+                .padding(isCompactWidth ? 20 : 24)
             }
         }
     }
@@ -129,15 +133,9 @@ struct BrandPresentationView: View {
                 }
                 .frame(width: 70, height: 70)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("PhotoDuck")
-                        .font(.photoduckDisplay(24))
-                        .foregroundStyle(Color.photoduckDeepBerry)
-
-                    Text("premium-cute cleanup for your camera roll")
-                        .font(.photoduckBody(13, weight: .medium))
-                        .foregroundStyle(Color.photoduckRoseText.opacity(0.86))
-                }
+                Text("premium-cute cleanup for your camera roll")
+                    .font(.photoduckBody(13, weight: .medium))
+                    .foregroundStyle(Color.photoduckRoseText.opacity(0.86))
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(14)
@@ -152,9 +150,9 @@ struct BrandPresentationView: View {
         }
     }
 
-    private var paletteGrid: some View {
+    private func paletteGrid(isCompactWidth: Bool) -> some View {
         LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 138), spacing: 12)],
+            columns: [GridItem(.adaptive(minimum: isCompactWidth ? 126 : 138), spacing: 12)],
             spacing: 12
         ) {
             ForEach(Array(palette.enumerated()), id: \.offset) { item in
@@ -167,57 +165,116 @@ struct BrandPresentationView: View {
         }
     }
 
-    private var typographyStack: some View {
-        VStack(spacing: 12) {
-            TypographyRow(
-                label: "Display",
-                sample: "Keep the best.",
-                font: .photoduckDisplay(34),
-                note: "Fredoka One + rounded fallback"
-            )
-            TypographyRow(
-                label: "Title",
-                sample: "Duck the rest.",
-                font: .photoduckDisplay(24),
-                note: "Great for section headers"
-            )
-            TypographyRow(
-                label: "Body",
-                sample: "A friendly, polished system for duplicate cleanup and satisfying progress.",
-                font: .photoduckBody(16),
-                note: "Nunito + rounded fallback"
-            )
-            TypographyRow(
-                label: "Caption",
-                sample: "Small helper text and supporting details.",
-                font: .photoduckBody(13, weight: .medium),
-                note: "Used for labels and hints"
-            )
-            TypographyRow(
-                label: "Label",
-                sample: "SCAN COMPLETE",
-                font: .photoduckBody(12, weight: .bold),
-                note: "All-caps accent labels"
-            )
+    @ViewBuilder
+    private func typographyStack(isCompactWidth: Bool) -> some View {
+        if isCompactWidth {
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+                spacing: 12
+            ) {
+                TypographyRow(
+                    label: "Display",
+                    sample: "Keep the best.",
+                    font: .photoduckDisplay(30),
+                    note: "Fredoka One"
+                )
+                TypographyRow(
+                    label: "Title",
+                    sample: "Duck the rest.",
+                    font: .photoduckDisplay(22),
+                    note: "Section headers"
+                )
+                TypographyRow(
+                    label: "Body",
+                    sample: "A friendly, polished system for duplicate cleanup and satisfying progress.",
+                    font: .photoduckBody(15),
+                    note: "Nunito"
+                )
+                TypographyRow(
+                    label: "Caption",
+                    sample: "Small helper text and supporting details.",
+                    font: .photoduckBody(12, weight: .medium),
+                    note: "Labels + hints"
+                )
+                TypographyRow(
+                    label: "Label",
+                    sample: "SCAN COMPLETE",
+                    font: .photoduckBody(11, weight: .bold),
+                    note: "Accent labels"
+                )
+            }
+        } else {
+            VStack(spacing: 12) {
+                TypographyRow(
+                    label: "Display",
+                    sample: "Keep the best.",
+                    font: .photoduckDisplay(34),
+                    note: "Fredoka One + rounded fallback"
+                )
+                TypographyRow(
+                    label: "Title",
+                    sample: "Duck the rest.",
+                    font: .photoduckDisplay(24),
+                    note: "Great for section headers"
+                )
+                TypographyRow(
+                    label: "Body",
+                    sample: "A friendly, polished system for duplicate cleanup and satisfying progress.",
+                    font: .photoduckBody(16),
+                    note: "Nunito + rounded fallback"
+                )
+                TypographyRow(
+                    label: "Caption",
+                    sample: "Small helper text and supporting details.",
+                    font: .photoduckBody(13, weight: .medium),
+                    note: "Used for labels and hints"
+                )
+                TypographyRow(
+                    label: "Label",
+                    sample: "SCAN COMPLETE",
+                    font: .photoduckBody(12, weight: .bold),
+                    note: "All-caps accent labels"
+                )
+            }
         }
     }
 
-    private var componentShowcase: some View {
+    private func componentShowcase(isCompactWidth: Bool) -> some View {
         VStack(spacing: 14) {
-            HStack(spacing: 12) {
-                BrandPrimaryButtonSample(title: "Get Started")
-                BrandSecondaryButtonSample(title: "Learn More")
+            if isCompactWidth {
+                VStack(spacing: 12) {
+                    BrandPrimaryButtonSample(title: "Get Started")
+                    BrandSecondaryButtonSample(title: "Learn More")
+                }
+            } else {
+                HStack(spacing: 12) {
+                    BrandPrimaryButtonSample(title: "Get Started")
+                    BrandSecondaryButtonSample(title: "Learn More")
+                }
             }
 
-            HStack(spacing: 10) {
-                BrandBadge(title: "New", background: .photoduckPrimaryPink, foreground: .white)
-                BrandBadge(title: "Premium", background: .photoduckDuckYellow, foreground: .photoduckDeepBerry)
-                BrandStatPill(
-                    title: "244 photos",
-                    subtitle: "found",
-                    icon: "photo.stack",
-                    tint: .photoduckRoseText
-                )
+            if isCompactWidth {
+                VStack(spacing: 10) {
+                    BrandBadge(title: "New", background: .photoduckPrimaryPink, foreground: .white)
+                    BrandBadge(title: "Premium", background: .photoduckDuckYellow, foreground: .photoduckDeepBerry)
+                    BrandStatPill(
+                        title: "244 photos",
+                        subtitle: "found",
+                        icon: "photo.stack",
+                        tint: .photoduckRoseText
+                    )
+                }
+            } else {
+                HStack(spacing: 10) {
+                    BrandBadge(title: "New", background: .photoduckPrimaryPink, foreground: .white)
+                    BrandBadge(title: "Premium", background: .photoduckDuckYellow, foreground: .photoduckDeepBerry)
+                    BrandStatPill(
+                        title: "244 photos",
+                        subtitle: "found",
+                        icon: "photo.stack",
+                        tint: .photoduckRoseText
+                    )
+                }
             }
 
             BrandProgressSample(progress: 0.72)
@@ -226,32 +283,47 @@ struct BrandPresentationView: View {
         }
     }
 
-    private var miniMockups: some View {
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 170), spacing: 12)],
-            spacing: 12
-        ) {
-            MiniPhoneMockup(
-                title: "Home",
-                subtitle: "Overview and scan entry",
-                assetNames: ["photoduck_home_mock"],
-                kind: .home
-            )
-
-            MiniPhoneMockup(
-                title: "Scan",
-                subtitle: "Progress in motion",
-                assetNames: ["photoduck_scan_mock"],
-                kind: .scan
-            )
-
-            MiniPhoneMockup(
-                title: "Completion",
-                subtitle: "Results and celebration",
-                assetNames: ["photoduck_complete_mock"],
-                kind: .completion
-            )
+    @ViewBuilder
+    private func miniMockups(isCompactWidth: Bool) -> some View {
+        if isCompactWidth {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    mockupCards
+                }
+                .padding(.vertical, 2)
+            }
+        } else {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 170), spacing: 12)],
+                spacing: 12
+            ) {
+                mockupCards
+            }
         }
+    }
+
+    @ViewBuilder
+    private var mockupCards: some View {
+        MiniPhoneMockup(
+            title: "Home",
+            subtitle: "Overview and scan entry",
+            assetNames: ["photoduck_home_mock"],
+            kind: .home
+        )
+
+        MiniPhoneMockup(
+            title: "Scan",
+            subtitle: "Progress in motion",
+            assetNames: ["photoduck_scan_mock"],
+            kind: .scan
+        )
+
+        MiniPhoneMockup(
+            title: "Completion",
+            subtitle: "Results and celebration",
+            assetNames: ["photoduck_complete_mock"],
+            kind: .completion
+        )
     }
 
     private var closingBrandMoment: some View {
@@ -627,7 +699,7 @@ private struct MiniPhoneMockup: View {
                 }
 
                 PhoneFrame {
-                    BrandAssetImage(assetNames: assetNames, contentMode: .fill) {
+                    BrandAssetImage(assetNames: assetNames, contentMode: .fit) {
                         MiniMockupFallback(kind: kind)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1192,41 +1264,10 @@ private extension Font {
 
 // MARK: - Colors
 
-private extension Color {
-    static let photoduckPrimaryPink = Color(hex: "#F85FA3")
-    static let photoduckSoftPink = Color(hex: "#F9B6D2")
-    static let photoduckBlushBackground = Color(hex: "#FFF2F8")
-    static let photoduckDuckYellow = Color(hex: "#FFD85A")
-    static let photoduckBeakOrange = Color(hex: "#F79A2E")
-    static let photoduckCream = Color(hex: "#FFF8FB")
-    static let photoduckRoseText = Color(hex: "#C94C84")
-    static let photoduckDeepBerry = Color(hex: "#9D3C66")
-}
-
-private extension Color {
-    init(hex: String, opacity: Double = 1.0) {
-        let sanitized = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var value: UInt64 = 0
-        Scanner(string: sanitized).scanHexInt64(&value)
-
-        let r, g, b: Double
-        switch sanitized.count {
-        case 6:
-            r = Double((value & 0xFF0000) >> 16) / 255
-            g = Double((value & 0x00FF00) >> 8) / 255
-            b = Double(value & 0x0000FF) / 255
-        case 8:
-            r = Double((value & 0xFF000000) >> 24) / 255
-            g = Double((value & 0x00FF0000) >> 16) / 255
-            b = Double((value & 0x0000FF00) >> 8) / 255
-        default:
-            r = 1
-            g = 1
-            b = 1
-        }
-
-        self.init(.sRGB, red: r, green: g, blue: b, opacity: opacity)
-    }
+private struct BrandPaletteItem {
+    let name: String
+    let hex: String
+    let color: Color
 }
 
 #Preview {

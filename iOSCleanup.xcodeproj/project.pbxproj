@@ -7,6 +7,22 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AA00000E000000000000001A /* UndoToast.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000E000000000000001B /* UndoToast.swift */; };
+		AA00000E000000000000002A /* DeletionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000E000000000000002B /* DeletionManager.swift */; };
+		AA00000E000000000000003A /* PhotoDeletionGuardrails.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000E000000000000003B /* PhotoDeletionGuardrails.swift */; };
+		AA00000F000000000000001A /* BrandPresentationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000F000000000000001B /* BrandPresentationView.swift */; };
+		AA00000F000000000000002A /* PhotoDuckShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000F000000000000002B /* PhotoDuckShellView.swift */; };
+		AA00000F000000000000003A /* Color+PhotoDuck.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000F000000000000003B /* Color+PhotoDuck.swift */; };
+		AA00000F000000000000004A /* PHAsset+FileSize.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000F000000000000004B /* PHAsset+FileSize.swift */; };
+		AA000012000000000000001A /* PhotoAnalysisCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000012000000000000001B /* PhotoAnalysisCache.swift */; };
+		AA000013000000000000001A /* SimilarityCoreMLClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000013000000000000001B /* SimilarityCoreMLClassifier.swift */; };
+		AA000014000000000000001A /* SimilarityPolicyTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000014000000000000001B /* SimilarityPolicyTypes.swift */; };
+		AA000015000000000000001A /* SimilarityPolicyServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000015000000000000001B /* SimilarityPolicyServices.swift */; };
+		AA000016000000000000001A /* PhotoReviewFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000016000000000000001B /* PhotoReviewFeedback.swift */; };
+		AA000017000000000000001A /* PhotoPreferenceProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000017000000000000001B /* PhotoPreferenceProfile.swift */; };
+		AA000018000000000000001A /* PhotoFeedbackStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000018000000000000001B /* PhotoFeedbackStore.swift */; };
+		AA000019000000000000001A /* PhotoPreferenceProfileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000019000000000000001B /* PhotoPreferenceProfileStore.swift */; };
+		AA00001A000000000000001A /* PhotoTrainingExampleBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00001A000000000000001B /* PhotoTrainingExampleBuilder.swift */; };
 		AA000001000000000000001A /* iOSCleanupApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000001B /* iOSCleanupApp.swift */; };
 		AA000001000000000000002A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000002B /* ContentView.swift */; };
 		AA000001000000000000003A /* PhotoGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000003B /* PhotoGroup.swift */; };
@@ -17,12 +33,15 @@
 		AA000001000000000000008A /* PhotoScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000008B /* PhotoScanEngine.swift */; };
 		AA000001000000000000009A /* ContactScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000009B /* ContactScanEngine.swift */; };
 		AA00000100000000000000AA /* FileScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000AB /* FileScanEngine.swift */; };
+		AA000010000000000000001A /* SimilarReviewServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000010000000000000001B /* SimilarReviewServices.swift */; };
 		AA00000100000000000000BA /* Photos.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000BB /* Photos.framework */; };
 		AA00000100000000000000CA /* Contacts.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000CB /* Contacts.framework */; };
 		AA00000100000000000000DA /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000DB /* Vision.framework */; };
 		AA00000100000000000000EA /* PhotoScanEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000EB /* PhotoScanEngineTests.swift */; };
 		AA00000100000000000000FA /* ContactScanEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000FB /* ContactScanEngineTests.swift */; };
 		AA0000010000000000000100 /* FileScanEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000101 /* FileScanEngineTests.swift */; };
+		AA0000010000000000000110 /* SimilarityPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000111 /* SimilarityPolicyTests.swift */; };
+		AA00001B000000000000001A /* PhotoFeedbackLearningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00001B000000000000001B /* PhotoFeedbackLearningTests.swift */; };
 		AA000002000000000000001A /* PurchaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001B /* PurchaseManager.swift */; };
 		AA000002000000000000002A /* iOSCleanup.storekit in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000002B /* iOSCleanup.storekit */; };
 		AA000003000000000000001A /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000003000000000000001B /* OnboardingView.swift */; };
@@ -37,6 +56,7 @@
 		AA000008000000000000002A /* ContactMergePreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000008000000000000002B /* ContactMergePreviewView.swift */; };
 		AA000009000000000000001A /* VideoCompressionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000009000000000000001B /* VideoCompressionEngine.swift */; };
 		AA000009000000000000002A /* VideoCompressionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000009000000000000002B /* VideoCompressionEngineTests.swift */; };
+		AA000011000000000000001A /* SimilarGroupReviewViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000011000000000000001B /* SimilarGroupReviewViewModel.swift */; };
 		AA00000A000000000000001A /* FileResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000A000000000000001B /* FileResultsView.swift */; };
 		AA00000A000000000000002A /* VideoCompressionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000A000000000000002B /* VideoCompressionView.swift */; };
 		AA00000B000000000000001A /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000B000000000000001B /* EmptyStateView.swift */; };
@@ -70,12 +90,25 @@
 		AA000001000000000000008B /* PhotoScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoScanEngine.swift; sourceTree = "<group>"; };
 		AA000001000000000000009B /* ContactScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactScanEngine.swift; sourceTree = "<group>"; };
 		AA00000100000000000000AB /* FileScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileScanEngine.swift; sourceTree = "<group>"; };
+		AA00000F000000000000004B /* PHAsset+FileSize.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PHAsset+FileSize.swift"; sourceTree = "<group>"; };
+		AA000010000000000000001B /* SimilarReviewServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarReviewServices.swift; sourceTree = "<group>"; };
+		AA000012000000000000001B /* PhotoAnalysisCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoAnalysisCache.swift; sourceTree = "<group>"; };
+		AA000013000000000000001B /* SimilarityCoreMLClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarityCoreMLClassifier.swift; sourceTree = "<group>"; };
+		AA000014000000000000001B /* SimilarityPolicyTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarityPolicyTypes.swift; sourceTree = "<group>"; };
+		AA000015000000000000001B /* SimilarityPolicyServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarityPolicyServices.swift; sourceTree = "<group>"; };
+		AA000016000000000000001B /* PhotoReviewFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoReviewFeedback.swift; sourceTree = "<group>"; };
+		AA000017000000000000001B /* PhotoPreferenceProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoPreferenceProfile.swift; sourceTree = "<group>"; };
+		AA000018000000000000001B /* PhotoFeedbackStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoFeedbackStore.swift; sourceTree = "<group>"; };
+		AA000019000000000000001B /* PhotoPreferenceProfileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoPreferenceProfileStore.swift; sourceTree = "<group>"; };
+		AA00001A000000000000001B /* PhotoTrainingExampleBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoTrainingExampleBuilder.swift; sourceTree = "<group>"; };
 		AA00000100000000000000BB /* Photos.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Photos.framework; path = System/Library/Frameworks/Photos.framework; sourceTree = SDKROOT; };
 		AA00000100000000000000CB /* Contacts.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Contacts.framework; path = System/Library/Frameworks/Contacts.framework; sourceTree = SDKROOT; };
 		AA00000100000000000000DB /* Vision.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Vision.framework; path = System/Library/Frameworks/Vision.framework; sourceTree = SDKROOT; };
 		AA00000100000000000000EB /* PhotoScanEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoScanEngineTests.swift; sourceTree = "<group>"; };
 		AA00000100000000000000FB /* ContactScanEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactScanEngineTests.swift; sourceTree = "<group>"; };
 		AA0000010000000000000101 /* FileScanEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileScanEngineTests.swift; sourceTree = "<group>"; };
+		AA0000010000000000000111 /* SimilarityPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarityPolicyTests.swift; sourceTree = "<group>"; };
+		AA00001B000000000000001B /* PhotoFeedbackLearningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoFeedbackLearningTests.swift; sourceTree = "<group>"; };
 		AA0000010000000000000201 /* iOSCleanup.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iOSCleanup.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000010000000000000301 /* iOSCleanupTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iOSCleanupTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000010000000000000401 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -93,9 +126,13 @@
 		AA000008000000000000002B /* ContactMergePreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactMergePreviewView.swift; sourceTree = "<group>"; };
 		AA000009000000000000001B /* VideoCompressionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionEngine.swift; sourceTree = "<group>"; };
 		AA000009000000000000002B /* VideoCompressionEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionEngineTests.swift; sourceTree = "<group>"; };
+		AA000011000000000000001B /* SimilarGroupReviewViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarGroupReviewViewModel.swift; sourceTree = "<group>"; };
 		AA00000A000000000000001B /* FileResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileResultsView.swift; sourceTree = "<group>"; };
 		AA00000A000000000000002B /* VideoCompressionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionView.swift; sourceTree = "<group>"; };
 		AA00000B000000000000001B /* EmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyStateView.swift; sourceTree = "<group>"; };
+		AA00000F000000000000001B /* BrandPresentationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandPresentationView.swift; sourceTree = "<group>"; };
+		AA00000F000000000000002B /* PhotoDuckShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoDuckShellView.swift; sourceTree = "<group>"; };
+		AA00000F000000000000003B /* Color+PhotoDuck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+PhotoDuck.swift"; sourceTree = "<group>"; };
 		AA00000C000000000000001B /* Font+PhotoDuck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Font+PhotoDuck.swift"; sourceTree = "<group>"; };
 		AA00000C000000000000003B /* DuckComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuckComponents.swift; sourceTree = "<group>"; };
 		AA00000D000000000000001B /* FredokaOne-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "FredokaOne-Regular.ttf"; sourceTree = "<group>"; };
@@ -103,6 +140,9 @@
 		AA00000D000000000000003B /* Nunito-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-SemiBold.ttf"; sourceTree = "<group>"; };
 		AA00000D000000000000004B /* Nunito-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-Bold.ttf"; sourceTree = "<group>"; };
 		AA00000D000000000000005B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		AA00000E000000000000001B /* UndoToast.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UndoToast.swift; sourceTree = "<group>"; };
+		AA00000E000000000000002B /* DeletionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeletionManager.swift; sourceTree = "<group>"; };
+		AA00000E000000000000003B /* PhotoDeletionGuardrails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoDeletionGuardrails.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -151,6 +191,8 @@
 				AA00000100000000000000FB /* ContactScanEngineTests.swift */,
 				AA0000010000000000000101 /* FileScanEngineTests.swift */,
 				AA000009000000000000002B /* VideoCompressionEngineTests.swift */,
+				AA0000010000000000000111 /* SimilarityPolicyTests.swift */,
+				AA00001B000000000000001B /* PhotoFeedbackLearningTests.swift */,
 			);
 			path = iOSCleanupTests;
 			sourceTree = "<group>";
@@ -168,9 +210,19 @@
 			isa = PBXGroup;
 			children = (
 				AA000001000000000000008B /* PhotoScanEngine.swift */,
+				AA000012000000000000001B /* PhotoAnalysisCache.swift */,
+				AA000013000000000000001B /* SimilarityCoreMLClassifier.swift */,
+				AA000014000000000000001B /* SimilarityPolicyTypes.swift */,
+				AA000015000000000000001B /* SimilarityPolicyServices.swift */,
+				AA000018000000000000001B /* PhotoFeedbackStore.swift */,
+				AA000019000000000000001B /* PhotoPreferenceProfileStore.swift */,
+				AA00001A000000000000001B /* PhotoTrainingExampleBuilder.swift */,
+				AA000010000000000000001B /* SimilarReviewServices.swift */,
 				AA000001000000000000009B /* ContactScanEngine.swift */,
 				AA00000100000000000000AB /* FileScanEngine.swift */,
 				AA000009000000000000001B /* VideoCompressionEngine.swift */,
+				AA00000E000000000000002B /* DeletionManager.swift */,
+				AA00000E000000000000003B /* PhotoDeletionGuardrails.swift */,
 			);
 			path = Engines;
 			sourceTree = "<group>";
@@ -179,6 +231,8 @@
 			isa = PBXGroup;
 			children = (
 				AA000001000000000000003B /* PhotoGroup.swift */,
+				AA000016000000000000001B /* PhotoReviewFeedback.swift */,
+				AA000017000000000000001B /* PhotoPreferenceProfile.swift */,
 				AA000001000000000000004B /* ContactMatch.swift */,
 				AA000001000000000000005B /* LargeFile.swift */,
 			);
@@ -190,6 +244,8 @@
 			children = (
 				AA000001000000000000006B /* PhoneNormalizer.swift */,
 				AA000001000000000000007B /* NameMatcher.swift */,
+				AA00000F000000000000004B /* PHAsset+FileSize.swift */,
+				AA00000F000000000000003B /* Color+PhotoDuck.swift */,
 				AA00000C000000000000001B /* Font+PhotoDuck.swift */,
 			);
 			path = Utilities;
@@ -250,6 +306,8 @@
 				AA000004000000000000002B /* HomeViewModel.swift */,
 				AA000005000000000000001B /* PaywallView.swift */,
 				AA00000B000000000000001B /* EmptyStateView.swift */,
+				AA00000F000000000000001B /* BrandPresentationView.swift */,
+				AA00000F000000000000002B /* PhotoDuckShellView.swift */,
 				AA00000C000000000000006A /* Components */,
 				AA000006000000000000003A /* Photos */,
 				AA000008000000000000003A /* Contacts */,
@@ -262,6 +320,7 @@
 			isa = PBXGroup;
 			children = (
 				AA00000C000000000000003B /* DuckComponents.swift */,
+				AA00000E000000000000001B /* UndoToast.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -271,6 +330,7 @@
 			children = (
 				AA000006000000000000001B /* PhotoResultsView.swift */,
 				AA000006000000000000002B /* PhotoGroupDetailView.swift */,
+				AA000011000000000000001B /* SimilarGroupReviewViewModel.swift */,
 				AA000007000000000000001B /* SwipeModeView.swift */,
 				AA000007000000000000002B /* SwipeModeViewModel.swift */,
 			);
@@ -399,6 +459,13 @@
 				AA000001000000000000006A /* PhoneNormalizer.swift in Sources */,
 				AA000001000000000000007A /* NameMatcher.swift in Sources */,
 				AA000001000000000000008A /* PhotoScanEngine.swift in Sources */,
+				AA000012000000000000001A /* PhotoAnalysisCache.swift in Sources */,
+				AA000010000000000000001A /* SimilarReviewServices.swift in Sources */,
+				AA000016000000000000001A /* PhotoReviewFeedback.swift in Sources */,
+				AA000017000000000000001A /* PhotoPreferenceProfile.swift in Sources */,
+				AA000018000000000000001A /* PhotoFeedbackStore.swift in Sources */,
+				AA000019000000000000001A /* PhotoPreferenceProfileStore.swift in Sources */,
+				AA00001A000000000000001A /* PhotoTrainingExampleBuilder.swift in Sources */,
 				AA000001000000000000009A /* ContactScanEngine.swift in Sources */,
 				AA00000100000000000000AA /* FileScanEngine.swift in Sources */,
 				AA000002000000000000001A /* PurchaseManager.swift in Sources */,
@@ -408,6 +475,10 @@
 				AA000005000000000000001A /* PaywallView.swift in Sources */,
 				AA000006000000000000001A /* PhotoResultsView.swift in Sources */,
 				AA000006000000000000002A /* PhotoGroupDetailView.swift in Sources */,
+				AA000011000000000000001A /* SimilarGroupReviewViewModel.swift in Sources */,
+				AA000013000000000000001A /* SimilarityCoreMLClassifier.swift in Sources */,
+				AA000014000000000000001A /* SimilarityPolicyTypes.swift in Sources */,
+				AA000015000000000000001A /* SimilarityPolicyServices.swift in Sources */,
 				AA000007000000000000001A /* SwipeModeView.swift in Sources */,
 				AA000007000000000000002A /* SwipeModeViewModel.swift in Sources */,
 				AA000008000000000000001A /* ContactResultsView.swift in Sources */,
@@ -418,6 +489,13 @@
 				AA00000B000000000000001A /* EmptyStateView.swift in Sources */,
 				AA00000C000000000000001A /* Font+PhotoDuck.swift in Sources */,
 				AA00000C000000000000003A /* DuckComponents.swift in Sources */,
+				AA00000E000000000000001A /* UndoToast.swift in Sources */,
+				AA00000E000000000000002A /* DeletionManager.swift in Sources */,
+				AA00000E000000000000003A /* PhotoDeletionGuardrails.swift in Sources */,
+				AA00000F000000000000001A /* BrandPresentationView.swift in Sources */,
+				AA00000F000000000000002A /* PhotoDuckShellView.swift in Sources */,
+				AA00000F000000000000003A /* Color+PhotoDuck.swift in Sources */,
+				AA00000F000000000000004A /* PHAsset+FileSize.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -429,6 +507,8 @@
 				AA00000100000000000000FA /* ContactScanEngineTests.swift in Sources */,
 				AA0000010000000000000100 /* FileScanEngineTests.swift in Sources */,
 				AA000009000000000000002A /* VideoCompressionEngineTests.swift in Sources */,
+				AA0000010000000000000110 /* SimilarityPolicyTests.swift in Sources */,
+				AA00001B000000000000001A /* PhotoFeedbackLearningTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

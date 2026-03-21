@@ -42,7 +42,7 @@ actor VideoCompressionEngine {
 
     // MARK: - Main entry point
 
-    func compress(asset: AVAsset, preset: Preset) -> AsyncStream<CompressionEvent> {
+    nonisolated func compress(asset: AVAsset, preset: Preset) -> AsyncStream<CompressionEvent> {
         AsyncStream { continuation in
             Task {
                 do {
@@ -58,7 +58,7 @@ actor VideoCompressionEngine {
 
     // MARK: - Export
 
-    private func exportSession(
+    private nonisolated func exportSession(
         asset: AVAsset,
         preset: Preset,
         continuation: AsyncStream<CompressionEvent>.Continuation

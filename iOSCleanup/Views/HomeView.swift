@@ -1,274 +1,516 @@
 import SwiftUI
 
 struct HomeView: View {
-    @StateObject private var viewModel = HomeViewModel()
+    @ObservedObject var viewModel: HomeViewModel
+    @Binding var isHomeTabSelected: Bool
     @EnvironmentObject private var purchaseManager: PurchaseManager
+    @EnvironmentObject private var deletionManager: DeletionManager
 
     @State private var showPaywall = false
     @State private var showCompletion = false
+    @State private var showReviewResults = false
+    @State private var lastPresentedFreedBytes: Int64 = 0
+    @State private var lastPresentedFreedItems: Int = 0
+    @State private var completionFreedBytes: Int64 = 0
+    @State private var completionFreedItems: Int = 0
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 20) {
-                    storageCard
+                VStack(spacing: 16) {
+                    heroCard
+                    nextActionCard
+                    findingsRow
                     categoryGrid
-                    scanButton
+                    storageCard
                 }
-                .padding(.horizontal)
+                .padding(.horizontal, 16)
                 .padding(.vertical, 16)
             }
-            .background(Color.duckBlush.ignoresSafeArea())
+            .background(Color.photoduckBlushBackground.ignoresSafeArea())
             .navigationTitle("PhotoDuck")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if !purchaseManager.isPurchased {
-                        Button("Unlock 🔒") { showPaywall = true }
+                        Button("Unlock") { showPaywall = true }
                             .font(.duckCaption)
                             .foregroundStyle(Color.duckPink)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Color.duckCream, in: Capsule())
                     }
                 }
             }
         }
-        .sheet(isPresented: $showPaywall) { PaywallView().environmentObject(purchaseManager) }
-        .sheet(isPresented: $showCompletion) { CompletionOverlay(viewModel: viewModel) }
-        .onChange(of: viewModel.isAllDone) { done in
-            if done { showCompletion = true }
+        .sheet(isPresented: $showPaywall) {
+            PaywallView().environmentObject(purchaseManager)
+        }
+        .sheet(isPresented: $showCompletion) {
+            CompletionOverlay(
+                viewModel: viewModel,
+                freedItems: completionFreedItems,
+                freedBytes: completionFreedBytes
+            )
+        }
+        .sheet(isPresented: $showReviewResults) {
+            NavigationStack {
+                PhotoResultsView(groups: viewModel.photoGroups)
+                    .environmentObject(purchaseManager)
+                    .environmentObject(deletionManager)
+            }
+        }
+        .onChange(of: deletionManager.totalBytesFreed) { _ in
+            presentCompletionIfNeeded()
+        }
+        .onChange(of: isHomeTabSelected) { isVisible in
+            if isVisible {
+                presentCompletionIfNeeded()
+            }
+        }
+        .onAppear {
+            presentCompletionIfNeeded()
         }
     }
 
-    // MARK: - Storage Card
+    private var heroCard: some View {
+        PrimaryMetricCard(
+            title: viewModel.heroStatusLabel,
+            value: viewModel.heroPrimaryMetricValue,
+            detail: "\(viewModel.heroDetailText)\n\(viewModel.heroSecondaryText)",
+            accent: heroAccent,
+            progress: heroProgress
+        ) {
+            PhotoDuckAssetImage(
+                assetNames: ["photoduck_mascot", "photoduck_logo"],
+                fallback: { PhotoDuckMascotFallback(size: 72) }
+            )
+            .frame(width: 90, height: 90)
+        }
+        // Announce state transitions to VoiceOver, so status changes are not
+        // communicated by colour alone (accessibility colour-blindness requirement).
+        .accessibilityValue(viewModel.heroStatusLabel)
+    }
 
-    private var storageCard: some View {
+    private var nextActionCard: some View {
         DuckCard {
-            VStack(alignment: .leading, spacing: 14) {
-                LinearGradient(
-                    colors: [Color.duckPink, Color.duckRose],
-                    startPoint: .leading, endPoint: .trailing
-                )
-                .frame(height: 56)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-                .overlay(
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Reclaimable Space")
-                                .font(.duckCaption)
-                                .foregroundStyle(Color.white.opacity(0.85))
-                            Text(viewModel.reclaimableFormatted)
-                                .font(.duckTitle)
-                                .foregroundStyle(Color.white)
-                        }
-                        Spacer()
-                        Image(systemName: "externaldrive.fill")
-                            .font(.title2)
-                            .foregroundStyle(Color.white.opacity(0.8))
-                    }
-                    .padding(.horizontal, 16)
-                )
-
-                DuckProgressBar(progress: viewModel.storageUsedFraction, color: .duckPink)
-                    .padding(.horizontal, 2)
-
+            VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text(viewModel.storageUsedFormatted)
-                        .font(.duckCaption)
-                        .foregroundStyle(Color.duckRose)
-                    Spacer()
-                    Text(viewModel.storageTotalFormatted)
-                        .font(.duckCaption)
+                    Text("Next best action")
+                        .font(.duckHeading)
                         .foregroundStyle(Color.duckBerry)
+                    Spacer()
+                    StatusBadge(title: viewModel.heroNextActionLabel, accent: heroAccent)
+                }
+
+                VStack(spacing: 10) {
+                    primaryCTA
+                    if hasSecondaryAction {
+                        secondaryActionButton
+                    }
                 }
             }
             .padding(16)
         }
     }
 
-    // MARK: - Category Grid
-
-    private var categoryGrid: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
-            CategoryCell(
-                icon: "photo.on.rectangle", color: .duckPink,
-                name: "Duplicates",
-                count: viewModel.photoGroups.count,
-                state: viewModel.photoScanState,
-                destination: { PhotoResultsView(groups: viewModel.photoGroups).environmentObject(purchaseManager) }
+    private var findingsRow: some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+            StatPill(
+                title: "Scanned",
+                value: viewModel.scanProgressLabel,
+                accent: .duckPink,
+                icon: "photo.on.rectangle.angled"
             )
-            CategoryCell(
-                icon: "rectangle.stack", color: .duckOrange,
-                name: "Similar",
-                count: viewModel.photoGroups.filter { $0.reason == .visuallySimilar }.count,
-                state: viewModel.photoScanState,
-                destination: { PhotoResultsView(groups: viewModel.photoGroups).environmentObject(purchaseManager) }
+            StatPill(
+                title: "Rate",
+                value: viewModel.scanRateLabel,
+                accent: .duckYellow,
+                icon: "speedometer"
             )
-            CategoryCell(
-                icon: "person.2.fill", color: .duckRose,
-                name: "Contacts",
-                count: viewModel.contactMatches.count,
-                state: viewModel.contactScanState,
-                destination: { ContactResultsView(matches: viewModel.contactMatches).environmentObject(purchaseManager) }
+            StatPill(
+                title: "Groups",
+                value: viewModel.groupsFoundCount.formatted(),
+                accent: .duckRose,
+                icon: "rectangle.stack.fill"
             )
-            CategoryCell(
-                icon: "video.fill", color: .duckOrange,
-                name: "Large Videos",
-                count: viewModel.largeFiles.count,
-                state: viewModel.fileScanState,
-                destination: { FileResultsView(files: viewModel.largeFiles).environmentObject(purchaseManager) }
+            StatPill(
+                title: "Reviewable",
+                value: viewModel.reviewablePhotosCount.formatted(),
+                accent: .duckOrange,
+                icon: "sparkles"
             )
         }
     }
 
-    // MARK: - Scan button
+    private var categoryGrid: some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+            HomeCategoryTile(
+                icon: "photo.on.rectangle.angled",
+                color: .duckPink,
+                title: "Duplicates",
+                count: viewModel.groupsFoundCount,
+                status: categoryStatus(for: viewModel.groupsFoundCount),
+                note: categoryNote(for: viewModel.groupsFoundCount),
+                destination: {
+                    PhotoResultsView(groups: viewModel.photoGroups)
+                        .environmentObject(purchaseManager)
+                        .environmentObject(deletionManager)
+                }
+            )
 
-    private var scanButton: some View {
-        VStack(spacing: 8) {
-            if viewModel.isAnyScanning {
-                HStack(spacing: 10) {
-                    ProgressView().tint(Color.duckPink)
-                    Text("Scanning…")
-                        .font(.duckBody)
+            HomeCategoryTile(
+                icon: "rectangle.stack.fill",
+                color: .duckOrange,
+                title: "Similar",
+                count: viewModel.photoGroups.filter { $0.reason == .visuallySimilar }.count,
+                status: categoryStatus(for: viewModel.photoGroups.filter { $0.reason == .visuallySimilar }.count),
+                note: categoryNote(for: viewModel.photoGroups.filter { $0.reason == .visuallySimilar }.count),
+                destination: {
+                    PhotoResultsView(groups: viewModel.photoGroups)
+                        .environmentObject(purchaseManager)
+                        .environmentObject(deletionManager)
+                }
+            )
+
+            HomeCategoryTile(
+                icon: "person.2.fill",
+                color: .duckRose,
+                title: "Contacts",
+                count: viewModel.contactMatches.count,
+                status: viewModel.contactScanState == .scanning ? "Scanning" : viewModel.contactScanState == .completed ? "Ready" : "Idle",
+                note: viewModel.contactMatches.isEmpty ? "0 found" : "\(viewModel.contactMatches.count) contacts",
+                destination: {
+                    ContactResultsView(matches: viewModel.contactMatches)
+                        .environmentObject(purchaseManager)
+                }
+            )
+
+            HomeCategoryTile(
+                icon: "video.fill",
+                color: .duckOrange,
+                title: "Large Videos",
+                count: viewModel.largeFiles.count,
+                status: viewModel.fileScanState == .scanning ? "Scanning" : viewModel.fileScanState == .completed ? "Ready" : "Idle",
+                note: viewModel.largeFiles.isEmpty ? "0 found" : "\(viewModel.largeFiles.count) items",
+                destination: {
+                    FileResultsView(files: viewModel.largeFiles)
+                        .environmentObject(purchaseManager)
+                }
+            )
+        }
+    }
+
+    private var storageCard: some View {
+        DuckCard {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Device storage")
+                        .font(.duckHeading)
+                        .foregroundStyle(Color.duckBerry)
+                    Text("\(viewModel.storageUsedFormatted) used of \(viewModel.storageTotalFormatted)")
+                        .font(.duckCaption)
+                        .foregroundStyle(Color.duckRose)
+                    DuckProgressBar(progress: viewModel.storageUsedFraction, color: .duckPink)
+                        .frame(height: 8)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(viewModel.reclaimableFormatted)
+                        .font(.duckTitle)
+                        .foregroundStyle(.duckPink)
+                    Text("cleanup value")
+                        .font(.duckLabel)
                         .foregroundStyle(Color.duckRose)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 15)
-                .background(Color.duckSoftPink.opacity(0.4), in: RoundedRectangle(cornerRadius: 50))
-            } else {
-                DuckPrimaryButton(title: "✦ Start Cleaning") {
-                    Task {
-                        await withTaskGroup(of: Void.self) { group in
-                            group.addTask { await viewModel.scanPhotos() }
-                            group.addTask { await viewModel.scanContacts() }
-                            group.addTask { await viewModel.scanFiles() }
-                        }
+            }
+            .padding(16)
+        }
+    }
+
+    private var primaryCTA: some View {
+        Group {
+            switch viewModel.heroState {
+            case .permissionRequired:
+                DuckPrimaryButton(title: "Allow Photos Access") {
+                    viewModel.startDeepClean()
+                }
+            case .scanFailure:
+                DuckPrimaryButton(title: "Try Again") {
+                    viewModel.startDeepClean()
+                }
+            case .speedCleanActive:
+                if viewModel.photoGroups.isEmpty {
+                    StatusBadge(title: "Scanning in progress", accent: .duckYellow)
+                } else {
+                    DuckPrimaryButton(title: "Review quick wins") {
+                        openReviewFlow()
                     }
+                }
+            case .deepCleanActive:
+                DuckPrimaryButton(title: "Pause Deep Clean") {
+                    viewModel.pauseDeepClean()
+                }
+            case .deepCleanPaused:
+                DuckPrimaryButton(title: "Continue scanning") {
+                    viewModel.resumeDeepClean()
+                }
+            case .reviewReadyPartialResults:
+                DuckPrimaryButton(title: "Review Results") {
+                    openReviewFlow()
+                }
+            case .completedResultsAvailable:
+                DuckPrimaryButton(title: viewModel.photoGroups.isEmpty ? "Start Speed Clean" : "Review Results") {
+                    if viewModel.photoGroups.isEmpty {
+                        viewModel.startSpeedClean()
+                    } else {
+                        openReviewFlow()
+                    }
+                }
+            case .idlePrompt:
+                DuckPrimaryButton(title: "Start Speed Clean") {
+                    viewModel.startSpeedClean()
                 }
             }
         }
     }
+
+    private var hasSecondaryAction: Bool {
+        switch viewModel.heroState {
+        case .speedCleanActive where !viewModel.photoGroups.isEmpty:
+            return true
+        case .deepCleanActive where viewModel.hasPartialResults && !viewModel.photoGroups.isEmpty:
+            return true
+        case .deepCleanPaused where viewModel.hasPartialResults && !viewModel.photoGroups.isEmpty:
+            return true
+        case .reviewReadyPartialResults:
+            return true
+        case .completedResultsAvailable where viewModel.photoGroups.isEmpty:
+            return true
+        case .idlePrompt:
+            return true
+        default:
+            return false
+        }
+    }
+
+    @ViewBuilder
+    private var secondaryActionButton: some View {
+        switch viewModel.heroState {
+        case .speedCleanActive where !viewModel.photoGroups.isEmpty:
+            DuckOutlineButton(title: "Review quick wins", color: .duckRose) {
+                openReviewFlow()
+            }
+        case .deepCleanActive where viewModel.hasPartialResults && !viewModel.photoGroups.isEmpty:
+            DuckOutlineButton(title: "Review partial results", color: .duckRose) {
+                openReviewFlow()
+            }
+        case .deepCleanPaused where viewModel.hasPartialResults && !viewModel.photoGroups.isEmpty:
+            DuckOutlineButton(title: "Review partial results", color: .duckRose) {
+                openReviewFlow()
+            }
+        case .deepCleanPaused:
+            DuckOutlineButton(title: "Start Deep Clean", color: .duckPink) {
+                viewModel.startDeepClean()
+            }
+        case .reviewReadyPartialResults:
+            DuckOutlineButton(title: "Start Deep Clean", color: .duckPink) {
+                viewModel.startDeepClean()
+            }
+        case .completedResultsAvailable where viewModel.photoGroups.isEmpty:
+            DuckOutlineButton(title: "Refresh Deep Clean", color: .duckPink) {
+                viewModel.startDeepClean()
+            }
+        case .idlePrompt:
+            DuckOutlineButton(title: "Start Deep Clean", color: .duckPink) {
+                viewModel.startDeepClean()
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    private var heroAccent: Color {
+        switch viewModel.heroState {
+        case .permissionRequired:
+            return .duckOrange
+        case .scanFailure:
+            return .duckRose
+        case .speedCleanActive:
+            return .duckYellow
+        case .deepCleanActive:
+            return .duckPink
+        case .deepCleanPaused:
+            return .duckRose
+        case .reviewReadyPartialResults:
+            return .duckOrange
+        case .completedResultsAvailable:
+            return .duckPink
+        case .idlePrompt:
+            return .duckPink
+        }
+    }
+
+    private var heroProgress: Double? {
+        switch viewModel.heroState {
+        case .speedCleanActive, .deepCleanActive, .deepCleanPaused:
+            return viewModel.progressFraction
+        case .reviewReadyPartialResults, .completedResultsAvailable:
+            return 1
+        default:
+            return nil
+        }
+    }
+
+    private func categoryStatus(for count: Int) -> String {
+        if viewModel.scanState == .scanning {
+            return count > 0 ? "Partial" : "Scanning"
+        }
+        if count > 0 {
+            return "Ready"
+        }
+        if viewModel.scanState == .completed {
+            return "0 found"
+        }
+        return "Idle"
+    }
+
+    private func categoryNote(for count: Int) -> String {
+        if count == 0 {
+            return viewModel.scanState == .completed ? "No issues found" : "Waiting for scan"
+        }
+        let bytes = ByteCountFormatter.string(fromByteCount: Int64(count) * 250_000_000, countStyle: .file)
+        return "\(count) found · \(bytes) est."
+    }
+
+    private func openReviewFlow() {
+        guard !viewModel.photoGroups.isEmpty else {
+            viewModel.startDeepClean()
+            return
+        }
+        showReviewResults = true
+    }
+
+    private func presentCompletionIfNeeded() {
+        guard isHomeTabSelected else { return }
+        guard deletionManager.totalBytesFreed > 0 else { return }
+        guard deletionManager.totalBytesFreed != lastPresentedFreedBytes else { return }
+        completionFreedItems = max(deletionManager.totalItemsFreed - lastPresentedFreedItems, 0)
+        completionFreedBytes = max(deletionManager.totalBytesFreed - lastPresentedFreedBytes, 0)
+        lastPresentedFreedItems = deletionManager.totalItemsFreed
+        lastPresentedFreedBytes = deletionManager.totalBytesFreed
+        showCompletion = true
+    }
 }
 
-// MARK: - Category Cell
-
-private struct CategoryCell<Destination: View>: View {
+private struct HomeCategoryTile<Destination: View>: View {
     let icon: String
     let color: Color
-    let name: String
+    let title: String
     let count: Int
-    let state: HomeViewModel.ScanState
+    let status: String
+    let note: String
     @ViewBuilder let destination: () -> Destination
 
     var body: some View {
         DuckCard {
             Group {
-                if case .done = state, count > 0 {
-                    NavigationLink(destination: destination) { cellContent }
+                if count > 0 {
+                    NavigationLink(destination: destination) {
+                        tileContent
+                    }
                 } else {
-                    cellContent
+                    tileContent
                 }
             }
             .padding(14)
         }
     }
 
-    private var cellContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private var tileContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Image(systemName: icon)
                     .font(.title3)
                     .foregroundStyle(color)
                 Spacer()
-                if case .done = state {
-                    Image(systemName: "chevron.right")
-                        .font(.caption.bold())
-                        .foregroundStyle(Color.duckSoftPink)
-                }
+                StatusBadge(title: status, accent: color)
             }
-            Text(name)
+
+            Text(title)
                 .font(.duckBody)
                 .foregroundStyle(Color.duckBerry)
-            stateLabel
-        }
-    }
 
-    @ViewBuilder
-    private var stateLabel: some View {
-        switch state {
-        case .idle:
-            Text("—")
-                .font(.duckHeading)
-                .foregroundStyle(Color.duckSoftPink)
-        case .scanning:
-            ProgressView().tint(color).scaleEffect(0.75)
-        case .done:
-            Text("\(count)")
-                .font(Font.custom("FredokaOne-Regular", size: 20))
+            Text(count == 0 ? "0" : "\(count)")
+                .font(.duckDisplay(24))
                 .foregroundStyle(count > 0 ? color : Color.duckSoftPink)
-        case .failed:
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
+
+            Text(note)
+                .font(.duckCaption)
+                .foregroundStyle(Color.duckRose)
         }
     }
 }
 
-// MARK: - Completion Overlay
-
 private struct CompletionOverlay: View {
     @ObservedObject var viewModel: HomeViewModel
+    let freedItems: Int
+    let freedBytes: Int64
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 28) {
-                RoundedRectangle(cornerRadius: 28)
-                    .fill(Color.duckYellow)
-                    .frame(width: 160, height: 160)
-                    .padding(.top, 40)
+            VStack(spacing: 18) {
+                Spacer(minLength: 20)
 
-                VStack(spacing: 6) {
-                    Text("All cleaned up! ✦")
-                        .font(.duckDisplay)
-                        .foregroundStyle(Color.duckBerry)
-                    Text("Your library is looking fresh.")
-                        .font(.duckCaption)
-                        .foregroundStyle(Color.duckRose)
+                PrimaryMetricCard(
+                    title: "Cleanup complete",
+                    value: "\(freedItems) photos removed",
+                    detail: "\(ByteCountFormatter.string(fromByteCount: freedBytes, countStyle: .file)) reclaimed · \(viewModel.heroSecondaryText)",
+                    accent: .duckPink,
+                    progress: 1
+                ) {
+                    PhotoDuckAssetImage(
+                        assetNames: ["photoduck_mascot", "photoduck_logo"],
+                        fallback: { PhotoDuckMascotFallback(size: 64) }
+                    )
+                    .frame(width: 84, height: 84)
                 }
 
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
-                    StatCell(label: "GB Freed", value: viewModel.reclaimableFormatted, color: .duckPink)
-                    StatCell(label: "Photos Removed", value: "\(viewModel.photoGroups.count)", color: .duckOrange)
-                    StatCell(label: "Contacts Merged", value: "\(viewModel.contactMatches.count)", color: .duckBerry)
-                    StatCell(label: "Videos Compressed", value: "\(viewModel.largeFiles.count)", color: .green)
+                HStack(spacing: 10) {
+                    StatPill(
+                        title: "Removed",
+                        value: "\(freedItems)",
+                        accent: .duckPink,
+                        icon: "trash.fill"
+                    )
+                    StatPill(
+                        title: "Saved",
+                        value: ByteCountFormatter.string(fromByteCount: freedBytes, countStyle: .file),
+                        accent: .duckYellow,
+                        icon: "sparkles"
+                    )
                 }
-                .padding(.horizontal)
 
-                DuckPrimaryButton(title: "✦ Back to Library") { dismiss() }
-                    .padding(.horizontal)
-                    .padding(.bottom, 32)
+                DuckCard {
+                    VStack(spacing: 12) {
+                        DuckPrimaryButton(title: viewModel.photoGroups.isEmpty ? "Start Speed Clean" : "Continue Cleanup") {
+                            if viewModel.photoGroups.isEmpty {
+                                viewModel.startSpeedClean()
+                            }
+                            dismiss()
+                        }
+                        DuckOutlineButton(title: "Back to Library", color: .duckRose) {
+                            dismiss()
+                        }
+                    }
+                    .padding(16)
+                }
+
+                Spacer(minLength: 20)
             }
+            .padding(.horizontal, 16)
         }
-        .background(Color.duckCream.ignoresSafeArea())
-    }
-}
-
-private struct StatCell: View {
-    let label: String
-    let value: String
-    let color: Color
-
-    var body: some View {
-        DuckCard {
-            VStack(spacing: 4) {
-                Text(value)
-                    .font(Font.custom("FredokaOne-Regular", size: 20))
-                    .foregroundStyle(color)
-                Text(label)
-                    .font(.duckCaption)
-                    .foregroundStyle(Color.duckBerry)
-                    .multilineTextAlignment(.center)
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity)
-        }
+        .background(Color.photoduckBlushBackground.ignoresSafeArea())
     }
 }
