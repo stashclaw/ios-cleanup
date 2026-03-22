@@ -4,7 +4,7 @@ import SwiftUI
 @MainActor
 final class PurchaseManager: ObservableObject {
 
-    static let productID = "com.yourname.iOSCleanup.unlock"
+    static let productID = "com.photoduck.app.unlock"
 
     // Persisted cache — re-verified against StoreKit on every launch
     @AppStorage("isPurchased") private(set) var isPurchased: Bool = false

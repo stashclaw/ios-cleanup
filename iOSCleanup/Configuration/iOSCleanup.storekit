@@ -1,19 +1,19 @@
 {
-  "identifier" : "com.yourname.iOSCleanup.storekit",
+  "identifier" : "com.photoduck.app.storekit",
   "nonConsumableProducts" : [
     {
       "displayPrice" : "2.99",
       "familySharable" : true,
-      "internalID" : "com.yourname.iOSCleanup.unlock",
+      "internalID" : "com.photoduck.app.unlock",
       "localizations" : [
         {
-          "description" : "Unlock all cleanup features: photo deletion, contact merge, and video compression.",
-          "displayName" : "iOSCleanup Unlock",
+          "description" : "Unlock all cleanup features — delete duplicates, merge contacts, compress videos.",
+          "displayName" : "PhotoDuck Unlock",
           "locale" : "en_US"
         }
       ],
-      "productID" : "com.yourname.iOSCleanup.unlock",
-      "referenceName" : "iOSCleanup Unlock",
+      "productID" : "com.photoduck.app.unlock",
+      "referenceName" : "PhotoDuck Unlock",
       "type" : "NonConsumable"
     }
   ],

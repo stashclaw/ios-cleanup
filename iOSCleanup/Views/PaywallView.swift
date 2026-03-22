@@ -20,10 +20,11 @@ struct PaywallView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 28) {
-                    // Hero placeholder
-                    RoundedRectangle(cornerRadius: 28)
-                        .fill(Color.duckSoftPink)
-                        .frame(width: 140, height: 140)
+                    // Hero duck icon
+                    Image("photoduck_icon")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 120, height: 120)
                         .padding(.top, 8)
 
                     VStack(spacing: 8) {

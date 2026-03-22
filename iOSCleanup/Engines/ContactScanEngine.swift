@@ -2,6 +2,9 @@ import Contacts
 
 actor ContactScanEngine {
 
+    /// Set to `true` to enable the O(n²) name-only fuzzy scan. Off by default for speed.
+    static var includeFuzzyNameMatches = false
+
     func scan() async throws -> [ContactMatch] {
         let contacts = try await fetchContacts()
         let index = phoneIndex(from: contacts)
@@ -84,32 +87,34 @@ actor ContactScanEngine {
             }
         }
 
-        // Phase 2: name-only fuzzy matches for unmatched contacts
-        var phonematched = Set<String>()
-        for match in matches {
-            phonematched.insert(match.primary.identifier)
-            phonematched.insert(match.duplicate.identifier)
-        }
+        // Phase 2: name-only fuzzy matches — disabled by default (O(n²), slow on large lists)
+        if ContactScanEngine.includeFuzzyNameMatches {
+            var phonematched = Set<String>()
+            for match in matches {
+                phonematched.insert(match.primary.identifier)
+                phonematched.insert(match.duplicate.identifier)
+            }
 
-        let unmatched = contacts.filter { !phonematched.contains($0.identifier) }
-        for i in 0..<unmatched.count {
-            for j in (i+1)..<unmatched.count {
-                let a = unmatched[i], b = unmatched[j]
-                let key = pairKey(a, b)
-                guard matchedPairs.insert(key).inserted else { continue }
+            let unmatched = contacts.filter { !phonematched.contains($0.identifier) }
+            for i in 0..<unmatched.count {
+                for j in (i+1)..<unmatched.count {
+                    let a = unmatched[i], b = unmatched[j]
+                    let key = pairKey(a, b)
+                    guard matchedPairs.insert(key).inserted else { continue }
 
-                let nameA = fullName(a), nameB = fullName(b)
-                let dist = NameMatcher.distance(nameA, nameB)
-                guard dist <= 2, !nameA.isEmpty, !nameB.isEmpty else { continue }
+                    let nameA = fullName(a), nameB = fullName(b)
+                    let dist = NameMatcher.distance(nameA, nameB)
+                    guard dist <= 2, !nameA.isEmpty, !nameB.isEmpty else { continue }
 
-                let (primary, duplicate) = determinePrimary(a, b)
-                matches.append(ContactMatch(
-                    id: UUID(),
-                    primary: primary,
-                    duplicate: duplicate,
-                    confidence: .possible,
-                    reasons: [.fuzzyName(distance: dist)]
-                ))
+                    let (primary, duplicate) = determinePrimary(a, b)
+                    matches.append(ContactMatch(
+                        id: UUID(),
+                        primary: primary,
+                        duplicate: duplicate,
+                        confidence: .possible,
+                        reasons: [.fuzzyName(distance: dist)]
+                    ))
+                }
             }
         }
 

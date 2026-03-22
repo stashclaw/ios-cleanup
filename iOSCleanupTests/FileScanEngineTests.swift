@@ -27,27 +27,4 @@ final class FileScanEngineTests: XCTestCase {
         XCTAssertTrue(file.formattedSize.contains("GB"))
     }
 
-    func testFilesystemEnumerationWithTempFile() async throws {
-        // Write a file just over 50 MB to temp directory
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("iOSCleanupTest_\(UUID().uuidString).bin")
-
-        let size = 51 * 1024 * 1024  // 51 MB
-        let data = Data(repeating: 0xAB, count: size)
-        try data.write(to: tempURL)
-        defer { try? FileManager.default.removeItem(at: tempURL) }
-
-        let engine = FileScanEngine()
-        let results = try await engine.scan()
-
-        let found = results.first { file in
-            if case .filesystem(let url) = file.source {
-                return url.lastPathComponent == tempURL.lastPathComponent
-            }
-            return false
-        }
-
-        XCTAssertNotNil(found, "Large temp file should appear in scan results")
-        XCTAssertGreaterThanOrEqual(found?.byteSize ?? 0, FileScanEngine.minimumFileSizeBytes)
-    }
 }

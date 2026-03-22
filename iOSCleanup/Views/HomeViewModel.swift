@@ -111,7 +111,10 @@ final class HomeViewModel: ObservableObject {
     var photoScanState: ScanState { scanState }
 
     var reclaimableBytes: Int64 {
-        max(reclaimableBytesFoundSoFar, lastCompletedReclaimableBytes)
+        let fromFiles  = largeFiles.reduce(Int64(0)) { $0 + $1.byteSize }
+        let fromPhotos = photoGroups.reduce(Int64(0)) { $0 + $1.estimatedSavingsBytes }
+        let fromScan   = max(reclaimableBytesFoundSoFar, lastCompletedReclaimableBytes)
+        return max(fromFiles + fromPhotos, fromScan)
     }
 
     var reclaimableFormatted: String {
@@ -131,43 +134,31 @@ final class HomeViewModel: ObservableObject {
         return states.allSatisfy { $0 == .completed || $0 == .idle }
     }
 
-    // MARK: - Storage usage
+    // MARK: - Storage usage (single cached filesystem stat)
 
-    var storageUsedFraction: Double {
-        let total = storageTotalBytes
-        guard total > 0 else { return 0 }
-        return Double(storageUsedBytes) / Double(total)
+    private struct StorageInfo {
+        let used: Int64
+        let total: Int64
+        var free: Int64 { total - used }
+        var fraction: Double { total > 0 ? Double(used) / Double(total) : 0 }
     }
 
-    var storageUsedFormatted: String {
-        ByteCountFormatter.string(fromByteCount: storageUsedBytes, countStyle: .file) + " used"
-    }
-
-    var storageTotalFormatted: String {
-        ByteCountFormatter.string(fromByteCount: storageTotalBytes, countStyle: .file) + " total"
-    }
-
-    var storageTotalBytesValue: Int64 {
-        storageTotalBytes
-    }
-
-    var storageFreeFormatted: String {
-        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
-        let free = (attrs?[.systemFreeSize] as? Int64) ?? 0
-        return ByteCountFormatter.string(fromByteCount: free, countStyle: .file) + " free"
-    }
-
-    private var storageUsedBytes: Int64 {
+    private var _storageInfo: StorageInfo?
+    private var storageInfo: StorageInfo {
+        if let cached = _storageInfo { return cached }
         let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
         let total = (attrs?[.systemSize] as? Int64) ?? 0
-        let free = (attrs?[.systemFreeSize] as? Int64) ?? 0
-        return total - free
+        let free  = (attrs?[.systemFreeSize] as? Int64) ?? 0
+        let info = StorageInfo(used: total - free, total: total)
+        _storageInfo = info
+        return info
     }
 
-    private var storageTotalBytes: Int64 {
-        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
-        return (attrs?[.systemSize] as? Int64) ?? 0
-    }
+    var storageUsedFraction: Double   { storageInfo.fraction }
+    var storageUsedFormatted: String  { ByteCountFormatter.string(fromByteCount: storageInfo.used,  countStyle: .file) + " used" }
+    var storageTotalFormatted: String { ByteCountFormatter.string(fromByteCount: storageInfo.total, countStyle: .file) + " total" }
+    var storageFreeFormatted: String  { ByteCountFormatter.string(fromByteCount: storageInfo.free,  countStyle: .file) + " free" }
+    var storageTotalBytesValue: Int64 { storageInfo.total }
 
     // MARK: - Hero Copy
 

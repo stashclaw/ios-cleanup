@@ -178,6 +178,12 @@ actor PhotoScanEngine {
 
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
+        let screenshotBit = PHAssetMediaSubtype.photoScreenshot.rawValue
+        let hdrBit = PHAssetMediaSubtype.photoHDR.rawValue
+        options.predicate = NSPredicate(
+            format: "(mediaSubtype & %d) == 0 AND (mediaSubtype & %d) == 0",
+            screenshotBit, hdrBit
+        )
 
         let result = PHAsset.fetchAssets(with: .image, options: options)
         var assets: [PHAsset] = []
@@ -198,7 +204,7 @@ actor PhotoScanEngine {
 
             PHImageManager.default().requestImage(
                 for: asset,
-                targetSize: CGSize(width: 299, height: 299),
+                targetSize: CGSize(width: 224, height: 224),
                 contentMode: .aspectFit,
                 options: options
             ) { image, info in
@@ -585,6 +591,47 @@ actor PhotoScanEngine {
     private nonisolated func uniqueStrings(_ strings: [String]) -> [String] {
         var seen = Set<String>()
         return strings.filter { seen.insert($0).inserted }
+    }
+
+    // MARK: - Perceptual hash fast-lane (8×8 pixel average hash)
+    // Used to catch exact/near-exact duplicates before the Vision pipeline.
+
+    func perceptualHash(for asset: PHAsset) async -> UInt64? {
+        await withCheckedContinuation { continuation in
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .fastFormat
+            options.isSynchronous = false
+            options.isNetworkAccessAllowed = false
+
+            PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: CGSize(width: 8, height: 8),
+                contentMode: .aspectFill,
+                options: options
+            ) { image, _ in
+                guard let cgImage = image?.cgImage else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                var bits: UInt64 = 0
+                let colorSpace = CGColorSpaceCreateDeviceGray()
+                var pixels = [UInt8](repeating: 0, count: 64)
+                guard let ctx = CGContext(
+                    data: &pixels, width: 8, height: 8,
+                    bitsPerComponent: 8, bytesPerRow: 8,
+                    space: colorSpace, bitmapInfo: 0
+                ) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: 8, height: 8))
+                let avg = UInt8(pixels.map(Int.init).reduce(0, +) / 64)
+                for (i, p) in pixels.enumerated() where p >= avg {
+                    bits |= (1 << i)
+                }
+                continuation.resume(returning: bits)
+            }
+        }
     }
 }
 

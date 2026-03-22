@@ -102,6 +102,35 @@ struct PhotoGroup: Identifiable, @unchecked Sendable {
 
     var groupId: String { id.uuidString }
     var photoCount: Int { assets.count }
+
+    /// Index of the highest-resolution asset — used as the recommended keeper.
+    var recommendedKeeperIndex: Int {
+        let best = assets.enumerated().max { a, b in
+            let sizeA = a.element.pixelWidth * a.element.pixelHeight
+            let sizeB = b.element.pixelWidth * b.element.pixelHeight
+            return sizeA < sizeB
+        }
+        return best?.offset ?? 0
+    }
+
+    var keeperReason: String {
+        switch reason {
+        case .nearDuplicate: return "Highest resolution copy"
+        case .visuallySimilar: return "Best quality match"
+        case .burstShot: return "Sharpest in burst"
+        }
+    }
+
+    /// Rough byte savings if all non-keeper assets are deleted (pixels × 3 bytes / 10).
+    var estimatedSavingsBytes: Int64 {
+        let nonKeepers = assets.enumerated()
+            .filter { $0.offset != recommendedKeeperIndex }
+            .map(\.element)
+        return nonKeepers.reduce(Int64(0)) { acc, asset in
+            let pixels = Int64(asset.pixelWidth) * Int64(asset.pixelHeight)
+            return acc + (pixels * 3) / 10
+        }
+    }
     var reasons: [String] { groupReasonsSummary }
     var deleteCandidateAssets: [PHAsset] {
         let deleteIDSet = Set(deleteCandidateIDs)

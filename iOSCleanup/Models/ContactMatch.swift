@@ -13,6 +13,20 @@ struct ContactMatch: Identifiable, @unchecked Sendable {
         case possible
     }
 
+    var displayTitle: String {
+        let name = [primary.givenName, primary.familyName]
+            .filter { !$0.isEmpty }.joined(separator: " ")
+        return name.isEmpty ? primary.organizationName : name
+    }
+
+    var confidenceLabel: String {
+        switch confidence {
+        case .certain:  return "Exact match"
+        case .probable: return "Likely duplicate"
+        case .possible: return "Possible duplicate"
+        }
+    }
+
     enum MatchReason: Sendable {
         case identicalPhone
         case identicalEmail
