@@ -60,10 +60,56 @@ struct CachedPhotoGroup: Codable, Sendable {
     let groupReasonsSummary: [String]
     let blockerFlags: [BlockerFlag]?
     let scoreBreakdown: ScoreBreakdown?
+    let preferenceQueuePriority: Double?
+    let preferenceAdjustmentReasons: [String]?
     let captureDateStart: Date?
     let captureDateEnd: Date?
     let candidates: [CachedSimilarPhotoCandidate]
     let reclaimableBytes: Int64
+
+    init(
+        id: UUID,
+        assetIdentifiers: [String],
+        similarity: Float,
+        reason: PhotoGroup.SimilarityReason,
+        groupType: SimilarGroupType,
+        groupConfidence: SimilarGroupConfidence,
+        reviewState: SimilarReviewState,
+        recommendedAction: SimilarRecommendedAction?,
+        keeperAssetID: String?,
+        deleteCandidateIDs: [String],
+        bestShotPhotoId: String?,
+        groupReasonsSummary: [String],
+        blockerFlags: [BlockerFlag]? = nil,
+        scoreBreakdown: ScoreBreakdown? = nil,
+        preferenceQueuePriority: Double? = nil,
+        preferenceAdjustmentReasons: [String]? = nil,
+        captureDateStart: Date? = nil,
+        captureDateEnd: Date? = nil,
+        candidates: [CachedSimilarPhotoCandidate] = [],
+        reclaimableBytes: Int64
+    ) {
+        self.id = id
+        self.assetIdentifiers = assetIdentifiers
+        self.similarity = similarity
+        self.reason = reason
+        self.groupType = groupType
+        self.groupConfidence = groupConfidence
+        self.reviewState = reviewState
+        self.recommendedAction = recommendedAction
+        self.keeperAssetID = keeperAssetID
+        self.deleteCandidateIDs = deleteCandidateIDs
+        self.bestShotPhotoId = bestShotPhotoId
+        self.groupReasonsSummary = groupReasonsSummary
+        self.blockerFlags = blockerFlags
+        self.scoreBreakdown = scoreBreakdown
+        self.preferenceQueuePriority = preferenceQueuePriority
+        self.preferenceAdjustmentReasons = preferenceAdjustmentReasons
+        self.captureDateStart = captureDateStart
+        self.captureDateEnd = captureDateEnd
+        self.candidates = candidates
+        self.reclaimableBytes = reclaimableBytes
+    }
 
     func resolvedAssetIdentifiers(using availableIdentifiers: Set<String>) -> [String]? {
         let resolved = assetIdentifiers.filter { availableIdentifiers.contains($0) }
@@ -96,6 +142,8 @@ struct CachedPhotoGroup: Codable, Sendable {
             groupReasonsSummary: groupReasonsSummary,
             blockerFlags: blockerFlags ?? [],
             scoreBreakdown: scoreBreakdown,
+            preferenceQueuePriority: preferenceQueuePriority,
+            preferenceAdjustmentReasons: preferenceAdjustmentReasons ?? [],
             captureDateRange: captureDateRange,
             candidates: candidates.map { $0.makeCandidate() },
             reclaimableBytes: reclaimableBytes

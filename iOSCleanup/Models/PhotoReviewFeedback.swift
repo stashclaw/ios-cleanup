@@ -1,6 +1,12 @@
 import Foundation
 import Photos
 
+enum PhotoReviewFeedbackVersions {
+    static let policyVersion = 1
+    static let modelVersion = 1
+    static let featureSchemaVersion = 1
+}
+
 enum PhotoReviewFeedbackSource: String, Codable, Sendable, CaseIterable {
     case similarGroupReview
     case swipeMode
@@ -89,9 +95,9 @@ struct PhotoReviewFeedbackAsset: Codable, Sendable, Hashable, Identifiable {
 }
 
 struct PhotoReviewFeedbackEvent: Codable, Sendable, Hashable, Identifiable {
-    static let currentPolicyVersion = 1
-    static let currentModelVersion = 1
-    static let currentFeatureSchemaVersion = 1
+    static let currentPolicyVersion = PhotoReviewFeedbackVersions.policyVersion
+    static let currentModelVersion = PhotoReviewFeedbackVersions.modelVersion
+    static let currentFeatureSchemaVersion = PhotoReviewFeedbackVersions.featureSchemaVersion
 
     let id: UUID
     let timestamp: Date
@@ -134,9 +140,9 @@ struct PhotoReviewFeedbackEvent: Codable, Sendable, Hashable, Identifiable {
         keptAssetIDs: [String] = [],
         skipped: Bool = false,
         recommendationAccepted: Bool? = nil,
-        policyVersion: Int = Self.currentPolicyVersion,
-        modelVersion: Int = Self.currentModelVersion,
-        featureSchemaVersion: Int = Self.currentFeatureSchemaVersion,
+        policyVersion: Int = PhotoReviewFeedbackVersions.policyVersion,
+        modelVersion: Int = PhotoReviewFeedbackVersions.modelVersion,
+        featureSchemaVersion: Int = PhotoReviewFeedbackVersions.featureSchemaVersion,
         assets: [PhotoReviewFeedbackAsset] = [],
         note: String? = nil
     ) {
@@ -207,6 +213,7 @@ struct PhotoTrainingExportRow: Codable, Sendable, Hashable, Identifiable {
     let eventID: UUID
     let kind: PhotoTrainingRowKind
     let timestamp: Date
+    let stage: PhotoReviewDecisionStage
     let groupID: UUID?
     let assetID: String?
     let assetRole: PhotoReviewAssetRole

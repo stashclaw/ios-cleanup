@@ -87,15 +87,6 @@ final class SwipeModeViewModel: ObservableObject {
             toDeleteAssets.append(asset)
             if case .asset(_, let groupID) = current {
                 toDeleteGroupIDsByAssetID[asset.localIdentifier] = groupID
-                Task {
-                    await PhotoFeedbackStore.shared.recordSwipeDecision(
-                        asset: asset,
-                        groupID: groupID,
-                        kind: .swipeDelete,
-                        stage: .provisional,
-                        note: "Duck Mode delete"
-                    )
-                }
             }
         }
         advance()
@@ -165,15 +156,25 @@ final class SwipeModeViewModel: ObservableObject {
     // MARK: - Queue building
 
     private func buildQueue(from groups: [PhotoGroup]) {
-        let queuedAssets = groups.flatMap { group -> [(PHAsset, UUID)] in
-            let deleteIDs: [String]
-            if !group.deleteCandidateIDs.isEmpty {
-                deleteIDs = group.deleteCandidateIDs
-            } else if let keeperAssetID = group.keeperAssetID {
-                deleteIDs = group.assets.map(\.localIdentifier).filter { $0 != keeperAssetID }
-            } else {
-                deleteIDs = []
+        let orderedGroups = groups.sorted { lhs, rhs in
+            let lhsPriority = lhs.preferenceQueuePriority ?? 0
+            let rhsPriority = rhs.preferenceQueuePriority ?? 0
+            if lhsPriority != rhsPriority {
+                return lhsPriority > rhsPriority
             }
+
+            let lhsDate = lhs.captureDateRange?.start ?? lhs.assets.compactMap(\.creationDate).min() ?? .distantPast
+            let rhsDate = rhs.captureDateRange?.start ?? rhs.assets.compactMap(\.creationDate).min() ?? .distantPast
+            if lhsDate != rhsDate {
+                return lhsDate < rhsDate
+            }
+
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+
+        let queuedAssets = orderedGroups.flatMap { group -> [(PHAsset, UUID)] in
+            let deleteIDs = group.deleteCandidateIDs
+            guard !deleteIDs.isEmpty else { return [] }
 
             let assetMap = Dictionary(uniqueKeysWithValues: group.assets.map { ($0.localIdentifier, $0) })
             var result: [(PHAsset, UUID)] = []
@@ -186,7 +187,12 @@ final class SwipeModeViewModel: ObservableObject {
         }
 
         let assets = queuedAssets.sorted {
-            ($0.0.creationDate ?? .distantPast) < ($1.0.creationDate ?? .distantPast)
+            let lhsDate = $0.0.creationDate ?? .distantPast
+            let rhsDate = $1.0.creationDate ?? .distantPast
+            if lhsDate != rhsDate {
+                return lhsDate < rhsDate
+            }
+            return $0.0.localIdentifier < $1.0.localIdentifier
         }
         totalReviewableCount = assets.count
 

@@ -626,6 +626,8 @@ final class HomeViewModel: ObservableObject {
                     groupReasonsSummary: group.groupReasonsSummary,
                     blockerFlags: group.blockerFlags,
                     scoreBreakdown: group.scoreBreakdown,
+                    preferenceQueuePriority: group.preferenceQueuePriority,
+                    preferenceAdjustmentReasons: group.preferenceAdjustmentReasons,
                     captureDateStart: group.captureDateRange?.start,
                     captureDateEnd: group.captureDateRange?.end,
                     candidates: group.candidates.map {

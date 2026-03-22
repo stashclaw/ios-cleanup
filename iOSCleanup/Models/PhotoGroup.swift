@@ -15,6 +15,8 @@ struct PhotoGroup: Identifiable, @unchecked Sendable {
     let groupReasonsSummary: [String]
     let blockerFlags: [BlockerFlag]
     let scoreBreakdown: ScoreBreakdown?
+    let preferenceQueuePriority: Double?
+    let preferenceAdjustmentReasons: [String]
     let captureDateRange: DateInterval?
     let candidates: [SimilarPhotoCandidate]
     let reclaimableBytes: Int64
@@ -34,6 +36,8 @@ struct PhotoGroup: Identifiable, @unchecked Sendable {
         groupReasonsSummary: [String] = [],
         blockerFlags: [BlockerFlag] = [],
         scoreBreakdown: ScoreBreakdown? = nil,
+        preferenceQueuePriority: Double? = nil,
+        preferenceAdjustmentReasons: [String] = [],
         captureDateRange: DateInterval? = nil,
         candidates: [SimilarPhotoCandidate] = [],
         reclaimableBytes: Int64? = nil
@@ -47,16 +51,20 @@ struct PhotoGroup: Identifiable, @unchecked Sendable {
         let shouldExposeDeleteCandidates = resolvedRecommendedAction == .keepBestTrashRest
 
         let resolvedDeleteCandidateIDs: [String]
-        if !deleteCandidateIDs.isEmpty {
-            if let effectiveKeeperAssetID {
-                resolvedDeleteCandidateIDs = Self.unique(deleteCandidateIDs.filter { $0 != effectiveKeeperAssetID })
+        if shouldExposeDeleteCandidates {
+            if !deleteCandidateIDs.isEmpty {
+                if let effectiveKeeperAssetID {
+                    resolvedDeleteCandidateIDs = Self.unique(deleteCandidateIDs.filter { $0 != effectiveKeeperAssetID })
+                } else {
+                    resolvedDeleteCandidateIDs = Self.unique(deleteCandidateIDs)
+                }
+            } else if let effectiveKeeperAssetID {
+                resolvedDeleteCandidateIDs = assets
+                    .map(\.localIdentifier)
+                    .filter { $0 != effectiveKeeperAssetID }
             } else {
-                resolvedDeleteCandidateIDs = Self.unique(deleteCandidateIDs)
+                resolvedDeleteCandidateIDs = []
             }
-        } else if shouldExposeDeleteCandidates, let effectiveKeeperAssetID {
-            resolvedDeleteCandidateIDs = assets
-                .map(\.localIdentifier)
-                .filter { $0 != effectiveKeeperAssetID }
         } else {
             resolvedDeleteCandidateIDs = []
         }
@@ -75,6 +83,8 @@ struct PhotoGroup: Identifiable, @unchecked Sendable {
         self.groupReasonsSummary = groupReasonsSummary
         self.blockerFlags = blockerFlags
         self.scoreBreakdown = scoreBreakdown
+        self.preferenceQueuePriority = preferenceQueuePriority
+        self.preferenceAdjustmentReasons = preferenceAdjustmentReasons
         self.captureDateRange = captureDateRange ?? Self.makeDateRange(from: assets)
         self.candidates = candidates.isEmpty
             ? Self.makeCandidates(from: assets, keeperAssetID: effectiveKeeperAssetID, exposeDeleteCandidates: shouldExposeDeleteCandidates)
@@ -242,7 +252,7 @@ enum IssueFlag: String, CaseIterable, Identifiable, Sendable, Codable {
     }
 }
 
-enum SimilarGroupType: String, CaseIterable, Identifiable, Sendable, Codable {
+enum SimilarGroupType: String, CaseIterable, Identifiable, Sendable, Codable, Equatable {
     case burst
     case nearDuplicate
     case sameMoment
@@ -252,7 +262,7 @@ enum SimilarGroupType: String, CaseIterable, Identifiable, Sendable, Codable {
     var id: String { rawValue }
 }
 
-enum SimilarGroupConfidence: String, CaseIterable, Identifiable, Sendable, Codable {
+enum SimilarGroupConfidence: String, CaseIterable, Identifiable, Sendable, Codable, Equatable {
     case high
     case medium
     case low
@@ -260,7 +270,7 @@ enum SimilarGroupConfidence: String, CaseIterable, Identifiable, Sendable, Codab
     var id: String { rawValue }
 }
 
-enum SimilarReviewState: String, CaseIterable, Identifiable, Sendable, Codable {
+enum SimilarReviewState: String, CaseIterable, Identifiable, Sendable, Codable, Equatable {
     case unreviewed
     case inProgress
     case resolved
@@ -270,7 +280,7 @@ enum SimilarReviewState: String, CaseIterable, Identifiable, Sendable, Codable {
     var id: String { rawValue }
 }
 
-enum SimilarRecommendedAction: String, CaseIterable, Identifiable, Sendable, Codable {
+enum SimilarRecommendedAction: String, CaseIterable, Identifiable, Sendable, Codable, Equatable {
     case keepBestTrashRest
     case reviewManually
     case keepAll
@@ -278,7 +288,7 @@ enum SimilarRecommendedAction: String, CaseIterable, Identifiable, Sendable, Cod
     var id: String { rawValue }
 }
 
-enum SimilarSelectionState: String, CaseIterable, Identifiable, Sendable, Codable {
+enum SimilarSelectionState: String, CaseIterable, Identifiable, Sendable, Codable, Equatable {
     case keep
     case trash
     case undecided

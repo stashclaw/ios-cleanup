@@ -23,6 +23,7 @@
 		AA000018000000000000001A /* PhotoFeedbackStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000018000000000000001B /* PhotoFeedbackStore.swift */; };
 		AA000019000000000000001A /* PhotoPreferenceProfileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000019000000000000001B /* PhotoPreferenceProfileStore.swift */; };
 		AA00001A000000000000001A /* PhotoTrainingExampleBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00001A000000000000001B /* PhotoTrainingExampleBuilder.swift */; };
+		AA00001C000000000000001A /* PreferenceAdjustedRecommendationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00001C000000000000001B /* PreferenceAdjustedRecommendationService.swift */; };
 		AA000001000000000000001A /* iOSCleanupApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000001B /* iOSCleanupApp.swift */; };
 		AA000001000000000000002A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000002B /* ContentView.swift */; };
 		AA000001000000000000003A /* PhotoGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000003B /* PhotoGroup.swift */; };
@@ -41,6 +42,7 @@
 		AA00000100000000000000FA /* ContactScanEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000FB /* ContactScanEngineTests.swift */; };
 		AA0000010000000000000100 /* FileScanEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000101 /* FileScanEngineTests.swift */; };
 		AA0000010000000000000110 /* SimilarityPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000111 /* SimilarityPolicyTests.swift */; };
+		AA00001D000000000000001A /* PreferenceAdjustedRecommendationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00001D000000000000001B /* PreferenceAdjustedRecommendationTests.swift */; };
 		AA00001B000000000000001A /* PhotoFeedbackLearningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00001B000000000000001B /* PhotoFeedbackLearningTests.swift */; };
 		AA000002000000000000001A /* PurchaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001B /* PurchaseManager.swift */; };
 		AA000002000000000000002A /* iOSCleanup.storekit in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000002B /* iOSCleanup.storekit */; };
@@ -101,6 +103,7 @@
 		AA000018000000000000001B /* PhotoFeedbackStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoFeedbackStore.swift; sourceTree = "<group>"; };
 		AA000019000000000000001B /* PhotoPreferenceProfileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoPreferenceProfileStore.swift; sourceTree = "<group>"; };
 		AA00001A000000000000001B /* PhotoTrainingExampleBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoTrainingExampleBuilder.swift; sourceTree = "<group>"; };
+		AA00001C000000000000001B /* PreferenceAdjustedRecommendationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferenceAdjustedRecommendationService.swift; sourceTree = "<group>"; };
 		AA00000100000000000000BB /* Photos.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Photos.framework; path = System/Library/Frameworks/Photos.framework; sourceTree = SDKROOT; };
 		AA00000100000000000000CB /* Contacts.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Contacts.framework; path = System/Library/Frameworks/Contacts.framework; sourceTree = SDKROOT; };
 		AA00000100000000000000DB /* Vision.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Vision.framework; path = System/Library/Frameworks/Vision.framework; sourceTree = SDKROOT; };
@@ -108,6 +111,7 @@
 		AA00000100000000000000FB /* ContactScanEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactScanEngineTests.swift; sourceTree = "<group>"; };
 		AA0000010000000000000101 /* FileScanEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileScanEngineTests.swift; sourceTree = "<group>"; };
 		AA0000010000000000000111 /* SimilarityPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarityPolicyTests.swift; sourceTree = "<group>"; };
+		AA00001D000000000000001B /* PreferenceAdjustedRecommendationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferenceAdjustedRecommendationTests.swift; sourceTree = "<group>"; };
 		AA00001B000000000000001B /* PhotoFeedbackLearningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoFeedbackLearningTests.swift; sourceTree = "<group>"; };
 		AA0000010000000000000201 /* iOSCleanup.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iOSCleanup.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000010000000000000301 /* iOSCleanupTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iOSCleanupTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -192,6 +196,7 @@
 				AA0000010000000000000101 /* FileScanEngineTests.swift */,
 				AA000009000000000000002B /* VideoCompressionEngineTests.swift */,
 				AA0000010000000000000111 /* SimilarityPolicyTests.swift */,
+				AA00001D000000000000001B /* PreferenceAdjustedRecommendationTests.swift */,
 				AA00001B000000000000001B /* PhotoFeedbackLearningTests.swift */,
 			);
 			path = iOSCleanupTests;
@@ -214,6 +219,7 @@
 				AA000013000000000000001B /* SimilarityCoreMLClassifier.swift */,
 				AA000014000000000000001B /* SimilarityPolicyTypes.swift */,
 				AA000015000000000000001B /* SimilarityPolicyServices.swift */,
+				AA00001C000000000000001B /* PreferenceAdjustedRecommendationService.swift */,
 				AA000018000000000000001B /* PhotoFeedbackStore.swift */,
 				AA000019000000000000001B /* PhotoPreferenceProfileStore.swift */,
 				AA00001A000000000000001B /* PhotoTrainingExampleBuilder.swift */,
@@ -461,6 +467,7 @@
 				AA000001000000000000008A /* PhotoScanEngine.swift in Sources */,
 				AA000012000000000000001A /* PhotoAnalysisCache.swift in Sources */,
 				AA000010000000000000001A /* SimilarReviewServices.swift in Sources */,
+				AA00001C000000000000001A /* PreferenceAdjustedRecommendationService.swift in Sources */,
 				AA000016000000000000001A /* PhotoReviewFeedback.swift in Sources */,
 				AA000017000000000000001A /* PhotoPreferenceProfile.swift in Sources */,
 				AA000018000000000000001A /* PhotoFeedbackStore.swift in Sources */,
@@ -508,6 +515,7 @@
 				AA0000010000000000000100 /* FileScanEngineTests.swift in Sources */,
 				AA000009000000000000002A /* VideoCompressionEngineTests.swift in Sources */,
 				AA0000010000000000000110 /* SimilarityPolicyTests.swift in Sources */,
+				AA00001D000000000000001A /* PreferenceAdjustedRecommendationTests.swift in Sources */,
 				AA00001B000000000000001A /* PhotoFeedbackLearningTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

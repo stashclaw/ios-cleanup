@@ -4,6 +4,7 @@ actor PhotoPreferenceProfileStore {
     static let shared = PhotoPreferenceProfileStore()
 
     static let schemaVersion = PhotoPreferenceProfile.schemaVersion
+    static let maxHistoricalEvents = 1_000
 
     private let fileURL: URL
     private var profile: PhotoPreferenceProfile
@@ -24,43 +25,33 @@ actor PhotoPreferenceProfileStore {
         return profile
     }
 
+    /// Rebuild the compact preference profile from the canonical raw history.
+    /// This keeps aggregates deterministic, bounded, and safe to re-run after pruning.
+    func rebuild(from rawEvents: [PhotoReviewFeedbackEvent]) async {
+        await loadIfNeeded()
+        profile = PhotoPreferenceProfile()
+        let historicalEvents = Array(rawEvents.suffix(Self.maxHistoricalEvents))
+        var seenEventIDs = Set<UUID>()
+        var seenDedupKeys = Set<String>()
+        for event in historicalEvents {
+            if !seenEventIDs.insert(event.id).inserted {
+                continue
+            }
+            let key = event.dedupeKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !key.isEmpty, !seenDedupKeys.insert(key).inserted {
+                continue
+            }
+            ingest(event)
+        }
+        save()
+    }
+
+    /// Legacy incremental helper. The production path uses `rebuild(from:)`
+    /// so the live aggregate always matches the canonical raw history.
+    @available(*, deprecated, message: "Use rebuild(from:) so aggregates stay deterministic and bounded.")
     func apply(_ event: PhotoReviewFeedbackEvent) async {
         await loadIfNeeded()
-        profile.totalRawEvents += 1
-        guard event.stage == .committed else {
-            profile.updatedAt = max(profile.updatedAt, event.timestamp)
-            save()
-            return
-        }
-
-        profile.totalCommittedEvents += 1
-        profile.updatedAt = max(profile.updatedAt, event.timestamp)
-
-        let delta = aggregateDelta(for: event)
-        profile.overall.merge(delta)
-        if let groupType = event.groupType?.rawValue {
-            profile.byGroupType[groupType, default: .init()].merge(delta)
-        }
-        if let bucket = event.bucket?.rawValue {
-            profile.byBucket[bucket, default: .init()].merge(delta)
-        }
-
-        if event.assets.contains(where: { $0.isScreenshot == true }) {
-            profile.screenshots.merge(delta)
-        }
-        if event.assets.contains(where: { $0.burstIdentifier != nil }) {
-            profile.bursts.merge(delta)
-        }
-        if event.assets.contains(where: { $0.isEdited == true }) {
-            profile.edited.merge(delta)
-        }
-        if event.assets.contains(where: { $0.isFavorite == true }) {
-            profile.favorites.merge(delta)
-        }
-        if event.confidence == .low {
-            profile.lowConfidence.merge(delta)
-        }
-
+        ingest(event)
         save()
     }
 
@@ -128,6 +119,41 @@ actor PhotoPreferenceProfileStore {
         guard let data = try? JSONEncoder.photoDuck.encode(archive) else { return }
         try? data.write(to: fileURL, options: [.atomic])
     }
+
+    private func ingest(_ event: PhotoReviewFeedbackEvent) {
+        profile.totalRawEvents += 1
+        profile.updatedAt = max(profile.updatedAt, event.timestamp)
+        guard event.stage == .committed else {
+            return
+        }
+
+        profile.totalCommittedEvents += 1
+
+        let delta = aggregateDelta(for: event)
+        profile.overall.merge(delta)
+        if let groupType = event.groupType?.rawValue {
+            profile.byGroupType[groupType, default: .init()].merge(delta)
+        }
+        if let bucket = event.bucket?.rawValue {
+            profile.byBucket[bucket, default: .init()].merge(delta)
+        }
+
+        if event.assets.contains(where: { $0.isScreenshot == true }) {
+            profile.screenshots.merge(delta)
+        }
+        if event.assets.contains(where: { $0.burstIdentifier != nil }) {
+            profile.bursts.merge(delta)
+        }
+        if event.assets.contains(where: { $0.isEdited == true }) {
+            profile.edited.merge(delta)
+        }
+        if event.assets.contains(where: { $0.isFavorite == true }) {
+            profile.favorites.merge(delta)
+        }
+        if event.confidence == .low {
+            profile.lowConfidence.merge(delta)
+        }
+    }
 }
 
 private struct PhotoPreferenceProfileArchive: Codable {
@@ -152,4 +178,3 @@ private extension JSONDecoder {
         return decoder
     }
 }
-

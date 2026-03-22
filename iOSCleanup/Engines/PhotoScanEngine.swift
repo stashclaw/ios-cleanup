@@ -31,6 +31,8 @@ actor PhotoScanEngine {
     static let similarityThreshold: Float = 0.16
     private let bestShotRankingService = HeuristicBestShotRankingService()
     private let similarityPolicyEngine = ConservativeSimilarityPolicyEngine()
+    private let keeperRankingService = ConservativeKeeperRankingService()
+    private let preferenceAdjustmentService = PreferenceAdjustedRecommendationService()
 
     nonisolated func scan(mode: CleanupMode) -> AsyncThrowingStream<PhotoScanUpdate, Error> {
         AsyncThrowingStream { continuation in
@@ -38,6 +40,7 @@ actor PhotoScanEngine {
                 do {
                     let assets = try await fetchAssets()
                     let targetAssets = prioritizedAssets(from: assets, mode: mode)
+                    let preferenceProfile = await PhotoPreferenceProfileStore.shared.snapshot()
                     let targetCount = targetAssets.count
                     let total = assets.count
                     var latestGroups: [PhotoGroup] = []
@@ -95,7 +98,8 @@ actor PhotoScanEngine {
                                     groups: self.cluster(assets: processedAssets, prints: prints)
                                         + self.burstGroups(from: processedAssets)
                                         + self.sessionGroups(from: processedAssets, mode: mode)
-                                )
+                                ),
+                                preferenceProfile: preferenceProfile
                             )
                             latestReviewablePhotosCount = latestGroups.reduce(0) { $0 + max($1.assets.count - 1, 0) }
                             latestReclaimableBytes = latestGroups.reduce(into: Int64(0)) { acc, group in
@@ -135,7 +139,8 @@ actor PhotoScanEngine {
                                 groups: self.cluster(assets: targetAssets, prints: prints)
                                     + self.burstGroups(from: targetAssets)
                                     + self.sessionGroups(from: targetAssets, mode: mode)
-                            )
+                            ),
+                            preferenceProfile: preferenceProfile
                         )
                         reviewablePhotos = finalGroups.reduce(0) { $0 + max($1.assets.count - 1, 0) }
                         reclaimableBytes = finalGroups.reduce(into: Int64(0)) { acc, group in
@@ -498,20 +503,49 @@ actor PhotoScanEngine {
         )
     }
 
-    private func enrichedGroups(groups: [PhotoGroup]) async -> [PhotoGroup] {
+    private func enrichedGroups(groups: [PhotoGroup], preferenceProfile: PhotoPreferenceProfile) async -> [PhotoGroup] {
         var enriched: [PhotoGroup] = []
         enriched.reserveCapacity(groups.count)
         for group in groups {
             let classification = similarityPolicyEngine.classifyGroup(group)
             guard classification.bucket != .notSimilar else { continue }
 
+            let clusterInput = group.similarityClusterInput(baseFeatureDistance: Double(group.similarity))
+            let keeperResult = keeperRankingService.rankKeeper(in: clusterInput)
             let ranked = await bestShotRankingService.rank(
                 assets: group.assets,
                 groupType: group.groupType
             )
             let bestCandidate = ranked.first(where: \.isBestShot)
             let keeperAssetID = classification.keeperAssetID ?? bestCandidate?.photoId
-            let reasons = uniqueStrings(classification.reasons + (bestCandidate?.bestShotReasons ?? []))
+            let containsScreenshot = group.assets.contains { $0.mediaSubtypes.contains(.photoScreenshot) }
+            let containsBurst = group.assets.contains { $0.burstIdentifier != nil }
+            let containsEdited = group.assets.contains {
+                guard let creationDate = $0.creationDate, let modificationDate = $0.modificationDate else { return false }
+                return abs(modificationDate.timeIntervalSince(creationDate)) > 1
+            }
+            let containsFavorite = group.assets.contains { $0.isFavorite }
+
+            let adjustment = preferenceAdjustmentService.adjust(
+                .init(
+                    bucket: classification.bucket,
+                    groupType: classification.bucket.photoGroupReason?.defaultGroupType ?? group.groupType,
+                    confidence: classification.confidence.photoGroupConfidence,
+                    suggestedAction: classification.action.photoGroupAction,
+                    keeperRankingResult: keeperResult,
+                    preferenceProfile: preferenceProfile,
+                    containsScreenshot: containsScreenshot,
+                    containsBurst: containsBurst,
+                    containsEdited: containsEdited,
+                    containsFavorite: containsFavorite,
+                    assetCount: group.assets.count
+                )
+            )
+
+            let finalAction = adjustment.adjustedSuggestedAction
+            let finalConfidence = adjustment.adjustedConfidence
+            let finalDeleteCandidateIDs = finalAction == .keepBestTrashRest ? classification.deleteCandidateIDs : []
+            let reasons = uniqueStrings(classification.reasons + adjustment.reasons + (bestCandidate?.bestShotReasons ?? []))
             enriched.append(
                 PhotoGroup(
                     id: group.id,
@@ -519,18 +553,20 @@ actor PhotoScanEngine {
                     similarity: Float(classification.scoreBreakdown.similarityScore),
                     reason: classification.bucket.photoGroupReason ?? group.reason,
                     groupType: classification.bucket.photoGroupReason?.defaultGroupType ?? group.groupType,
-                    groupConfidence: classification.confidence.photoGroupConfidence,
+                    groupConfidence: finalConfidence,
                     reviewState: group.reviewState,
-                    recommendedAction: classification.action.photoGroupAction,
+                    recommendedAction: finalAction,
                     keeperAssetID: keeperAssetID,
-                    deleteCandidateIDs: classification.deleteCandidateIDs,
+                    deleteCandidateIDs: finalDeleteCandidateIDs,
                     bestShotPhotoId: keeperAssetID,
                     groupReasonsSummary: reasons.isEmpty ? group.groupReasonsSummary : reasons,
                     blockerFlags: classification.blockerFlags,
                     scoreBreakdown: classification.scoreBreakdown,
+                    preferenceQueuePriority: adjustment.queuePriorityDelta,
+                    preferenceAdjustmentReasons: adjustment.reasons,
                     captureDateRange: group.captureDateRange,
                     candidates: ranked.isEmpty ? group.candidates : ranked,
-                    reclaimableBytes: estimatedReclaimableBytes(for: group.assets, deleteCandidateIDs: classification.deleteCandidateIDs)
+                    reclaimableBytes: estimatedReclaimableBytes(for: group.assets, deleteCandidateIDs: finalDeleteCandidateIDs)
                 )
             )
         }

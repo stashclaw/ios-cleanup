@@ -58,6 +58,91 @@ final class PhotoFeedbackLearningTests: XCTestCase {
         )
     }
 
+    func testDuplicateEventReplayDoesNotDoubleCountAggregates() async throws {
+        let (_, profileStore, directoryURL) = makeStores(uniqueDirectorySuffix: "duplicate-replay")
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let first = makeEvent(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001") ?? UUID(),
+            kind: .keepBest,
+            stage: .committed,
+            source: .similarGroupReview,
+            recommendationAccepted: true
+        )
+        let second = makeEvent(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002") ?? UUID(),
+            kind: .keepBest,
+            stage: .committed,
+            source: .similarGroupReview,
+            recommendationAccepted: true
+        )
+
+        let duplicateKey = first.dedupeKey
+        let replayedFirst = PhotoReviewFeedbackEvent(
+            id: first.id,
+            timestamp: first.timestamp,
+            source: first.source,
+            kind: first.kind,
+            stage: first.stage,
+            dedupeKey: duplicateKey,
+            groupID: first.groupID,
+            groupType: first.groupType,
+            bucket: first.bucket,
+            confidence: first.confidence,
+            suggestedAction: first.suggestedAction,
+            suggestedKeeperAssetID: first.suggestedKeeperAssetID,
+            finalKeeperAssetID: first.finalKeeperAssetID,
+            deletedAssetIDs: first.deletedAssetIDs,
+            keptAssetIDs: first.keptAssetIDs,
+            skipped: first.skipped,
+            recommendationAccepted: first.recommendationAccepted,
+            policyVersion: first.policyVersion,
+            modelVersion: first.modelVersion,
+            featureSchemaVersion: first.featureSchemaVersion,
+            assets: first.assets,
+            note: first.note
+        )
+
+        await profileStore.rebuild(from: [replayedFirst, second, replayedFirst])
+        let profile = await profileStore.snapshot()
+
+        XCTAssertEqual(profile.totalRawEvents, 2)
+        XCTAssertEqual(profile.totalCommittedEvents, 2)
+        XCTAssertEqual(profile.overall.keptCount, 2)
+        XCTAssertEqual(profile.overall.acceptedRecommendationCount, 2)
+    }
+
+    func testProvisionalAndCommittedFlowDoesNotCorruptTrainingData() async throws {
+        let (_, profileStore, directoryURL) = makeStores(uniqueDirectorySuffix: "provisional-committed")
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let provisional = makeEvent(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000001001") ?? UUID(),
+            kind: .keepBest,
+            stage: .provisional,
+            source: .similarGroupReview,
+            confidence: .low,
+            recommendationAccepted: nil
+        )
+        let committed = makeEvent(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000001002") ?? UUID(),
+            kind: .keepBest,
+            stage: .committed,
+            source: .similarGroupReview,
+            confidence: .high,
+            recommendationAccepted: true
+        )
+
+        await profileStore.rebuild(from: [provisional, committed])
+        let profile = await profileStore.snapshot()
+
+        XCTAssertEqual(profile.totalRawEvents, 2)
+        XCTAssertEqual(profile.totalCommittedEvents, 1)
+        XCTAssertEqual(profile.overall.keptCount, 1)
+        XCTAssertEqual(profile.overall.acceptedRecommendationCount, 1)
+        XCTAssertEqual(profile.lowConfidence.reviewedCount, 0)
+    }
+
     func testEventsPersistAndReloadWithoutImagePayloads() async throws {
         let (feedbackStore, profileStore, directoryURL) = makeStores()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
@@ -91,6 +176,58 @@ final class PhotoFeedbackLearningTests: XCTestCase {
         let profile = await profileStore.snapshot()
         XCTAssertEqual(profile.totalRawEvents, 1)
         XCTAssertEqual(profile.totalCommittedEvents, 1)
+    }
+
+    func testRebuildMatchesIncrementalAggregateState() async throws {
+        let (feedbackStore, profileStore, directoryURL) = makeStores(uniqueDirectorySuffix: "rebuild-match")
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let events = [
+            makeEvent(
+                kind: .keepBest,
+                stage: .committed,
+                source: .similarGroupReview,
+                bucket: .nearDuplicate,
+                groupType: .nearDuplicate,
+                confidence: .high,
+                deletedAssetIDs: ["trash-1"],
+                keptAssetIDs: ["keeper-1"],
+                recommendationAccepted: true,
+                assets: [
+                    makeAsset("keeper-1", role: .finalKeeper, isFavorite: true, isEdited: false, isScreenshot: false, burstIdentifier: nil, rankingScore: 0.99),
+                    makeAsset("trash-1", role: .deleted, isFavorite: false, isEdited: false, isScreenshot: false, burstIdentifier: nil, rankingScore: 0.10)
+                ]
+            ),
+            makeEvent(
+                kind: .skipGroup,
+                stage: .committed,
+                source: .similarGroupReview,
+                bucket: .visuallySimilar,
+                groupType: .sameMoment,
+                confidence: .low,
+                skipped: true,
+                recommendationAccepted: nil,
+                assets: [
+                    makeAsset("shot-1", role: .skipped, isFavorite: false, isEdited: true, isScreenshot: true, burstIdentifier: nil, rankingScore: 0.20)
+                ]
+            )
+        ]
+
+        await feedbackStore.append(events)
+        let incremental = await profileStore.snapshot()
+
+        let (_, rebuildProfileStore, rebuildDirectoryURL) = makeStores(uniqueDirectorySuffix: "rebuild-match-2")
+        defer { try? FileManager.default.removeItem(at: rebuildDirectoryURL) }
+        await rebuildProfileStore.rebuild(from: events)
+        let rebuilt = await rebuildProfileStore.snapshot()
+
+        XCTAssertEqual(incremental.totalRawEvents, rebuilt.totalRawEvents)
+        XCTAssertEqual(incremental.totalCommittedEvents, rebuilt.totalCommittedEvents)
+        XCTAssertEqual(incremental.overall, rebuilt.overall)
+        XCTAssertEqual(incremental.byGroupType, rebuilt.byGroupType)
+        XCTAssertEqual(incremental.byBucket, rebuilt.byBucket)
+        XCTAssertEqual(incremental.screenshots, rebuilt.screenshots)
+        XCTAssertEqual(incremental.favorites, rebuilt.favorites)
     }
 
     func testRawEventRetentionPrunesOldEvents() async throws {
@@ -199,6 +336,7 @@ final class PhotoFeedbackLearningTests: XCTestCase {
         XCTAssertEqual(rows[0].assetID, "a-asset")
         XCTAssertEqual(rows[1].assetID, "b-asset")
         XCTAssertEqual(rows[2].kind, PhotoTrainingRowKind.groupOutcome)
+        XCTAssertEqual(rows[2].stage, .committed)
         XCTAssertNil(rows[2].featureVector)
         XCTAssertEqual(rows[3].kind, PhotoTrainingRowKind.keeperRanking)
         XCTAssertEqual(rows[3].assetID, "a-asset")
@@ -274,9 +412,9 @@ final class PhotoFeedbackLearningTests: XCTestCase {
         keptAssetIDs: [String] = [],
         skipped: Bool = false,
         recommendationAccepted: Bool?,
-        policyVersion: Int = PhotoReviewFeedbackEvent.currentPolicyVersion,
-        modelVersion: Int = PhotoReviewFeedbackEvent.currentModelVersion,
-        featureSchemaVersion: Int = PhotoReviewFeedbackEvent.currentFeatureSchemaVersion,
+        policyVersion: Int = PhotoReviewFeedbackVersions.policyVersion,
+        modelVersion: Int = PhotoReviewFeedbackVersions.modelVersion,
+        featureSchemaVersion: Int = PhotoReviewFeedbackVersions.featureSchemaVersion,
         assets: [PhotoReviewFeedbackAsset] = []
     ) -> PhotoReviewFeedbackEvent {
         PhotoReviewFeedbackEvent(

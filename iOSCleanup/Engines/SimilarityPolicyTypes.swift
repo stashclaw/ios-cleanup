@@ -1,26 +1,26 @@
 import Foundation
 import Photos
 
-enum SimilarityBucket: String, Codable, Sendable, CaseIterable {
+enum SimilarityBucket: String, Codable, Sendable, CaseIterable, Equatable {
     case nearDuplicate
     case burstShot
     case visuallySimilar
     case notSimilar
 }
 
-enum GroupConfidence: String, Codable, Sendable, CaseIterable {
+enum GroupConfidence: String, Codable, Sendable, CaseIterable, Equatable {
     case high
     case medium
     case low
 }
 
-enum SuggestedAction: String, Codable, Sendable, CaseIterable {
+enum SuggestedAction: String, Codable, Sendable, CaseIterable, Equatable {
     case suggestDeleteOthers
     case reviewTogetherOnly
     case doNotSuggestDeletion
 }
 
-enum BlockerFlag: String, Codable, Sendable, CaseIterable {
+enum BlockerFlag: String, Codable, Sendable, CaseIterable, Equatable {
     case screenshotMixedWithCamera
     case largeTimeGap
     case majorCompositionChange
@@ -35,7 +35,7 @@ enum BlockerFlag: String, Codable, Sendable, CaseIterable {
     case lowVisualEvidence
 }
 
-enum VariantRelationship: String, Codable, Sendable, CaseIterable {
+enum VariantRelationship: String, Codable, Sendable, CaseIterable, Equatable {
     case none
     case livePhotoToStill
     case editedToOriginal

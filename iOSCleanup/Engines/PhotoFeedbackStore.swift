@@ -26,30 +26,31 @@ actor PhotoFeedbackStore {
 
     func append(_ event: PhotoReviewFeedbackEvent) async -> Bool {
         await loadIfNeeded()
-
-        let key = event.dedupeKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !key.isEmpty, dedupeKeys.contains(key) {
-            return false
-        }
-
-        events.append(event)
-        if !key.isEmpty {
-            dedupeKeys.insert(key)
-        }
+        guard appendToRawHistory(event) else { return false }
         let pruned = pruneIfNeeded()
         if pruned {
             // Keep the on-disk archive bounded immediately so retention is real,
             // not just an in-memory promise.
         }
         save()
-        await profileStore.apply(event)
+        await profileStore.rebuild(from: events)
         return true
     }
 
     func append(_ newEvents: [PhotoReviewFeedbackEvent]) async {
+        await loadIfNeeded()
+        var appendedAny = false
         for event in newEvents {
-            _ = await append(event)
+            appendedAny = appendToRawHistory(event) || appendedAny
         }
+        guard appendedAny else { return }
+        let pruned = pruneIfNeeded()
+        if pruned {
+            // Keep the on-disk archive bounded immediately so retention is real,
+            // not just an in-memory promise.
+        }
+        save()
+        await profileStore.rebuild(from: events)
     }
 
     func recordSimilarGroupDecision(
@@ -222,7 +223,7 @@ actor PhotoFeedbackStore {
         events.removeAll()
         dedupeKeys.removeAll()
         save()
-        await profileStore.reset()
+        await profileStore.rebuild(from: [])
     }
 
     private func loadIfNeeded() async {
@@ -236,6 +237,7 @@ actor PhotoFeedbackStore {
         if pruneIfNeeded() {
             save()
         }
+        await profileStore.rebuild(from: events)
     }
 
     private func pruneIfNeeded() -> Bool {
@@ -244,6 +246,19 @@ actor PhotoFeedbackStore {
         guard overflow > 0 else { return false }
         events.removeFirst(overflow)
         dedupeKeys = Set(events.map(\.dedupeKey).filter { !$0.isEmpty })
+        return true
+    }
+
+    private func appendToRawHistory(_ event: PhotoReviewFeedbackEvent) -> Bool {
+        let key = event.dedupeKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !key.isEmpty, dedupeKeys.contains(key) {
+            return false
+        }
+
+        events.append(event)
+        if !key.isEmpty {
+            dedupeKeys.insert(key)
+        }
         return true
     }
 
