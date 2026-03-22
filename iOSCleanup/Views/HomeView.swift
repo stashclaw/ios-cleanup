@@ -81,7 +81,7 @@ struct HomeView: View {
                     .frame(width: 28, height: 28)
                 Text("PhotoDuck")
                     .font(.duckDisplay(17))
-                    .foregroundStyle(Color.duckDeepBerry)
+                    .foregroundStyle(Color.duckBerry)
             }
             Spacer()
             if !purchaseManager.isPurchased {
@@ -107,7 +107,7 @@ struct HomeView: View {
                             .foregroundStyle(Color.duckRose)
                         Text(viewModel.reclaimableFormatted)
                             .font(.system(size: 32, weight: .bold))
-                            .foregroundStyle(Color.duckDeepBerry)
+                            .foregroundStyle(Color.duckBerry)
                     }
                     Spacer()
                     statusPill
@@ -141,7 +141,7 @@ struct HomeView: View {
                     .onDisappear { isPulsing = false }
                 Text("Scanning")
                     .font(.duckCaption)
-                    .foregroundStyle(Color.duckDeepBerry)
+                    .foregroundStyle(Color.duckBerry)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -386,7 +386,7 @@ struct HomeView: View {
                     Text("Scan in progress")
                         .font(.duckBody)
                         .fontWeight(.medium)
-                        .foregroundStyle(Color.duckDeepBerry)
+                        .foregroundStyle(Color.duckBerry)
                     Text("Est. completing soon")
                         .font(.duckCaption)
                         .foregroundStyle(Color.duckRose)
@@ -450,7 +450,7 @@ private struct StatMiniCard: View {
             VStack(spacing: 4) {
                 Text(value)
                     .font(.system(size: 17, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.duckDeepBerry)
+                    .foregroundStyle(Color.duckBerry)
                 Text(label)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(Color.duckRose)
@@ -516,7 +516,7 @@ private struct HomeCategoryTile<Destination: View>: View {
             if let badge = sizeBadge {
                 Text(badge)
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color.duckDeepBerry)
+                    .foregroundStyle(Color.duckBerry)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(Color.duckSoftPink, in: Capsule())
