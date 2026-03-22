@@ -220,14 +220,20 @@ struct VideoCompressionView: View {
     }
 
     private func loadAVAsset(for asset: PHAsset) async -> AVAsset? {
-        await withCheckedContinuation { continuation in
+        // Use a void continuation + @unchecked Sendable box to avoid sending AVAsset
+        // across isolation under complete strict concurrency (AVAsset is thread-safe in practice).
+        final class Box: @unchecked Sendable { var value: AVAsset? }
+        let box = Box()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let options = PHVideoRequestOptions()
             options.deliveryMode = .highQualityFormat
             options.isNetworkAccessAllowed = true
             PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
-                continuation.resume(returning: avAsset)
+                box.value = avAsset
+                continuation.resume()
             }
         }
+        return box.value
     }
 
     private func estimatedLabel(for preset: VideoCompressionEngine.Preset) -> String {

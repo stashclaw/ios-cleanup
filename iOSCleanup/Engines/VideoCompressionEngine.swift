@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import Photos
 
 actor VideoCompressionEngine {
@@ -44,7 +44,7 @@ actor VideoCompressionEngine {
 
     nonisolated func compress(asset: AVAsset, preset: Preset) -> AsyncStream<CompressionEvent> {
         AsyncStream { continuation in
-            Task {
+            Task { [continuation] in
                 do {
                     let outputURL = try await exportSession(asset: asset, preset: preset, continuation: continuation)
                     continuation.yield(.completed(outputURL))
@@ -74,10 +74,13 @@ actor VideoCompressionEngine {
         session.outputFileType = .mp4
         session.shouldOptimizeForNetworkUse = true
 
-        // Poll progress
-        let progressTask = Task {
+        // Poll progress — wrap session in unchecked-sendable box so the Task closure compiles
+        // under complete strict concurrency (AVAssetExportSession is thread-safe in practice).
+        struct SendableSession: @unchecked Sendable { let inner: AVAssetExportSession }
+        let sendable = SendableSession(inner: session)
+        let progressTask = Task { [continuation, sendable] in
             while !Task.isCancelled {
-                let p = Double(session.progress)
+                let p = Double(sendable.inner.progress)
                 continuation.yield(.progress(min(p, 0.99)))
                 try? await Task.sleep(nanoseconds: 200_000_000)  // 200ms
             }
