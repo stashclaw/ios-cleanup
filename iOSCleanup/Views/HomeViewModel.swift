@@ -151,6 +151,12 @@ final class HomeViewModel: ObservableObject {
         storageTotalBytes
     }
 
+    var storageFreeFormatted: String {
+        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        let free = (attrs?[.systemFreeSize] as? Int64) ?? 0
+        return ByteCountFormatter.string(fromByteCount: free, countStyle: .file) + " free"
+    }
+
     private var storageUsedBytes: Int64 {
         let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
         let total = (attrs?[.systemSize] as? Int64) ?? 0
