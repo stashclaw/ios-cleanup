@@ -8,6 +8,26 @@ final class HomeViewModel: ObservableObject {
         case idle, scanning, done, failed(String)
     }
 
+    // Storage is cached at init; call refreshStorageInfo() if you need fresh values.
+    private(set) var storageUsedBytes: Int64 = 0
+    private(set) var storageTotalBytes: Int64 = 0
+
+    init() {
+        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        let total = (attrs?[.systemSize] as? Int64) ?? 0
+        let free  = (attrs?[.systemFreeSize] as? Int64) ?? 0
+        storageTotalBytes = total
+        storageUsedBytes  = total - free
+    }
+
+    func refreshStorageInfo() {
+        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        let total = (attrs?[.systemSize] as? Int64) ?? 0
+        let free  = (attrs?[.systemFreeSize] as? Int64) ?? 0
+        storageTotalBytes = total
+        storageUsedBytes  = total - free
+    }
+
     @Published var photoScanState: ScanState = .idle
     @Published var contactScanState: ScanState = .idle
     @Published var fileScanState: ScanState = .idle
@@ -37,7 +57,7 @@ final class HomeViewModel: ObservableObject {
         return states.allSatisfy { if case .done = $0 { return true }; return false }
     }
 
-    // MARK: - Storage usage
+    // MARK: - Storage usage (values cached at init, call refreshStorageInfo() if needed)
 
     var storageUsedFraction: Double {
         let total = storageTotalBytes
@@ -51,18 +71,6 @@ final class HomeViewModel: ObservableObject {
 
     var storageTotalFormatted: String {
         ByteCountFormatter.string(fromByteCount: storageTotalBytes, countStyle: .file) + " total"
-    }
-
-    private var storageUsedBytes: Int64 {
-        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
-        let total = (attrs?[.systemSize] as? Int64) ?? 0
-        let free  = (attrs?[.systemFreeSize] as? Int64) ?? 0
-        return total - free
-    }
-
-    private var storageTotalBytes: Int64 {
-        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
-        return (attrs?[.systemSize] as? Int64) ?? 0
     }
 
     // MARK: - Scans

@@ -21,7 +21,7 @@ struct FileResultsView: View {
                                message: "No files or videos over 50 MB were found.")
             } else {
                 ScrollView {
-                    VStack(spacing: 12) {
+                    LazyVStack(spacing: 12) {
                         if let error = deletionError {
                             Text(error).font(.duckCaption).foregroundStyle(.red).padding(.horizontal)
                         }

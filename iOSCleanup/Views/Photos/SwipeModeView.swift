@@ -161,12 +161,12 @@ struct SwipeModeView: View {
 
     private func swipeLeft() {
         withAnimation(.easeOut(duration: 0.25)) { dragOffset = CGSize(width: -500, height: 0) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { dragOffset = .zero; viewModel.delete() }
+        Task { try? await Task.sleep(for: .milliseconds(250)); dragOffset = .zero; viewModel.delete() }
     }
 
     private func swipeRight() {
         withAnimation(.easeOut(duration: 0.25)) { dragOffset = CGSize(width: 500, height: 0) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { dragOffset = .zero; viewModel.keep() }
+        Task { try? await Task.sleep(for: .milliseconds(250)); dragOffset = .zero; viewModel.keep() }
     }
 }
 
@@ -231,8 +231,8 @@ private struct DuckAssetCard: View {
     private func loadImage(for asset: PHAsset) async -> UIImage? {
         await withCheckedContinuation { continuation in
             let options = PHImageRequestOptions()
-            options.deliveryMode = .opportunistic
-            options.isNetworkAccessAllowed = true
+            options.deliveryMode = .highQualityFormat  // single callback, safe with CheckedContinuation
+            options.isNetworkAccessAllowed = false
             PHImageManager.default().requestImage(
                 for: asset, targetSize: CGSize(width: 600, height: 800),
                 contentMode: .aspectFit, options: options

@@ -38,7 +38,7 @@ struct ContactResultsView: View {
     }
 
     private func section(title: String, items: [ContactMatch]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        LazyVStack(alignment: .leading, spacing: 10) {
             DuckSectionHeader(title: title)
             ForEach(items) { match in
                 DuckCard {

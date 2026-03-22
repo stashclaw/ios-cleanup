@@ -144,7 +144,7 @@ struct PhotoResultsView: View {
     // MARK: - Group list
 
     private var groupList: some View {
-        VStack(spacing: 12) {
+        LazyVStack(spacing: 12) {
             ForEach(filteredGroups) { group in
                 DuckCard {
                     NavigationLink(destination: PhotoGroupDetailView(group: group).environmentObject(purchaseManager)) {

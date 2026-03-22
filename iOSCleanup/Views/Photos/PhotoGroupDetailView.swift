@@ -159,19 +159,26 @@ struct PhotoGroupDetailView: View {
     }
 
     private func loadImages() async {
-        for asset in group.assets {
-            let img = await withCheckedContinuation { (continuation: CheckedContinuation<UIImage?, Never>) in
-                let options = PHImageRequestOptions()
-                options.deliveryMode = .opportunistic
-                options.isNetworkAccessAllowed = true
-                PHImageManager.default().requestImage(
-                    for: asset,
-                    targetSize: CGSize(width: 400, height: 400),
-                    contentMode: .aspectFit,
-                    options: options
-                ) { image, _ in continuation.resume(returning: image) }
+        await withTaskGroup(of: (PHAsset, UIImage?).self) { taskGroup in
+            for asset in group.assets {
+                taskGroup.addTask {
+                    let img = await withCheckedContinuation { (continuation: CheckedContinuation<UIImage?, Never>) in
+                        let options = PHImageRequestOptions()
+                        options.deliveryMode = .highQualityFormat  // single callback, safe with CheckedContinuation
+                        options.isNetworkAccessAllowed = false
+                        PHImageManager.default().requestImage(
+                            for: asset,
+                            targetSize: CGSize(width: 400, height: 400),
+                            contentMode: .aspectFit,
+                            options: options
+                        ) { image, _ in continuation.resume(returning: image) }
+                    }
+                    return (asset, img)
+                }
             }
-            if let img { images[asset] = img }
+            for await (asset, img) in taskGroup {
+                if let img { images[asset] = img }
+            }
         }
     }
 
