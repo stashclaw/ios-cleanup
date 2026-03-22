@@ -27,13 +27,13 @@ struct SwipeModeView: View {
                     cardStack
                 }
             }
-            .background(Color.duckBlush.ignoresSafeArea())
+            .background(Color.black.ignoresSafeArea())
             .navigationTitle("Duck Mode")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
-                        .foregroundStyle(Color.duckRose)
+                        .foregroundStyle(Color.white)
                 }
             }
         }
@@ -46,112 +46,123 @@ struct SwipeModeView: View {
     private var swipeThreshold: CGFloat { 100 }
 
     private var cardStack: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: 10) {
+        ZStack {
+            // Background cards (depth effect)
+            ForEach(upcomingEntries.reversed().prefix(2), id: \.id) { entry in
+                if case .asset(let asset, _) = entry, entry.id != viewModel.current?.id {
+                    DuckAssetCard(asset: asset)
+                        .scaleEffect(0.93)
+                        .opacity(0.5)
+                }
+            }
+
+            // Side strips — always visible, intensity driven by drag
+            HStack(spacing: 0) {
+                // Left: red strip (delete)
+                ZStack {
+                    Color.red.opacity(0.85 + leftStripIntensity * 0.15)
+                    Image(systemName: "trash")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .scaleEffect(1 + leftStripIntensity * 0.4)
+                }
+                .frame(width: 32)
+                .frame(maxHeight: .infinity)
+
+                Spacer()
+
+                // Right: green strip (keep)
+                ZStack {
+                    Color.green.opacity(0.85 + rightStripIntensity * 0.15)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .scaleEffect(1 + rightStripIntensity * 0.4)
+                }
+                .frame(width: 32)
+                .frame(maxHeight: .infinity)
+            }
+            .ignoresSafeArea()
+
+            // Current card
+            if let current = viewModel.current, case .asset(let asset, _) = current {
+                DuckAssetCard(asset: asset, monthHeader: currentMonthHeader)
+                    .offset(dragOffset)
+                    .rotationEffect(.degrees(Double(dragOffset.width) / 20))
+                    .gesture(
+                        DragGesture()
+                            .onChanged { dragOffset = $0.translation }
+                            .onEnded { value in
+                                withAnimation(.spring()) {
+                                    if value.translation.width < -swipeThreshold { swipeLeft() }
+                                    else if value.translation.width > swipeThreshold { swipeRight() }
+                                    else { dragOffset = .zero }
+                                }
+                            }
+                    )
+            }
+
+            // Progress + round buttons overlay
+            VStack {
+                // Progress strip at top
                 HStack {
                     StatusBadge(title: "\(viewModel.reviewedCount) / \(viewModel.totalReviewableCount) reviewed", accent: .duckPink)
                     Spacer()
-                    StatusBadge(title: "\(viewModel.remainingCount) remaining", accent: .duckRose)
+                    StatusBadge(title: "\(viewModel.remainingCount) left", accent: .duckRose)
                 }
-
-                HStack(spacing: 10) {
-                    StatPill(title: "Kept", value: "\(viewModel.keptCount)", accent: .green, icon: "heart.fill")
-                    StatPill(title: "Ducked", value: "\(viewModel.duckedCount)", accent: .duckPink, icon: "trash.fill")
-                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
 
                 DuckProgressBar(progress: viewModel.progress, color: .duckPink)
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-            .padding(.bottom, 10)
+                    .frame(height: 4)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 4)
 
-            Spacer()
+                Spacer()
 
-            ZStack {
-                if let header = currentMonthHeader {
-                    Text(header)
-                        .font(.duckCaption)
-                        .foregroundStyle(Color.duckRose)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 4)
-                        .background(Color.duckSoftPink.opacity(0.3), in: Capsule())
-                        .frame(maxHeight: .infinity, alignment: .top)
-                        .padding(.top, 8)
-                }
-
-                ForEach(upcomingEntries.reversed().prefix(2), id: \.id) { entry in
-                    if case .asset(let asset, _) = entry {
-                        DuckAssetCard(asset: asset)
-                            .opacity(entry.id == viewModel.current?.id ? 1 : 0.6)
-                            .scaleEffect(entry.id == viewModel.current?.id ? 1 : 0.95)
+                // Round action buttons
+                HStack(spacing: 48) {
+                    // Duck it — pink filled
+                    Button { swipeLeft() } label: {
+                        ZStack {
+                            Circle()
+                                .fill(Color.duckPink)
+                                .frame(width: 64, height: 64)
+                            Image(systemName: "trash")
+                                .font(.system(size: 24, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
                     }
-                }
+                    .accessibilityLabel("Duck it")
 
-                if let current = viewModel.current, case .asset(let asset, _) = current {
-                    DuckAssetCard(asset: asset)
-                        .offset(dragOffset)
-                        .rotationEffect(.degrees(Double(dragOffset.width) / 20))
-                        .gesture(
-                            DragGesture()
-                                .onChanged { dragOffset = $0.translation }
-                                .onEnded { value in
-                                    withAnimation(.spring()) {
-                                        if value.translation.width < -swipeThreshold { swipeLeft() }
-                                        else if value.translation.width > swipeThreshold { swipeRight() }
-                                        else { dragOffset = .zero }
-                                    }
-                                }
-                        )
-                        .overlay(swipeIndicators)
+                    // Keep it — white outlined
+                    Button { swipeRight() } label: {
+                        ZStack {
+                            Circle()
+                                .strokeBorder(.white, lineWidth: 2)
+                                .frame(width: 64, height: 64)
+                            Image(systemName: "heart")
+                                .font(.system(size: 24, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .accessibilityLabel("Keep it")
                 }
+                .padding(.bottom, 48)
             }
-            .padding(.horizontal)
-
-            Spacer()
-
-            actionButtons
-                .padding(.horizontal, 32)
-                .padding(.bottom, 32)
         }
     }
 
-    // MARK: - Swipe indicators
+    // MARK: - Strip intensity (0…1)
 
-    private var swipeIndicators: some View {
-        HStack {
-            Text("Duck it ←")
-                .font(.duckHeading)
-                .foregroundStyle(Color.duckPink)
-                .opacity(leftIndicatorOpacity)
-                .padding()
-                .accessibilityHidden(true) // Decorative; "Duck it" / "Keep it" buttons below are the accessible equivalent
-            Spacer()
-            Text("→ Keep it")
-                .font(.duckHeading)
-                .foregroundStyle(.green)
-                .opacity(rightIndicatorOpacity)
-                .padding()
-                .accessibilityHidden(true)
-        }
-    }
-
-    private var leftIndicatorOpacity: Double {
+    private var leftStripIntensity: Double {
         guard dragOffset.width < 0 else { return 0 }
         return min(Double(-dragOffset.width) / Double(swipeThreshold), 1)
     }
 
-    private var rightIndicatorOpacity: Double {
+    private var rightStripIntensity: Double {
         guard dragOffset.width > 0 else { return 0 }
         return min(Double(dragOffset.width) / Double(swipeThreshold), 1)
-    }
-
-    // MARK: - Action buttons
-
-    private var actionButtons: some View {
-        HStack(spacing: 16) {
-            DuckOutlineButton(title: "✕ Duck it", color: .duckPink) { swipeLeft() }
-            DuckPrimaryButton(title: "✓ Keep it") { swipeRight() }
-        }
     }
 
     // MARK: - Helpers
@@ -253,6 +264,7 @@ private struct DuckModeCompletion: View {
                     .padding(.bottom, 40)
             }
         }
+        .background(Color.duckBlush.ignoresSafeArea())
         .sheet(isPresented: $showPaywall) {
             PaywallView().environmentObject(purchaseManager)
         }
@@ -266,29 +278,74 @@ private struct DuckModeCompletion: View {
 
 private struct DuckAssetCard: View {
     let asset: PHAsset
+    var monthHeader: String? = nil
     @State private var image: UIImage?
 
+    private static let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f
+    }()
+
     var body: some View {
-        Group {
-            if let img = image {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFit()
-            } else {
-                RoundedRectangle(cornerRadius: 24)
-                    .fill(Color.duckSoftPink.opacity(0.3))
-                    .overlay(ProgressView().tint(Color.duckPink))
+        GeometryReader { geo in
+            ZStack(alignment: .bottom) {
+                // Photo — edge-to-edge, scaledToFill
+                Group {
+                    if let img = image {
+                        Image(uiImage: img)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        Color.gray.opacity(0.3)
+                            .overlay(ProgressView().tint(.white))
+                    }
+                }
+                .frame(width: geo.size.width, height: geo.size.height)
+                .clipped()
+
+                // Bottom gradient overlay — 100pt
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.75)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 100)
+
+                // Date + file size
+                VStack(alignment: .leading, spacing: 4) {
+                    if let header = monthHeader {
+                        Text(header)
+                            .font(.duckCaption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                    if let date = asset.creationDate {
+                        Text(Self.dateFormatter.string(from: date))
+                            .font(.duckBody.weight(.semibold))
+                            .foregroundStyle(.white)
+                    }
+                    Text(fileSizeLabel)
+                        .font(.duckCaption)
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 44) // inset from side strips
+                .padding(.bottom, 20)
             }
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 400)
-        .clipShape(RoundedRectangle(cornerRadius: 24))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24)
-                .strokeBorder(Color.duckPink, lineWidth: 1)
-        )
-        .shadow(color: Color.duckPink.opacity(0.12), radius: 12, x: 0, y: 6)
         .task { image = await loadImage(for: asset) }
+    }
+
+    private var fileSizeLabel: String {
+        let resources = PHAssetResource.assetResources(for: asset)
+        var total: Int64 = 0
+        for r in resources {
+            if let s = r.value(forKey: "fileSize") as? Int64 { total += s }
+            else if let s = r.value(forKey: "fileSize") as? Int { total += Int64(s) }
+        }
+        guard total > 0 else { return "" }
+        return ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
     }
 
     private func loadImage(for asset: PHAsset) async -> UIImage? {
@@ -297,11 +354,9 @@ private struct DuckAssetCard: View {
             options.deliveryMode = .opportunistic
             options.isNetworkAccessAllowed = true
             PHImageManager.default().requestImage(
-                for: asset, targetSize: CGSize(width: 600, height: 800),
-                contentMode: .aspectFit, options: options
+                for: asset, targetSize: CGSize(width: 800, height: 1200),
+                contentMode: .aspectFill, options: options
             ) { image, info in
-                // .opportunistic fires twice: degraded first, then final.
-                // Guard prevents resuming the continuation twice → crash.
                 let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) == true
                 guard !isDegraded else { return }
                 continuation.resume(returning: image)

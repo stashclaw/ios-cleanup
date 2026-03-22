@@ -27,7 +27,7 @@ struct FileResultsView: View {
                         }
                         ForEach(visibleFiles) { file in
                             DuckCard {
-                                DuckFileRow(
+                                FileRow(
                                     file: file,
                                     purchaseManager: purchaseManager,
                                     onDelete: { Task { await deleteFile(file) } },
@@ -81,11 +81,13 @@ struct FileResultsView: View {
 
 // MARK: - File Row
 
-private struct DuckFileRow: View {
+private struct FileRow: View {
     let file: LargeFile
     let purchaseManager: PurchaseManager
     let onDelete: () -> Void
     let onCompress: () -> Void
+
+    @State private var thumbnail: UIImage?
 
     private var isVideo: Bool {
         if case .photoLibrary(let asset) = file.source { return asset.mediaType == .video }
@@ -93,43 +95,112 @@ private struct DuckFileRow: View {
         return ["mp4", "mov", "m4v", "avi", "mkv"].contains(ext)
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                Image(systemName: isVideo ? "video.fill" : "doc.fill")
-                    .font(.title3)
-                    .foregroundStyle(isVideo ? Color.duckOrange : Color.duckPink)
-                    .frame(width: 32)
+    private var photoAsset: PHAsset? {
+        if case .photoLibrary(let asset) = file.source { return asset }
+        return nil
+    }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(file.displayName)
-                        .font(.duckBody)
-                        .foregroundStyle(Color.duckBerry)
-                        .lineLimit(1)
-                    HStack(spacing: 6) {
-                        Text(file.formattedSize)
-                            .font(.duckCaption)
-                            .foregroundStyle(Color.duckRose)
-                        typeBadge
-                        if let date = file.creationDate {
-                            Text(date.formatted(date: .abbreviated, time: .omitted))
-                                .font(.duckLabel)
-                                .foregroundStyle(Color.duckSoftPink)
-                        }
+    var body: some View {
+        HStack(spacing: 12) {
+            // Thumbnail or icon
+            thumbnailView
+
+            // Info
+            VStack(alignment: .leading, spacing: 6) {
+                Text(file.displayName)
+                    .font(.duckCaption.weight(.semibold))
+                    .foregroundStyle(Color.duckBerry)
+                    .lineLimit(2)
+
+                fileSizeView
+
+                HStack(spacing: 6) {
+                    typeBadge
+                    if let date = file.creationDate {
+                        Text(date.formatted(date: .abbreviated, time: .omitted))
+                            .font(.duckLabel)
+                            .foregroundStyle(Color.duckSoftPink)
                     }
                 }
-                Spacer()
-            }
 
-            HStack(spacing: 10) {
-                DuckOutlineButton(title: "Delete", color: .duckRose, action: onDelete)
-                if isVideo {
-                    DuckPrimaryButton(
-                        title: purchaseManager.isPurchased ? "Compress" : "Compress 🔒",
-                        action: onCompress
-                    )
+                // Pill buttons
+                HStack(spacing: 8) {
+                    if isVideo {
+                        Button(action: onCompress) {
+                            Text(purchaseManager.isPurchased ? "Compress" : "Compress 🔒")
+                                .font(.duckLabel.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color.duckPink, in: Capsule())
+                        }
+                    }
+                    Button(action: onDelete) {
+                        Text("Delete")
+                            .font(.duckLabel.weight(.semibold))
+                            .foregroundStyle(Color.duckRose)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.duckCream, in: Capsule())
+                    }
                 }
             }
+
+            Spacer(minLength: 0)
+        }
+        .task {
+            guard let asset = photoAsset, isVideo else { return }
+            thumbnail = await loadThumbnail(asset)
+        }
+    }
+
+    private var thumbnailView: some View {
+        Group {
+            if let img = thumbnail {
+                ZStack(alignment: .bottomTrailing) {
+                    Image(uiImage: img)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 120, height: 120)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    Image(systemName: "play.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.white)
+                        .shadow(radius: 2)
+                        .padding(6)
+                }
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(isVideo ? Color.duckOrange.opacity(0.15) : Color.duckPink.opacity(0.15))
+                    Image(systemName: isVideo ? "video.fill" : "doc.fill")
+                        .font(.title2)
+                        .foregroundStyle(isVideo ? Color.duckOrange : Color.duckPink)
+                }
+                .frame(width: 120, height: 120)
+            }
+        }
+    }
+
+    private var fileSizeView: some View {
+        let formatted = splitSize(file.byteSize)
+        return HStack(alignment: .lastTextBaseline, spacing: 2) {
+            Text(formatted.number)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(Color.duckPink)
+            Text(formatted.unit)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.duckRose)
+        }
+    }
+
+    private func splitSize(_ bytes: Int64) -> (number: String, unit: String) {
+        let gb = Double(bytes) / 1_073_741_824
+        let mb = Double(bytes) / 1_048_576
+        if gb >= 1 {
+            return (String(format: "%.1f", gb), "GB")
+        } else {
+            return (String(format: "%.0f", mb), "MB")
         }
     }
 
@@ -141,5 +212,23 @@ private struct DuckFileRow: View {
             .background(isVideo ? Color.duckOrange.opacity(0.15) : Color.duckPink.opacity(0.15))
             .foregroundStyle(isVideo ? Color.duckOrange : Color.duckPink)
             .clipShape(Capsule())
+    }
+
+    private func loadThumbnail(_ asset: PHAsset) async -> UIImage? {
+        await withCheckedContinuation { continuation in
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .fastFormat
+            options.isNetworkAccessAllowed = false
+            PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: CGSize(width: 240, height: 240),
+                contentMode: .aspectFill,
+                options: options
+            ) { image, info in
+                let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) == true
+                guard !isDegraded else { return }
+                continuation.resume(returning: image)
+            }
+        }
     }
 }

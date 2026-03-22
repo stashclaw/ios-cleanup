@@ -7,11 +7,9 @@ struct PhotoResultsView: View {
     @EnvironmentObject private var deletionManager: DeletionManager
 
     @State private var visibleGroups: [PhotoGroup]
-    @State private var selectedGroups = Set<UUID>()
-    @State private var isSelectMode = false
     @State private var showPaywall = false
     @State private var showSwipeMode = false
-    @State private var showBulkConfirm = false
+    @State private var showAutoCleanAllConfirm = false
     @State private var deletionError: String?
     @State private var activeFilter: FilterPill = .all
     @State private var reviewLaterToastVisible = false
@@ -39,16 +37,6 @@ struct PhotoResultsView: View {
 
     private var reclaimableBytes: Int64 {
         visibleGroups.reduce(into: Int64(0)) { $0 += $1.reclaimableBytes }
-    }
-
-    private var selectedAssets: [PHAsset] {
-        filteredGroups
-            .filter { selectedGroups.contains($0.id) }
-            .flatMap { $0.deleteCandidateAssets }
-    }
-
-    private var selectedBytes: Int64 {
-        selectedAssets.reduce(into: Int64(0)) { acc, a in acc += Int64(a.pixelWidth * a.pixelHeight / 100) }
     }
 
     private var totalPhotoCount: Int {
@@ -110,31 +98,21 @@ struct PhotoResultsView: View {
                     .font(.duckCaption)
                     .foregroundStyle(Color.duckPink)
 
-                if isSelectMode {
-                    Button("Delete (\(selectedGroups.count))") {
-                        guard purchaseManager.isPurchased else { showPaywall = true; return }
-                        guard !selectedGroups.isEmpty else { return }
-                        showBulkConfirm = true
-                    }
-                    .disabled(selectedGroups.isEmpty)
-                    .foregroundStyle(Color.duckRose)
-                } else {
-                    Button(purchaseManager.isPurchased ? "Select" : "Select 🔒") {
-                        guard purchaseManager.isPurchased else { showPaywall = true; return }
-                        isSelectMode = true
-                    }
-                    .foregroundStyle(Color.duckPink)
+                Button(purchaseManager.isPurchased ? "Auto-clean all" : "Auto-clean all 🔒") {
+                    guard purchaseManager.isPurchased else { showPaywall = true; return }
+                    showAutoCleanAllConfirm = true
                 }
+                .font(.duckCaption)
+                .foregroundStyle(Color.duckRose)
             }
-            if isSelectMode {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        isSelectMode = false
-                        selectedGroups.removeAll()
-                    }
-                    .foregroundStyle(Color.duckRose)
-                }
+        }
+        .alert("Auto-clean all groups?", isPresented: $showAutoCleanAllConfirm) {
+            Button("Clean \(filteredGroups.count) groups", role: .destructive) {
+                Task { await autoCleanAll() }
             }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The best shot from each group will be kept. All other duplicates will be removed.")
         }
         .sheet(isPresented: $showPaywall) { PaywallView().environmentObject(purchaseManager) }
         .fullScreenCover(isPresented: $showSwipeMode) {
@@ -142,44 +120,33 @@ struct PhotoResultsView: View {
                 .environmentObject(purchaseManager)
                 .environmentObject(deletionManager)
         }
-        .sheet(isPresented: $showBulkConfirm) {
-            DuckConfirmSheet(
-                assetCount: selectedAssets.count,
-                bytes: selectedBytes,
-                onConfirm: {
-                    showBulkConfirm = false
-                    Task {
-                            do {
-                                try await deletionManager.bulkDelete(groups: selectedGroups.compactMap { id in
-                                    visibleGroups.first(where: { $0.id == id })
-                                })
-                                for group in visibleGroups where selectedGroups.contains(group.id) {
-                                    _ = await PhotoFeedbackStore.shared.recordSimilarGroupDecision(
-                                        group: group,
-                                        kind: .deleteSelected,
-                                        stage: .committed,
-                                        selectedKeeperID: group.keeperAssetID,
-                                        deletedAssetIDs: group.deleteCandidateIDs,
-                                        keptAssetIDs: [group.keeperAssetID].compactMap { $0 },
-                                        recommendationAccepted: true,
-                                        note: "Bulk delete from results list"
-                                    )
-                                }
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
-                                    visibleGroups.removeAll { selectedGroups.contains($0.id) }
-                                    selectedGroups.removeAll()
-                                    isSelectMode = false
-                                }
-                        } catch {
-                            deletionError = error.localizedDescription
-                        }
-                    }
-                },
-                onCancel: { showBulkConfirm = false }
-            )
-        }
         .onReceive(NotificationCenter.default.publisher(for: .purchaseDidSucceed)) { _ in
             showPaywall = false
+        }
+    }
+
+    // MARK: - Auto-clean all
+
+    private func autoCleanAll() async {
+        for group in filteredGroups {
+            do {
+                try await deletionManager.keepBest(from: group)
+                _ = await PhotoFeedbackStore.shared.recordSimilarGroupDecision(
+                    group: group,
+                    kind: .keepBest,
+                    stage: .committed,
+                    selectedKeeperID: group.keeperAssetID,
+                    keptAssetIDs: [group.keeperAssetID].compactMap { $0 },
+                    recommendationAccepted: true,
+                    note: "Auto-clean all from results list"
+                )
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                    visibleGroups.removeAll { $0.id == group.id }
+                }
+            } catch {
+                deletionError = error.localizedDescription
+                break
+            }
         }
     }
 
@@ -261,7 +228,7 @@ struct PhotoResultsView: View {
 
     private var metricRow: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-            StatPill(title: "Selected", value: "\(selectedAssets.count) / \(currentDeletableCount)", accent: .duckPink, icon: "checkmark.circle.fill")
+            StatPill(title: "Groups", value: "\(filteredGroups.count)", accent: .duckPink, icon: "photo.stack")
             StatPill(title: "Current set", value: "\(currentReviewCount) photos", accent: .duckOrange, icon: "photo.stack")
             StatPill(title: "Reclaimable", value: ByteCountFormatter.string(fromByteCount: reclaimableBytes, countStyle: .file), accent: .duckRose, icon: "sparkles")
         }
@@ -294,35 +261,26 @@ struct PhotoResultsView: View {
 
     private var groupList: some View {
         VStack(spacing: 12) {
-            ForEach(filteredGroups) { group in
+            ForEach(Array(filteredGroups.enumerated()), id: \.element.id) { index, group in
                 DuckCard {
                     VStack(spacing: 12) {
                         NavigationLink {
-                            PhotoGroupDetailView(group: group, allGroups: filteredGroups) {
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
-                                    visibleGroups.removeAll { $0.id == group.id }
-                                    selectedGroups.remove(group.id)
+                            PhotoGroupDetailView(
+                                group: group,
+                                groupIndex: index,
+                                totalGroups: filteredGroups.count,
+                                onDeleteGroup: {
+                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                                        visibleGroups.removeAll { $0.id == group.id }
+                                    }
                                 }
-                            }
+                            )
                             .environmentObject(purchaseManager)
                             .environmentObject(deletionManager)
                         } label: {
-                            GroupOverviewCard(
-                                group: group,
-                                isSelected: selectedGroups.contains(group.id),
-                                isSelectMode: isSelectMode
-                            )
-                            .contentShape(Rectangle())
+                            GroupOverviewCard(group: group)
+                                .contentShape(Rectangle())
                         }
-                        .simultaneousGesture(TapGesture().onEnded {
-                            if isSelectMode {
-                                if selectedGroups.contains(group.id) {
-                                    selectedGroups.remove(group.id)
-                                } else {
-                                    selectedGroups.insert(group.id)
-                                }
-                            }
-                        })
 
                         HStack(spacing: 10) {
                             Button {
@@ -341,24 +299,21 @@ struct PhotoResultsView: View {
                                         )
                                         withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
                                             visibleGroups.removeAll { $0.id == group.id }
-                                            selectedGroups.remove(group.id)
                                         }
                                     } catch {
-                                        // Keep the existing error handling surface unchanged for now.
+                                        deletionError = error.localizedDescription
                                     }
                                 }
                             } label: {
-                                Text("Keep Best")
+                                Text(purchaseManager.isPurchased ? "Auto-clean" : "Auto-clean 🔒")
                                     .font(.duckCaption.weight(.semibold))
-                                    .foregroundStyle(Color.duckPink)
-                                    .padding(.horizontal, 12)
+                                    .foregroundStyle(Color.white)
+                                    .padding(.horizontal, 14)
                                     .padding(.vertical, 8)
-                                    .background(Color.duckCream, in: Capsule())
+                                    .background(Color.duckPink, in: Capsule())
                             }
 
                             Button {
-                                // Move the group to the end of the visible list so it's
-                                // deferred without disrupting the active filter or select mode.
                                 if let idx = visibleGroups.firstIndex(where: { $0.id == group.id }) {
                                     withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
                                         let deferred = visibleGroups.remove(at: idx)
@@ -374,7 +329,7 @@ struct PhotoResultsView: View {
                                 Text("Review Later")
                                     .font(.duckCaption.weight(.semibold))
                                     .foregroundStyle(Color.duckRose)
-                                    .padding(.horizontal, 12)
+                                    .padding(.horizontal, 14)
                                     .padding(.vertical, 8)
                                     .background(Color.duckCream, in: Capsule())
                             }
@@ -387,145 +342,62 @@ struct PhotoResultsView: View {
     }
 }
 
-// MARK: - Bulk confirm sheet
-
-private struct DuckConfirmSheet: View {
-    let assetCount: Int
-    let bytes: Int64
-    let onConfirm: () -> Void
-    let onCancel: () -> Void
-
-    private var gbLabel: String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color.duckSoftPink)
-                .frame(width: 40, height: 4)
-                .padding(.top, 12)
-                .padding(.bottom, 24)
-
-            Image(systemName: "photo.stack")
-                .font(.system(size: 32))
-                .foregroundStyle(Color.duckSoftPink)
-                .padding(.bottom, 16)
-
-            Text("Free up \(gbLabel)?")
-                .font(.duckTitle)
-                .foregroundStyle(Color.duckBerry)
-                .padding(.bottom, 8)
-
-            Text("The best shot from each group will be kept. \(assetCount) photo\(assetCount == 1 ? "" : "s") will be removed.")
-                .font(.duckCaption)
-                .foregroundStyle(Color.duckRose)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-                .padding(.bottom, 32)
-
-            VStack(spacing: 12) {
-                DuckPrimaryButton(title: "Confirm · Free \(gbLabel)", action: onConfirm)
-                DuckOutlineButton(title: "Cancel", color: .duckRose, action: onCancel)
-            }
-            .padding(.horizontal, 32)
-            .padding(.bottom, 40)
-        }
-        .frame(maxWidth: .infinity)
-        .background(Color.duckCream)
-        .clipShape(
-            UnevenRoundedRectangle(
-                topLeadingRadius: 28,
-                bottomLeadingRadius: 0,
-                bottomTrailingRadius: 0,
-                topTrailingRadius: 28
-            )
-        )
-    }
-}
-
 // MARK: - Group Row
 
 private struct GroupOverviewCard: View {
     let group: PhotoGroup
-    let isSelected: Bool
-    let isSelectMode: Bool
-    @State private var thumbnail: UIImage?
-
-    init(
-        group: PhotoGroup,
-        isSelected: Bool,
-        isSelectMode: Bool
-    ) {
-        self.group = group
-        self.isSelected = isSelected
-        self.isSelectMode = isSelectMode
-    }
+    @State private var thumbnails: [UIImage?] = [nil, nil, nil]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                thumbnailStack
-                    .accessibilityHidden(true) // Described by the combined label below
+        HStack(alignment: .center, spacing: 12) {
+            thumbnailRow
 
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        Text(reasonLabel)
-                            .font(.duckBody)
-                            .foregroundStyle(Color.duckBerry)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(reasonLabel)
+                        .font(.duckBody)
+                        .foregroundStyle(Color.duckBerry)
 
-                        StatusBadge(title: confidenceLabel, accent: confidenceColor)
-                    }
-
-                    Text("\(group.photoCount) photos")
-                        .font(.duckCaption)
-                        .foregroundStyle(Color.duckRose)
-
-                    Text(ByteCountFormatter.string(fromByteCount: group.reclaimableBytes, countStyle: .file))
-                        .font(.duckCaption.weight(.semibold))
-                        .foregroundStyle(Color.duckPink)
+                    StatusBadge(title: confidenceLabel, accent: confidenceColor)
                 }
 
-                Spacer()
+                Text("\(group.photoCount) photos")
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.duckRose)
 
-                if isSelectMode {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(isSelected ? Color.duckPink : Color.duckSoftPink)
-                        .font(.title3)
-                } else {
-                    BestShotBadge(
-                        isRecommended: group.keeperAssetID != nil,
-                        needsReview: group.groupConfidence != .high
-                    )
-                }
+                Text(ByteCountFormatter.string(fromByteCount: group.reclaimableBytes, countStyle: .file))
+                    .font(.duckCaption.weight(.semibold))
+                    .foregroundStyle(Color.duckPink)
             }
 
-            if !group.reasons.isEmpty {
-                ReasonChipsRow(reasons: Array(group.reasons.prefix(3)))
-            }
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundStyle(Color.duckSoftPink)
         }
-        .task { thumbnail = await loadThumbnail(for: group.assets.first) }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(reasonLabel), \(confidenceLabel), \(group.photoCount) photos, \(ByteCountFormatter.string(fromByteCount: group.reclaimableBytes, countStyle: .file)) reclaimable")
+        .task { await loadThumbnails() }
     }
 
-    private var thumbnailStack: some View {
-        ZStack {
-            ForEach(0..<min(3, group.assets.count), id: \.self) { i in
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.duckSoftPink.opacity(0.4))
-                    .frame(width: 48, height: 48)
-                    .offset(x: CGFloat(i) * 4, y: CGFloat(-i) * 4)
-            }
-            if let img = thumbnail {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 48, height: 48)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+    private var thumbnailRow: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<3, id: \.self) { i in
+                Group {
+                    if i < group.assets.count, let img = thumbnails[i] {
+                        Image(uiImage: img)
+                            .resizable()
+                            .scaledToFill()
+                    } else if i < group.assets.count {
+                        Color.duckSoftPink.opacity(0.4)
+                            .overlay(ProgressView().scaleEffect(0.6).tint(.white))
+                    } else {
+                        Color.duckSoftPink.opacity(0.15)
+                    }
+                }
+                .frame(width: 72, height: 72)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
             }
         }
-        .frame(width: 60, height: 60)
     }
 
     private var reasonLabel: String {
@@ -538,32 +410,45 @@ private struct GroupOverviewCard: View {
 
     private var confidenceLabel: String {
         switch group.groupConfidence {
-        case .high: return "High confidence"
+        case .high:   return "High confidence"
         case .medium: return "Needs review"
-        case .low: return "Needs review"
+        case .low:    return "Needs review"
         }
     }
 
     private var confidenceColor: Color {
         switch group.groupConfidence {
-        case .high: return .duckPink
+        case .high:   return .duckPink
         case .medium: return .duckOrange
-        case .low: return .duckRose
+        case .low:    return .duckRose
         }
     }
 
-    private func loadThumbnail(for asset: PHAsset?) async -> UIImage? {
-        guard let asset else { return nil }
-        return await withCheckedContinuation { continuation in
+    private func loadThumbnails() async {
+        let assets = group.assets.prefix(3)
+        var loaded = [UIImage?](repeating: nil, count: 3)
+        await withTaskGroup(of: (Int, UIImage?).self) { tg in
+            for (i, asset) in assets.enumerated() {
+                tg.addTask { (i, await requestThumb(asset)) }
+            }
+            for await (i, img) in tg {
+                loaded[i] = img
+            }
+        }
+        thumbnails = loaded
+    }
+
+    private func requestThumb(_ asset: PHAsset) async -> UIImage? {
+        await withCheckedContinuation { continuation in
             let options = PHImageRequestOptions()
             options.deliveryMode = .fastFormat
             options.isNetworkAccessAllowed = false
             PHImageManager.default().requestImage(
-                for: asset, targetSize: CGSize(width: 100, height: 100),
-                contentMode: .aspectFill, options: options
+                for: asset,
+                targetSize: CGSize(width: 144, height: 144),
+                contentMode: .aspectFill,
+                options: options
             ) { image, info in
-                // .fastFormat can fire twice: degraded first, then final.
-                // Guard prevents resuming the continuation twice → crash.
                 let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) == true
                 guard !isDegraded else { return }
                 continuation.resume(returning: image)

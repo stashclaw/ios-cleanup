@@ -64,6 +64,7 @@
 		AA00000B000000000000001A /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000B000000000000001B /* EmptyStateView.swift */; };
 		AA00000C000000000000001A /* Font+PhotoDuck.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000C000000000000001B /* Font+PhotoDuck.swift */; };
 		AA00000C000000000000003A /* DuckComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000C000000000000003B /* DuckComponents.swift */; };
+		AA000020000000000000001A /* DuckBottomActionBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000020000000000000001B /* DuckBottomActionBar.swift */; };
 		AA00000D000000000000001A /* FredokaOne-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000001B /* FredokaOne-Regular.ttf */; };
 		AA00000D000000000000002A /* Nunito-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000002B /* Nunito-Regular.ttf */; };
 		AA00000D000000000000003A /* Nunito-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000003B /* Nunito-SemiBold.ttf */; };
@@ -139,6 +140,7 @@
 		AA00000F000000000000003B /* Color+PhotoDuck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+PhotoDuck.swift"; sourceTree = "<group>"; };
 		AA00000C000000000000001B /* Font+PhotoDuck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Font+PhotoDuck.swift"; sourceTree = "<group>"; };
 		AA00000C000000000000003B /* DuckComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuckComponents.swift; sourceTree = "<group>"; };
+		AA000020000000000000001B /* DuckBottomActionBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuckBottomActionBar.swift; sourceTree = "<group>"; };
 		AA00000D000000000000001B /* FredokaOne-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "FredokaOne-Regular.ttf"; sourceTree = "<group>"; };
 		AA00000D000000000000002B /* Nunito-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-Regular.ttf"; sourceTree = "<group>"; };
 		AA00000D000000000000003B /* Nunito-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-SemiBold.ttf"; sourceTree = "<group>"; };
@@ -327,6 +329,7 @@
 			children = (
 				AA00000C000000000000003B /* DuckComponents.swift */,
 				AA00000E000000000000001B /* UndoToast.swift */,
+				AA000020000000000000001B /* DuckBottomActionBar.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -496,6 +499,7 @@
 				AA00000B000000000000001A /* EmptyStateView.swift in Sources */,
 				AA00000C000000000000001A /* Font+PhotoDuck.swift in Sources */,
 				AA00000C000000000000003A /* DuckComponents.swift in Sources */,
+				AA000020000000000000001A /* DuckBottomActionBar.swift in Sources */,
 				AA00000E000000000000001A /* UndoToast.swift in Sources */,
 				AA00000E000000000000002A /* DeletionManager.swift in Sources */,
 				AA00000E000000000000003A /* PhotoDeletionGuardrails.swift in Sources */,
