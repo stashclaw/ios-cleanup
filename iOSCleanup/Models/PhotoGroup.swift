@@ -11,6 +11,7 @@ struct PhotoGroup: Identifiable, @unchecked Sendable {
         case exactDuplicate
         case visuallySimilar
         case burstShot
+        case blurry
     }
 }
 

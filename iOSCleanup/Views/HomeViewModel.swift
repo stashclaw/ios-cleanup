@@ -105,6 +105,17 @@ final class HomeViewModel: ObservableObject {
                     }
                 } catch {}
             }
+
+            group.addTask {
+                let engine = BlurScanEngine()
+                do {
+                    for try await event in engine.scan() {
+                        if case .blurryFound(let groups) = event {
+                            lock.withLock { collected.append(contentsOf: groups) }
+                        }
+                    }
+                } catch {}
+            }
         }
 
         var seen = Set<Set<String>>()

@@ -37,6 +37,9 @@
 		AA000008000000000000002A /* ContactMergePreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000008000000000000002B /* ContactMergePreviewView.swift */; };
 		AA000009000000000000001A /* VideoCompressionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000009000000000000001B /* VideoCompressionEngine.swift */; };
 		AA000009000000000000002A /* VideoCompressionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000009000000000000002B /* VideoCompressionEngineTests.swift */; };
+		AA00000E000000000000001A /* DuplicateHashEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000E000000000000001B /* DuplicateHashEngine.swift */; };
+		AA00000F000000000000001A /* SimilarityEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000F000000000000001B /* SimilarityEngine.swift */; };
+		AA000010000000000000001A /* BlurScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000010000000000000001B /* BlurScanEngine.swift */; };
 		AA00000A000000000000001A /* FileResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000A000000000000001B /* FileResultsView.swift */; };
 		AA00000A000000000000002A /* VideoCompressionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000A000000000000002B /* VideoCompressionView.swift */; };
 		AA00000B000000000000001A /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000B000000000000001B /* EmptyStateView.swift */; };
@@ -93,6 +96,9 @@
 		AA000008000000000000002B /* ContactMergePreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactMergePreviewView.swift; sourceTree = "<group>"; };
 		AA000009000000000000001B /* VideoCompressionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionEngine.swift; sourceTree = "<group>"; };
 		AA000009000000000000002B /* VideoCompressionEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionEngineTests.swift; sourceTree = "<group>"; };
+		AA00000E000000000000001B /* DuplicateHashEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuplicateHashEngine.swift; sourceTree = "<group>"; };
+		AA00000F000000000000001B /* SimilarityEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarityEngine.swift; sourceTree = "<group>"; };
+		AA000010000000000000001B /* BlurScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlurScanEngine.swift; sourceTree = "<group>"; };
 		AA00000A000000000000001B /* FileResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileResultsView.swift; sourceTree = "<group>"; };
 		AA00000A000000000000002B /* VideoCompressionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionView.swift; sourceTree = "<group>"; };
 		AA00000B000000000000001B /* EmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyStateView.swift; sourceTree = "<group>"; };
@@ -171,6 +177,9 @@
 				AA000001000000000000009B /* ContactScanEngine.swift */,
 				AA00000100000000000000AB /* FileScanEngine.swift */,
 				AA000009000000000000001B /* VideoCompressionEngine.swift */,
+				AA00000E000000000000001B /* DuplicateHashEngine.swift */,
+				AA00000F000000000000001B /* SimilarityEngine.swift */,
+				AA000010000000000000001B /* BlurScanEngine.swift */,
 			);
 			path = Engines;
 			sourceTree = "<group>";
@@ -413,6 +422,9 @@
 				AA000008000000000000001A /* ContactResultsView.swift in Sources */,
 				AA000008000000000000002A /* ContactMergePreviewView.swift in Sources */,
 				AA000009000000000000001A /* VideoCompressionEngine.swift in Sources */,
+				AA00000E000000000000001A /* DuplicateHashEngine.swift in Sources */,
+				AA00000F000000000000001A /* SimilarityEngine.swift in Sources */,
+				AA000010000000000000001A /* BlurScanEngine.swift in Sources */,
 				AA00000A000000000000001A /* FileResultsView.swift in Sources */,
 				AA00000A000000000000002A /* VideoCompressionView.swift in Sources */,
 				AA00000B000000000000001A /* EmptyStateView.swift in Sources */,
