@@ -69,17 +69,52 @@ final class HomeViewModel: ObservableObject {
 
     func scanPhotos() async {
         photoScanState = .scanning
-        let engine = PhotoScanEngine()
-        for await result in engine.scan() {
-            switch result {
-            case .success(let groups):
-                photoGroups = groups
-                photoScanState = .done
-            case .failure(let error):
-                photoScanState = .failed(error.localizedDescription)
+
+        let lock = NSLock()
+        var collected: [PhotoGroup] = []
+
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                let engine = PhotoScanEngine()
+                for await result in engine.scan() {
+                    if case .success(let groups) = result {
+                        let filtered = groups.filter { $0.reason == .nearDuplicate || $0.reason == .burstShot }
+                        lock.withLock { collected.append(contentsOf: filtered) }
+                    }
+                }
+            }
+
+            group.addTask {
+                let engine = DuplicateHashEngine()
+                do {
+                    for try await event in engine.scan() {
+                        if case .duplicatesFound(let groups) = event {
+                            lock.withLock { collected.append(contentsOf: groups) }
+                        }
+                    }
+                } catch {}
+            }
+
+            group.addTask {
+                let engine = SimilarityEngine()
+                do {
+                    for try await event in engine.scan() {
+                        if case .groupsFound(let groups) = event {
+                            lock.withLock { collected.append(contentsOf: groups) }
+                        }
+                    }
+                } catch {}
             }
         }
-        if case .scanning = photoScanState { photoScanState = .done }
+
+        var seen = Set<Set<String>>()
+        let unique = collected.filter { group in
+            let key = Set(group.assets.map { $0.localIdentifier })
+            return seen.insert(key).inserted
+        }
+
+        photoGroups = unique
+        photoScanState = .done
     }
 
     func scanContacts() async {

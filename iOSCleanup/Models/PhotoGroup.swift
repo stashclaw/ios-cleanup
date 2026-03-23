@@ -8,6 +8,7 @@ struct PhotoGroup: Identifiable, @unchecked Sendable {
 
     enum SimilarityReason: Sendable {
         case nearDuplicate
+        case exactDuplicate
         case visuallySimilar
         case burstShot
     }

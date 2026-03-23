@@ -14,6 +14,7 @@ struct PhotoResultsView: View {
 
     enum FilterPill: String, CaseIterable {
         case all = "All"
+        case exactDuplicate = "Exact Duplicates"
         case nearDuplicate = "Near Duplicates"
         case similar = "Similar"
         case burst = "Burst"
@@ -21,10 +22,11 @@ struct PhotoResultsView: View {
 
     private var filteredGroups: [PhotoGroup] {
         switch activeFilter {
-        case .all:          return groups
+        case .all:           return groups
+        case .exactDuplicate: return groups.filter { $0.reason == .exactDuplicate }
         case .nearDuplicate: return groups.filter { $0.reason == .nearDuplicate }
-        case .similar:      return groups.filter { $0.reason == .visuallySimilar }
-        case .burst:        return groups.filter { $0.reason == .burstShot }
+        case .similar:       return groups.filter { $0.reason == .visuallySimilar }
+        case .burst:         return groups.filter { $0.reason == .burstShot }
         }
     }
 
@@ -244,9 +246,10 @@ private struct GroupRow: View {
 
     private var reasonLabel: String {
         switch group.reason {
-        case .nearDuplicate:  return "Near Duplicate"
+        case .exactDuplicate:  return "Exact Duplicate"
+        case .nearDuplicate:   return "Near Duplicate"
         case .visuallySimilar: return "Similar"
-        case .burstShot:      return "Burst Shot"
+        case .burstShot:       return "Burst Shot"
         }
     }
 
