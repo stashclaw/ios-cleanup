@@ -74,11 +74,11 @@ final class SwipeModeViewModel: ObservableObject {
         }
         if currentIndex >= queue.count {
             isComplete = true
-            Task { await commitDeletes() }
+            // commitDeletes() is called explicitly by the completion screen (paid gate)
         }
     }
 
-    // MARK: - Bulk confirm (paid) — commits pending deletes at completion screen
+    // MARK: - Bulk confirm (paid) — called from completion screen after purchase check
 
     func commitDeletes() async {
         guard !toDeleteAssets.isEmpty else { return }

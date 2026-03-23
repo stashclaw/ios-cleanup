@@ -154,7 +154,10 @@ struct ContactMergePreviewView: View {
         defer { isMerging = false }
         let store = CNContactStore()
         let request = CNSaveRequest()
-        let mutablePrimary = match.primary.mutableCopy() as! CNMutableContact
+        guard let mutablePrimary = match.primary.mutableCopy() as? CNMutableContact else {
+            mergeError = "Could not prepare contact for editing."
+            return
+        }
         let duplicate = match.duplicate
 
         // Merge fields: phone numbers
@@ -172,7 +175,11 @@ struct ContactMergePreviewView: View {
         if mutablePrimary.birthday == nil { mutablePrimary.birthday = duplicate.birthday }
 
         request.update(mutablePrimary)
-        request.delete(duplicate.mutableCopy() as! CNMutableContact)
+        guard let mutableDuplicate = duplicate.mutableCopy() as? CNMutableContact else {
+            mergeError = "Could not prepare duplicate contact for deletion."
+            return
+        }
+        request.delete(mutableDuplicate)
 
         do {
             try store.execute(request)
