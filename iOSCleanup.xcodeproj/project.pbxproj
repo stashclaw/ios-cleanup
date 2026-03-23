@@ -1,0 +1,590 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AA000001000000000000001A /* iOSCleanupApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000001B /* iOSCleanupApp.swift */; };
+		AA000001000000000000002A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000002B /* ContentView.swift */; };
+		AA000001000000000000003A /* PhotoGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000003B /* PhotoGroup.swift */; };
+		AA000001000000000000008A /* PhotoScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000008B /* PhotoScanEngine.swift */; };
+		AA00000100000000000000BA /* Photos.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000BB /* Photos.framework */; };
+		AA00000100000000000000DA /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000DB /* Vision.framework */; };
+		AA00000100000000000000EA /* PhotoScanEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000EB /* PhotoScanEngineTests.swift */; };
+		AA000002000000000000001A /* PurchaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001B /* PurchaseManager.swift */; };
+		AA000002000000000000002A /* iOSCleanup.storekit in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000002B /* iOSCleanup.storekit */; };
+		AA000003000000000000001A /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000003000000000000001B /* OnboardingView.swift */; };
+		AA000004000000000000001A /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000004000000000000001B /* HomeView.swift */; };
+		AA000004000000000000002A /* HomeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000004000000000000002B /* HomeViewModel.swift */; };
+		AA000005000000000000001A /* PaywallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000005000000000000001B /* PaywallView.swift */; };
+		AA000006000000000000001A /* PhotoResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000006000000000000001B /* PhotoResultsView.swift */; };
+		AA000006000000000000002A /* PhotoGroupDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000006000000000000002B /* PhotoGroupDetailView.swift */; };
+		AA00000B000000000000001A /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000B000000000000001B /* EmptyStateView.swift */; };
+		AA00000C000000000000001A /* Font+PhotoDuck.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000C000000000000001B /* Font+PhotoDuck.swift */; };
+		AA00000C000000000000003A /* DuckComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000C000000000000003B /* DuckComponents.swift */; };
+		AA00000D000000000000001A /* FredokaOne-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000001B /* FredokaOne-Regular.ttf */; };
+		AA00000D000000000000002A /* Nunito-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000002B /* Nunito-Regular.ttf */; };
+		AA00000D000000000000003A /* Nunito-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000003B /* Nunito-SemiBold.ttf */; };
+		AA00000D000000000000004A /* Nunito-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000004B /* Nunito-Bold.ttf */; };
+		AA00000D000000000000005A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000005B /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		AA0000010000000000000B02 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA0000010000000000000C01 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA0000010000000000000701;
+			remoteInfo = iOSCleanup;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		AA000001000000000000001B /* iOSCleanupApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSCleanupApp.swift; sourceTree = "<group>"; };
+		AA000001000000000000002B /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		AA000001000000000000003B /* PhotoGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoGroup.swift; sourceTree = "<group>"; };
+		AA000001000000000000008B /* PhotoScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoScanEngine.swift; sourceTree = "<group>"; };
+		AA00000100000000000000BB /* Photos.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Photos.framework; path = System/Library/Frameworks/Photos.framework; sourceTree = SDKROOT; };
+		AA00000100000000000000DB /* Vision.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Vision.framework; path = System/Library/Frameworks/Vision.framework; sourceTree = SDKROOT; };
+		AA00000100000000000000EB /* PhotoScanEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoScanEngineTests.swift; sourceTree = "<group>"; };
+		AA0000010000000000000201 /* iOSCleanup.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iOSCleanup.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0000010000000000000301 /* iOSCleanupTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iOSCleanupTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0000010000000000000401 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AA000002000000000000001B /* PurchaseManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PurchaseManager.swift; sourceTree = "<group>"; };
+		AA000002000000000000002B /* iOSCleanup.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = iOSCleanup.storekit; sourceTree = "<group>"; };
+		AA000003000000000000001B /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		AA000004000000000000001B /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		AA000004000000000000002B /* HomeViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeViewModel.swift; sourceTree = "<group>"; };
+		AA000005000000000000001B /* PaywallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaywallView.swift; sourceTree = "<group>"; };
+		AA000006000000000000001B /* PhotoResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoResultsView.swift; sourceTree = "<group>"; };
+		AA000006000000000000002B /* PhotoGroupDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoGroupDetailView.swift; sourceTree = "<group>"; };
+		AA00000B000000000000001B /* EmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyStateView.swift; sourceTree = "<group>"; };
+		AA00000C000000000000001B /* Font+PhotoDuck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Font+PhotoDuck.swift"; sourceTree = "<group>"; };
+		AA00000C000000000000003B /* DuckComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuckComponents.swift; sourceTree = "<group>"; };
+		AA00000D000000000000001B /* FredokaOne-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "FredokaOne-Regular.ttf"; sourceTree = "<group>"; };
+		AA00000D000000000000002B /* Nunito-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-Regular.ttf"; sourceTree = "<group>"; };
+		AA00000D000000000000003B /* Nunito-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-SemiBold.ttf"; sourceTree = "<group>"; };
+		AA00000D000000000000004B /* Nunito-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-Bold.ttf"; sourceTree = "<group>"; };
+		AA00000D000000000000005B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		AA0000010000000000000501 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA00000100000000000000BA /* Photos.framework in Frameworks */,
+				AA00000100000000000000DA /* Vision.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000010000000000000502 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		AA0000010000000000000601 /* iOSCleanup */ = {
+			isa = PBXGroup;
+			children = (
+				AA000001000000000000001B /* iOSCleanupApp.swift */,
+				AA000001000000000000002B /* ContentView.swift */,
+				AA0000010000000000000401 /* Info.plist */,
+				AA00000D000000000000005B /* Assets.xcassets */,
+				AA0000010000000000000604 /* Engines */,
+				AA0000010000000000000605 /* Models */,
+				AA0000010000000000000606 /* Utilities */,
+				AA00000D000000000000006A /* Fonts */,
+				AA000002000000000000003A /* Store */,
+				AA000002000000000000004A /* Configuration */,
+				AA000003000000000000002A /* Views */,
+			);
+			path = iOSCleanup;
+			sourceTree = "<group>";
+		};
+		AA0000010000000000000602 /* iOSCleanupTests */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000100000000000000EB /* PhotoScanEngineTests.swift */,
+			);
+			path = iOSCleanupTests;
+			sourceTree = "<group>";
+		};
+		AA0000010000000000000603 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000010000000000000201 /* iOSCleanup.app */,
+				AA0000010000000000000301 /* iOSCleanupTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		AA0000010000000000000604 /* Engines */ = {
+			isa = PBXGroup;
+			children = (
+				AA000001000000000000008B /* PhotoScanEngine.swift */,
+			);
+			path = Engines;
+			sourceTree = "<group>";
+		};
+		AA0000010000000000000605 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				AA000001000000000000003B /* PhotoGroup.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		AA0000010000000000000606 /* Utilities */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000C000000000000001B /* Font+PhotoDuck.swift */,
+			);
+			path = Utilities;
+			sourceTree = "<group>";
+		};
+		AA00000D000000000000006A /* Fonts */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000D000000000000001B /* FredokaOne-Regular.ttf */,
+				AA00000D000000000000002B /* Nunito-Regular.ttf */,
+				AA00000D000000000000003B /* Nunito-SemiBold.ttf */,
+				AA00000D000000000000004B /* Nunito-Bold.ttf */,
+			);
+			path = Fonts;
+			sourceTree = "<group>";
+		};
+		AA0000010000000000000607 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000100000000000000BB /* Photos.framework */,
+				AA00000100000000000000DB /* Vision.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		AA0000010000000000000608 = {
+			isa = PBXGroup;
+			children = (
+				AA0000010000000000000601 /* iOSCleanup */,
+				AA0000010000000000000602 /* iOSCleanupTests */,
+				AA0000010000000000000603 /* Products */,
+				AA0000010000000000000607 /* Frameworks */,
+			);
+			sourceTree = "<group>";
+		};
+		AA000002000000000000003A /* Store */ = {
+			isa = PBXGroup;
+			children = (
+				AA000002000000000000001B /* PurchaseManager.swift */,
+			);
+			path = Store;
+			sourceTree = "<group>";
+		};
+		AA000002000000000000004A /* Configuration */ = {
+			isa = PBXGroup;
+			children = (
+				AA000002000000000000002B /* iOSCleanup.storekit */,
+			);
+			path = Configuration;
+			sourceTree = "<group>";
+		};
+		AA000003000000000000002A /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				AA000003000000000000001B /* OnboardingView.swift */,
+				AA000004000000000000001B /* HomeView.swift */,
+				AA000004000000000000002B /* HomeViewModel.swift */,
+				AA000005000000000000001B /* PaywallView.swift */,
+				AA00000B000000000000001B /* EmptyStateView.swift */,
+				AA00000C000000000000006A /* Components */,
+				AA000006000000000000003A /* Photos */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		AA00000C000000000000006A /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000C000000000000003B /* DuckComponents.swift */,
+			);
+			path = Components;
+			sourceTree = "<group>";
+		};
+		AA000006000000000000003A /* Photos */ = {
+			isa = PBXGroup;
+			children = (
+				AA000006000000000000001B /* PhotoResultsView.swift */,
+				AA000006000000000000002B /* PhotoGroupDetailView.swift */,
+			);
+			path = Photos;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AA0000010000000000000701 /* iOSCleanup */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0000010000000000000801 /* Build configuration list for PBXNativeTarget "iOSCleanup" */;
+			buildPhases = (
+				AA0000010000000000000901 /* Sources */,
+				AA0000010000000000000501 /* Frameworks */,
+				AA0000010000000000000A01 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = iOSCleanup;
+			productName = iOSCleanup;
+			productReference = AA0000010000000000000201 /* iOSCleanup.app */;
+			productType = "com.apple.product-type.application";
+		};
+		AA0000010000000000000702 /* iOSCleanupTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0000010000000000000802 /* Build configuration list for PBXNativeTarget "iOSCleanupTests" */;
+			buildPhases = (
+				AA0000010000000000000902 /* Sources */,
+				AA0000010000000000000502 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA0000010000000000000B01 /* PBXTargetDependency */,
+			);
+			name = iOSCleanupTests;
+			productName = iOSCleanupTests;
+			productReference = AA0000010000000000000301 /* iOSCleanupTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AA0000010000000000000C01 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					AA0000010000000000000701 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+					AA0000010000000000000702 = {
+						CreatedOnToolsVersion = 15.0;
+						TestTargetID = AA0000010000000000000701;
+					};
+				};
+			};
+			buildConfigurationList = AA0000010000000000000803 /* Build configuration list for PBXProject "iOSCleanup" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = AA0000010000000000000608;
+			productRefGroup = AA0000010000000000000603 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AA0000010000000000000701 /* iOSCleanup */,
+				AA0000010000000000000702 /* iOSCleanupTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AA0000010000000000000A01 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA000002000000000000002A /* iOSCleanup.storekit in Resources */,
+				AA00000D000000000000001A /* FredokaOne-Regular.ttf in Resources */,
+				AA00000D000000000000002A /* Nunito-Regular.ttf in Resources */,
+				AA00000D000000000000003A /* Nunito-SemiBold.ttf in Resources */,
+				AA00000D000000000000004A /* Nunito-Bold.ttf in Resources */,
+				AA00000D000000000000005A /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AA0000010000000000000901 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA000001000000000000001A /* iOSCleanupApp.swift in Sources */,
+				AA000001000000000000002A /* ContentView.swift in Sources */,
+				AA000001000000000000003A /* PhotoGroup.swift in Sources */,
+				AA000001000000000000008A /* PhotoScanEngine.swift in Sources */,
+				AA000002000000000000001A /* PurchaseManager.swift in Sources */,
+				AA000003000000000000001A /* OnboardingView.swift in Sources */,
+				AA000004000000000000001A /* HomeView.swift in Sources */,
+				AA000004000000000000002A /* HomeViewModel.swift in Sources */,
+				AA000005000000000000001A /* PaywallView.swift in Sources */,
+				AA000006000000000000001A /* PhotoResultsView.swift in Sources */,
+				AA000006000000000000002A /* PhotoGroupDetailView.swift in Sources */,
+				AA00000B000000000000001A /* EmptyStateView.swift in Sources */,
+				AA00000C000000000000001A /* Font+PhotoDuck.swift in Sources */,
+				AA00000C000000000000003A /* DuckComponents.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000010000000000000902 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA00000100000000000000EA /* PhotoScanEngineTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AA0000010000000000000B01 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA0000010000000000000701 /* iOSCleanup */;
+			targetProxy = AA0000010000000000000B02 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		AA0000010000000000000D01 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+			};
+			name = Debug;
+		};
+		AA0000010000000000000D02 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		AA0000010000000000000D03 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = JTNQE5NB5K;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = iOSCleanup/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yourname.iOSCleanup;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		AA0000010000000000000D04 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = JTNQE5NB5K;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = iOSCleanup/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yourname.iOSCleanup;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		AA0000010000000000000D05 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yourname.iOSCleanupTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/iOSCleanup.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/iOSCleanup";
+			};
+			name = Debug;
+		};
+		AA0000010000000000000D06 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yourname.iOSCleanupTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/iOSCleanup.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/iOSCleanup";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AA0000010000000000000801 /* Build configuration list for PBXNativeTarget "iOSCleanup" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000010000000000000D03 /* Debug */,
+				AA0000010000000000000D04 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0000010000000000000802 /* Build configuration list for PBXNativeTarget "iOSCleanupTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000010000000000000D05 /* Debug */,
+				AA0000010000000000000D06 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0000010000000000000803 /* Build configuration list for PBXProject "iOSCleanup" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000010000000000000D01 /* Debug */,
+				AA0000010000000000000D02 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = AA0000010000000000000C01 /* Project object */;
+}
