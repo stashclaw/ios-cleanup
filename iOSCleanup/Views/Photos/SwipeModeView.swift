@@ -174,7 +174,13 @@ struct SwipeModeView: View {
 
 private struct DuckModeCompletion: View {
     @ObservedObject var viewModel: SwipeModeViewModel
+    @EnvironmentObject private var purchaseManager: PurchaseManager
     let onDismiss: () -> Void
+
+    @State private var showPaywall = false
+    @State private var isDeleting = false
+
+    private var hasPendingDeletes: Bool { viewModel.duckedCount > 0 && viewModel.deletedCount == 0 }
 
     var body: some View {
         VStack(spacing: 24) {
@@ -192,9 +198,31 @@ private struct DuckModeCompletion: View {
                 Text(error).font(.duckCaption).foregroundStyle(.red)
             }
             Spacer()
-            DuckPrimaryButton(title: "✓ Back to Library", action: onDismiss)
+            if hasPendingDeletes {
+                DuckPrimaryButton(
+                    title: purchaseManager.isPurchased
+                        ? (isDeleting ? "Deleting…" : "✕ Delete \(viewModel.duckedCount) photo\(viewModel.duckedCount == 1 ? "" : "s")")
+                        : "Delete Photos 🔒"
+                ) {
+                    if purchaseManager.isPurchased {
+                        isDeleting = true
+                        Task { await viewModel.commitDeletes(); isDeleting = false }
+                    } else {
+                        showPaywall = true
+                    }
+                }
+                .disabled(isDeleting)
+                .padding(.horizontal, 32)
+            }
+            DuckOutlineButton(title: "✓ Back to Library", color: .duckRose, action: onDismiss)
                 .padding(.horizontal, 32)
                 .padding(.bottom, 40)
+        }
+        .sheet(isPresented: $showPaywall) { PaywallView() }
+        .onReceive(NotificationCenter.default.publisher(for: .purchaseDidSucceed)) { _ in
+            showPaywall = false
+            isDeleting = true
+            Task { await viewModel.commitDeletes(); isDeleting = false }
         }
     }
 }
