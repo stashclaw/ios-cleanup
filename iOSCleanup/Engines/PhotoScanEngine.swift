@@ -4,6 +4,32 @@ import Vision
 actor PhotoScanEngine {
 
     static let similarityThreshold: Float = 0.12
+    private static let sessionGapSeconds: TimeInterval = 300
+    private static let bucketSize = 200
+    private static let bucketOverlap = 40
+
+    private struct PrintedAssetRecord: @unchecked Sendable {
+        let asset: PHAsset
+        let id: String
+        let fp: VNFeaturePrintObservation
+    }
+
+    private typealias PrintedAsset = PrintedAssetRecord
+
+    private struct ComparisonPair: Hashable, Sendable {
+        let lhs: String
+        let rhs: String
+
+        init(_ a: String, _ b: String) {
+            if a < b {
+                lhs = a
+                rhs = b
+            } else {
+                lhs = b
+                rhs = a
+            }
+        }
+    }
 
     nonisolated func scan() -> AsyncStream<Result<[PhotoGroup], Error>> {
         AsyncStream { continuation in
@@ -50,7 +76,7 @@ actor PhotoScanEngine {
                         }
                     }
 
-                    var groups = cluster(assets: assets, prints: prints)
+                    var groups = await clusteredFast(assets: assets, prints: prints)
                     groups += burstGroups(from: assets)
 
                     // De-duplicate by asset identifiers
@@ -117,7 +143,10 @@ actor PhotoScanEngine {
         }
     }
 
-    private nonisolated func cluster(assets: [PHAsset], prints: [String: VNFeaturePrintObservation]) -> [PhotoGroup] {
+    private nonisolated func clusteredFast(
+        assets: [PHAsset],
+        prints: [String: VNFeaturePrintObservation]
+    ) async -> [PhotoGroup] {
         let ids = assets.map { $0.localIdentifier }
         var parent = Dictionary(uniqueKeysWithValues: ids.map { ($0, $0) })
 
@@ -133,18 +162,41 @@ actor PhotoScanEngine {
             if ra != rb { parent[ra] = rb }
         }
 
-        let printList = ids.compactMap { id -> (String, VNFeaturePrintObservation)? in
-            guard let fp = prints[id] else { return nil }
-            return (id, fp)
-        }
+        let sessions = makeSessions(from: assets, prints: prints)
 
-        for i in 0..<printList.count {
-            for j in (i+1)..<printList.count {
-                var distance: Float = 0
-                try? printList[i].1.computeDistance(&distance, to: printList[j].1)
-                if distance < PhotoScanEngine.similarityThreshold {
-                    union(printList[i].0, printList[j].0)
+        for session in sessions where session.count >= 2 {
+            let sortedSession = session.sorted { scalarKey(for: $0.fp) < scalarKey(for: $1.fp) }
+            let buckets = makeBuckets(from: sortedSession)
+
+            let pairs = await withTaskGroup(of: [ComparisonPair].self) { group in
+                for bucket in buckets {
+                    group.addTask {
+                        guard bucket.count >= 2 else { return [] }
+
+                        var localPairs: [ComparisonPair] = []
+                        for i in 0..<(bucket.count - 1) {
+                            for j in (i + 1)..<bucket.count {
+                                var distance: Float = 0
+                                try? bucket[i].fp.computeDistance(&distance, to: bucket[j].fp)
+                                if distance < PhotoScanEngine.similarityThreshold {
+                                    localPairs.append(ComparisonPair(bucket[i].id, bucket[j].id))
+                                }
+                            }
+                        }
+                        return localPairs
+                    }
                 }
+
+                var collected: [ComparisonPair] = []
+                for await bucketPairs in group {
+                    collected.append(contentsOf: bucketPairs)
+                }
+                return collected
+            }
+
+            var seenPairs = Set<ComparisonPair>()
+            for pair in pairs where seenPairs.insert(pair).inserted {
+                union(pair.lhs, pair.rhs)
             }
         }
 
@@ -169,6 +221,67 @@ actor PhotoScanEngine {
 
             let reason: PhotoGroup.SimilarityReason = similarity < 0.05 ? .nearDuplicate : .visuallySimilar
             return PhotoGroup(id: UUID(), assets: sorted, similarity: similarity, reason: reason)
+        }
+    }
+
+    private nonisolated func makeSessions(
+        from assets: [PHAsset],
+        prints: [String: VNFeaturePrintObservation]
+    ) -> [[PrintedAsset]] {
+        var sessions: [[PrintedAsset]] = []
+        var currentSession: [PrintedAsset] = []
+        var previousDate: Date?
+
+        for asset in assets {
+            guard let fp = prints[asset.localIdentifier] else { continue }
+
+            let effectiveDate = asset.creationDate ?? previousDate ?? .distantPast
+            if let previousDate, effectiveDate.timeIntervalSince(previousDate) > Self.sessionGapSeconds,
+               !currentSession.isEmpty {
+                sessions.append(currentSession)
+                currentSession = []
+            }
+
+            currentSession.append(PrintedAsset(asset: asset, id: asset.localIdentifier, fp: fp))
+            previousDate = effectiveDate
+        }
+
+        if !currentSession.isEmpty {
+            sessions.append(currentSession)
+        }
+
+        return sessions
+    }
+
+    private nonisolated func makeBuckets(from session: [PrintedAsset]) -> [[PrintedAsset]] {
+        guard session.count >= 2 else { return [] }
+
+        if session.count <= Self.bucketSize {
+            return [session]
+        }
+
+        let step = max(1, Self.bucketSize - Self.bucketOverlap)
+        var buckets: [[PrintedAsset]] = []
+        var start = 0
+
+        while start < session.count {
+            let end = min(session.count, start + Self.bucketSize)
+            buckets.append(Array(session[start..<end]))
+            if end == session.count {
+                break
+            }
+            start += step
+        }
+
+        return buckets
+    }
+
+    private nonisolated func scalarKey(for observation: VNFeaturePrintObservation) -> Float {
+        let data = observation.data
+        guard data.count >= MemoryLayout<Float32>.size else { return 0 }
+
+        return data.withUnsafeBytes { rawBuffer in
+            rawBuffer.loadUnaligned(as: Float32.self)
         }
     }
 

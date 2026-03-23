@@ -10,9 +10,8 @@ struct iOSCleanupApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            StartupGateView(purchaseManager: purchaseManager)
                 .environmentObject(purchaseManager)
-                .task { await purchaseManager.updatePurchaseStatus() }
         }
     }
 
