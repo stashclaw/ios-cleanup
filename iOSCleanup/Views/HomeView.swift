@@ -36,13 +36,21 @@ struct HomeView: View {
 
     private var headerRow: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("PhotoDuck")
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(.white)
-                Text("Free up iPhone space")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.white.opacity(0.4))
+            HStack(spacing: 10) {
+                Image("DuckMascot")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 36, height: 36)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("PhotoDuck")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(.white)
+                    Text("Free up iPhone space")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(0.4))
+                }
             }
             Spacer()
             if !purchaseManager.isPurchased {
