@@ -7,29 +7,23 @@ struct HomeView: View {
     @State private var showPaywall = false
     @State private var showCompletion = false
 
+    private let bg = Color(red: 0.05, green: 0.05, blue: 0.08)
+
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 20) {
-                    heroCard
-                    categoryGrid
-                    scanButton
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 16)
-            }
-            .background(Color.duckBlush.ignoresSafeArea())
-            .navigationTitle("PhotoDuck")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    if !purchaseManager.isPurchased {
-                        Button("Unlock 🔒") { showPaywall = true }
-                            .font(.duckCaption)
-                            .foregroundStyle(Color.duckPink)
+            ZStack {
+                bg.ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: 20) {
+                        headerRow
+                        storageRingCard
+                        smartCleanButton
+                        categoryList
                     }
+                    .padding(.bottom, 32)
                 }
             }
+            .toolbar(.hidden, for: .navigationBar)
         }
         .sheet(isPresented: $showPaywall) { PaywallView().environmentObject(purchaseManager) }
         .sheet(isPresented: $showCompletion) { CompletionOverlay(viewModel: viewModel) }
@@ -38,146 +32,311 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Hero Card
+    // MARK: - Section 1: Header Row
 
-    private var heroCard: some View {
-        DuckCard {
-            HStack(spacing: 16) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 18)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.duckPink, Color.duckRose],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 72, height: 72)
-                    Image(systemName: "photo.stack.fill")
-                        .font(.title2)
+    private var headerRow: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("PhotoDuck")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(.white)
+                Text("Free up iPhone space")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.white.opacity(0.4))
+            }
+            Spacer()
+            if !purchaseManager.isPurchased {
+                Button("Unlock 🔒") { showPaywall = true }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.8))
+                    .padding(.vertical, 7)
+                    .padding(.horizontal, 14)
+                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.15)))
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 16)
+    }
+
+    // MARK: - Section 2: Storage Ring Card
+
+    private var storageRingCard: some View {
+        HStack(spacing: 20) {
+            ZStack {
+                Circle()
+                    .stroke(Color.white.opacity(0.06), lineWidth: 10)
+                Circle()
+                    .trim(from: 0, to: viewModel.storageUsedFraction)
+                    .stroke(
+                        AngularGradient(
+                            colors: [Color(red: 1, green: 0.42, blue: 0.67), Color(red: 0.45, green: 0.4, blue: 1)],
+                            center: .center
+                        ),
+                        style: StrokeStyle(lineWidth: 10, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+                VStack(spacing: 2) {
+                    Text("\(Int(viewModel.storageUsedFraction * 100))%")
+                        .font(.system(size: 19, weight: .bold))
+                        .foregroundStyle(.white)
+                    Text("used")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.white.opacity(0.4))
+                }
+            }
+            .frame(width: 100, height: 100)
+
+            VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Total Storage")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(0.4))
+                    Text(viewModel.storageTotalStripped)
+                        .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(.white)
                 }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Find duplicate photos")
-                        .font(.duckTitle)
-                        .foregroundStyle(Color.duckBerry)
-                    Text("Review near duplicates, similar shots, and bursts in one place.")
-                        .font(.duckCaption)
-                        .foregroundStyle(Color.duckRose)
-                        .fixedSize(horizontal: false, vertical: true)
+                Divider().overlay(Color.white.opacity(0.07))
+                HStack(spacing: 0) {
+                    storageStatColumn(value: viewModel.storageUsedStripped, label: "Used",
+                                      color: .white)
+                    storageStatColumn(value: viewModel.storageFreeFormatted, label: "Free",
+                                      color: Color(red: 0.29, green: 0.85, blue: 0.6))
+                    storageStatColumn(value: viewModel.reclaimableFormatted, label: "Junk",
+                                      color: Color(red: 1, green: 0.42, blue: 0.67))
                 }
-
-                Spacer()
             }
-            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(20)
+        .background(Color(white: 1, opacity: 0.05), in: RoundedRectangle(cornerRadius: 24))
+        .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(Color(white: 1, opacity: 0.08)))
+        .padding(.horizontal, 20)
     }
 
-    // MARK: - Category Grid
-
-    private var categoryGrid: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
-            CategoryCell(
-                icon: "photo.on.rectangle", color: .duckPink,
-                name: "Duplicates",
-                count: viewModel.photoGroups.count,
-                state: viewModel.photoScanState,
-                destination: { PhotoResultsView(groups: viewModel.photoGroups).environmentObject(purchaseManager) }
-            )
-            CategoryCell(
-                icon: "rectangle.stack", color: .duckOrange,
-                name: "Similar",
-                count: viewModel.similarCount,
-                state: viewModel.photoScanState,
-                destination: { PhotoResultsView(groups: viewModel.photoGroups).environmentObject(purchaseManager) }
-            )
+    private func storageStatColumn(value: String, label: String, color: Color) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(color)
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(Color.white.opacity(0.4))
         }
+        .frame(maxWidth: .infinity)
     }
 
-    // MARK: - Scan button
+    // MARK: - Section 3: Smart Clean Button
 
-    private var scanButton: some View {
-        VStack(spacing: 8) {
-            if viewModel.isAnyScanning {
-                HStack(spacing: 10) {
-                    ProgressView().tint(Color.duckPink)
-                    Text("Scanning…")
-                        .font(.duckBody)
-                        .foregroundStyle(Color.duckRose)
+    private var smartCleanButton: some View {
+        Button {
+            Task {
+                await withTaskGroup(of: Void.self) { group in
+                    group.addTask { await viewModel.scanPhotos() }
+                    group.addTask { await viewModel.scanContacts() }
+                    group.addTask { await viewModel.scanFiles() }
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 15)
-                .background(Color.duckSoftPink.opacity(0.4), in: RoundedRectangle(cornerRadius: 50))
-            } else {
-                DuckPrimaryButton(title: "✦ Start Cleaning") {
-                    Task {
-                        await viewModel.scanPhotos()
+            }
+        } label: {
+            Group {
+                if viewModel.isAnyScanning {
+                    HStack(spacing: 10) {
+                        ProgressView().tint(.white)
+                        Text("Scanning…")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(.white)
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .padding(.horizontal, 20)
+                } else {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Smart Clean")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundStyle(.white)
+                            Text("Scan all categories at once")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Color.white.opacity(0.75))
+                        }
+                        Spacer()
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.white.opacity(0.2))
+                            .frame(width: 40, height: 40)
+                            .overlay(
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(.white)
+                            )
+                    }
+                    .padding(.vertical, 16)
+                    .padding(.horizontal, 20)
                 }
             }
+            .background(
+                LinearGradient(
+                    colors: [Color(red: 1, green: 0.42, blue: 0.67), Color(red: 0.45, green: 0.4, blue: 1)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .opacity(viewModel.isAnyScanning ? 0.5 : 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 18))
+        }
+        .disabled(viewModel.isAnyScanning)
+        .padding(.horizontal, 20)
+    }
+
+    // MARK: - Section 4: Category List
+
+    private var categoryList: some View {
+        VStack(spacing: 10) {
+            HStack {
+                Text("Categories")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                Spacer()
+                Text("4 tools")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.white.opacity(0.35))
+            }
+            .padding(.horizontal, 24)
+
+            VStack(spacing: 10) {
+                CategoryRow(
+                    icon: "doc.on.doc",
+                    iconColor: Color(red: 1, green: 0.42, blue: 0.67),
+                    iconBg: Color(red: 1, green: 0.42, blue: 0.67).opacity(0.15),
+                    name: "Duplicates",
+                    subtitle: "Near-identical photos",
+                    count: viewModel.photoGroups.count,
+                    state: viewModel.photoScanState
+                ) {
+                    PhotoResultsView(groups: viewModel.photoGroups).environmentObject(purchaseManager)
+                }
+                CategoryRow(
+                    icon: "photo.on.rectangle.angled",
+                    iconColor: Color(red: 0.98, green: 0.57, blue: 0.24),
+                    iconBg: Color(red: 0.98, green: 0.57, blue: 0.24).opacity(0.15),
+                    name: "Similar",
+                    subtitle: "Visually alike shots",
+                    count: viewModel.photoGroups.filter { $0.reason == .visuallySimilar }.count,
+                    state: viewModel.photoScanState
+                ) {
+                    PhotoResultsView(groups: viewModel.photoGroups).environmentObject(purchaseManager)
+                }
+                CategoryRow(
+                    icon: "person.2.fill",
+                    iconColor: Color(red: 0.55, green: 0.36, blue: 0.96),
+                    iconBg: Color(red: 0.55, green: 0.36, blue: 0.96).opacity(0.15),
+                    name: "Contacts",
+                    subtitle: "Duplicate entries",
+                    count: viewModel.contactMatches.count,
+                    state: viewModel.contactScanState
+                ) {
+                    ContactResultsView(matches: viewModel.contactMatches).environmentObject(purchaseManager)
+                }
+                CategoryRow(
+                    icon: "video.fill",
+                    iconColor: Color(red: 0.2, green: 0.83, blue: 0.6),
+                    iconBg: Color(red: 0.2, green: 0.83, blue: 0.6).opacity(0.15),
+                    name: "Large Videos",
+                    subtitle: "Files over 50 MB",
+                    count: viewModel.largeFiles.count,
+                    state: viewModel.fileScanState
+                ) {
+                    FileResultsView(files: viewModel.largeFiles).environmentObject(purchaseManager)
+                }
+            }
+            .padding(.horizontal, 20)
         }
     }
 }
 
-// MARK: - Category Cell
+// MARK: - Category Row
 
-private struct CategoryCell<Destination: View>: View {
+private struct CategoryRow<Destination: View>: View {
     let icon: String
-    let color: Color
+    let iconColor: Color
+    let iconBg: Color
     let name: String
+    let subtitle: String
     let count: Int
     let state: HomeViewModel.ScanState
     @ViewBuilder let destination: () -> Destination
 
-    var body: some View {
-        DuckCard {
-            Group {
-                if case .done = state, count > 0 {
-                    NavigationLink(destination: destination) { cellContent }
-                } else {
-                    cellContent
-                }
-            }
-            .padding(14)
-        }
+    private var isNavigable: Bool {
+        if case .done = state { return count > 0 }
+        return false
     }
 
-    private var cellContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: icon)
-                    .font(.title3)
-                    .foregroundStyle(color)
-                Spacer()
-                if case .done = state {
-                    Image(systemName: "chevron.right")
-                        .font(.caption.bold())
-                        .foregroundStyle(Color.duckSoftPink)
-                }
+    var body: some View {
+        Group {
+            if isNavigable {
+                NavigationLink(destination: destination) { rowContent }
+            } else {
+                rowContent
             }
-            Text(name)
-                .font(.duckBody)
-                .foregroundStyle(Color.duckBerry)
-            stateLabel
         }
+        .background(Color(white: 1, opacity: 0.05), in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color(white: 1, opacity: 0.07)))
+    }
+
+    private var rowContent: some View {
+        HStack(spacing: 14) {
+            RoundedRectangle(cornerRadius: 14)
+                .fill(iconBg)
+                .frame(width: 46, height: 46)
+                .overlay(
+                    Image(systemName: icon)
+                        .font(.system(size: 20))
+                        .foregroundStyle(iconColor)
+                )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                Text(subtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.white.opacity(0.4))
+            }
+
+            Spacer()
+
+            VStack(spacing: 4) {
+                badgeView
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(Color.white.opacity(0.2))
+            }
+        }
+        .padding(14)
     }
 
     @ViewBuilder
-    private var stateLabel: some View {
+    private var badgeView: some View {
         switch state {
         case .idle:
             Text("—")
-                .font(.duckHeading)
-                .foregroundStyle(Color.duckSoftPink)
+                .font(.system(size: 13))
+                .foregroundStyle(Color.white.opacity(0.3))
         case .scanning:
-            ProgressView().tint(color).scaleEffect(0.75)
+            ProgressView()
+                .tint(iconColor)
+                .scaleEffect(0.7)
         case .done:
-            Text("\(count)")
-                .font(Font.custom("FredokaOne-Regular", size: 20))
-                .foregroundStyle(count > 0 ? color : Color.duckSoftPink)
+            if count > 0 {
+                Text("\(count)")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(iconColor)
+            } else {
+                Text("0")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.white.opacity(0.25))
+            }
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 13))
                 .foregroundStyle(.red)
         }
     }
@@ -191,11 +350,11 @@ private struct CompletionOverlay: View {
 
     var body: some View {
         ScrollView {
-                VStack(spacing: 28) {
-                    RoundedRectangle(cornerRadius: 28)
-                        .fill(Color.duckYellow)
-                        .frame(width: 160, height: 160)
-                        .padding(.top, 40)
+            VStack(spacing: 28) {
+                RoundedRectangle(cornerRadius: 28)
+                    .fill(Color.duckYellow)
+                    .frame(width: 160, height: 160)
+                    .padding(.top, 40)
 
                 VStack(spacing: 6) {
                     Text("All cleaned up! ✦")
@@ -207,10 +366,10 @@ private struct CompletionOverlay: View {
                 }
 
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
-                    StatCell(label: "Groups Found", value: "\(viewModel.photoGroups.count)", color: .duckPink)
-                    StatCell(label: "Duplicates", value: "\(viewModel.nearDuplicateCount)", color: .duckOrange)
-                    StatCell(label: "Near Duplicates", value: "\(viewModel.nearDuplicateCount)", color: .duckBerry)
-                    StatCell(label: "Similar", value: "\(viewModel.similarCount)", color: .green)
+                    StatCell(label: "GB Freed", value: viewModel.reclaimableFormatted, color: .duckPink)
+                    StatCell(label: "Photos Removed", value: "\(viewModel.photoGroups.count)", color: .duckOrange)
+                    StatCell(label: "Contacts Merged", value: "\(viewModel.contactMatches.count)", color: .duckBerry)
+                    StatCell(label: "Videos Compressed", value: "\(viewModel.largeFiles.count)", color: .green)
                 }
                 .padding(.horizontal)
 
@@ -242,5 +401,21 @@ private struct StatCell: View {
             .padding(14)
             .frame(maxWidth: .infinity)
         }
+    }
+}
+
+// MARK: - HomeViewModel extension
+
+extension HomeViewModel {
+    var storageFreeFormatted: String {
+        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        let free = (attrs?[.systemFreeSize] as? Int64) ?? 0
+        return ByteCountFormatter.string(fromByteCount: free, countStyle: .file)
+    }
+    var storageTotalStripped: String {
+        storageTotalFormatted.replacingOccurrences(of: " total", with: "")
+    }
+    var storageUsedStripped: String {
+        storageUsedFormatted.replacingOccurrences(of: " used", with: "")
     }
 }
