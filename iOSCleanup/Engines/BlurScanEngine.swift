@@ -1,14 +1,14 @@
 import Photos
 import UIKit
-import CoreImage
-import Accelerate
+import CoreGraphics
 
 struct BlurAnalyzer {
 
-    static func laplacianVariance(from cgImage: CGImage) -> Double? {
+    /// Returns the Laplacian variance of a grayscale image — lower = blurrier.
+    static func laplacianVariance(from cgImage: CGImage) -> Double {
         let width = cgImage.width
         let height = cgImage.height
-        guard width > 0, height > 0 else { return nil }
+        guard width > 2, height > 2 else { return 0 }
 
         guard let context = CGContext(
             data: nil,
@@ -18,60 +18,33 @@ struct BlurAnalyzer {
             bytesPerRow: width,
             space: CGColorSpaceCreateDeviceGray(),
             bitmapInfo: CGImageAlphaInfo.none.rawValue
-        ) else { return nil }
+        ) else { return 0 }
 
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        guard let data = context.data else { return nil }
+        guard let data = context.data else { return 0 }
 
         let pixels = data.bindMemory(to: UInt8.self, capacity: width * height)
-        var floatPixels = [Float](repeating: 0, count: width * height)
-        for i in 0..<(width * height) {
-            floatPixels[i] = Float(pixels[i])
-        }
 
-        let kernel: [Float] = [
-            0,  1,  0,
-            1, -4,  1,
-            0,  1,  0
-        ]
+        // 3×3 Laplacian kernel: centre - 4 neighbours
+        var sum: Double = 0
+        var sumSq: Double = 0
+        let count = (width - 2) * (height - 2)
 
-        var output = [Float](repeating: 0, count: width * height)
-        floatPixels.withUnsafeBufferPointer { srcBuf in
-            output.withUnsafeMutableBufferPointer { dstBuf in
-                var srcBuffer = vImage_Buffer(
-                    data: UnsafeMutableRawPointer(mutating: srcBuf.baseAddress!),
-                    height: vImagePixelCount(height),
-                    width: vImagePixelCount(width),
-                    rowBytes: width * MemoryLayout<Float>.size
-                )
-                var dstBuffer = vImage_Buffer(
-                    data: dstBuf.baseAddress!,
-                    height: vImagePixelCount(height),
-                    width: vImagePixelCount(width),
-                    rowBytes: width * MemoryLayout<Float>.size
-                )
-                kernel.withUnsafeBufferPointer { kBuf in
-                    vImageConvolve_PlanarF(
-                        &srcBuffer,
-                        &dstBuffer,
-                        nil,
-                        0, 0,
-                        kBuf.baseAddress!,
-                        3, 3,
-                        0,
-                        vImage_Flags(kvImageEdgeExtend)
-                    )
-                }
+        for row in 1..<(height - 1) {
+            for col in 1..<(width - 1) {
+                let c = Int(pixels[row * width + col])
+                let n = Int(pixels[(row - 1) * width + col])
+                let s = Int(pixels[(row + 1) * width + col])
+                let w = Int(pixels[row * width + (col - 1)])
+                let e = Int(pixels[row * width + (col + 1)])
+                let lap = Double(4 * c - n - s - w - e)
+                sum += lap
+                sumSq += lap * lap
             }
         }
 
-        let count = width * height
-        var mean: Float = 0
-        var meanSq: Float = 0
-        vDSP_meanv(output, 1, &mean, vDSP_Length(count))
-        vDSP_measqv(output, 1, &meanSq, vDSP_Length(count))
-        let variance = Double(meanSq - mean * mean)
-        return variance
+        let mean = sum / Double(count)
+        return sumSq / Double(count) - mean * mean
     }
 }
 
@@ -108,9 +81,7 @@ actor BlurScanEngine {
                         }
 
                         for await (asset, isBlurry) in group {
-                            if isBlurry {
-                                blurry.append(asset)
-                            }
+                            if isBlurry { blurry.append(asset) }
                             completed += 1
                             continuation.yield(.progress(completed: completed, total: total))
                             if nextIndex < assets.count {
@@ -138,15 +109,11 @@ actor BlurScanEngine {
         guard status == .authorized || status == .limited else {
             throw ScanError.permissionDenied
         }
-
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-
         let result = PHAsset.fetchAssets(with: .image, options: options)
         var assets: [PHAsset] = []
-        result.enumerateObjects { asset, _, _ in
-            assets.append(asset)
-        }
+        result.enumerateObjects { asset, _, _ in assets.append(asset) }
         return assets
     }
 
@@ -167,7 +134,7 @@ actor BlurScanEngine {
                     continuation.resume(returning: false)
                     return
                 }
-                let variance = BlurAnalyzer.laplacianVariance(from: cgImage) ?? Double.infinity
+                let variance = BlurAnalyzer.laplacianVariance(from: cgImage)
                 continuation.resume(returning: variance < Self.blurThreshold)
             }
         }
