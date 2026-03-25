@@ -2,65 +2,100 @@ import SwiftUI
 import Photos
 
 struct PhotoResultsView: View {
-    let groups: [PhotoGroup]
+    let title: String
+    let groups: [PhotoGroup]   // snapshot — used only for GroupReviewViewModel init
     @EnvironmentObject private var purchaseManager: PurchaseManager
+    @EnvironmentObject private var homeViewModel: HomeViewModel
+    @StateObject private var reviewVM: GroupReviewViewModel
+
+    init(title: String = "Photos", groups: [PhotoGroup]) {
+        self.title  = title
+        self.groups = groups
+        _reviewVM = StateObject(wrappedValue: GroupReviewViewModel(groups: groups))
+    }
 
     @State private var selectedGroups = Set<UUID>()
     @State private var isSelectMode = false
     @State private var showPaywall = false
-    @State private var showSwipeMode = false
+    @State private var showReviewMode = false
     @State private var deletionError: String?
     @State private var activeFilter: FilterPill = .all
+    @State private var visibleCount = 10
+
+    // Card dimensions derived from screen width — GeometryReader-free per CLAUDE.md
+    // 16+16 outer padding + 12 gap between columns = 44pt total
+    private let cardPt: CGFloat = (UIScreen.main.bounds.width - 44) / 2
+    // Each tile in the 2×2 mosaic: half card minus the 2pt intra-tile gap
+    private var tilePt: CGFloat { (cardPt - 2) / 2 }
+    private var tilePx: CGFloat { tilePt * UIScreen.main.scale }
+    private let labelH: CGFloat = 0
+
+    /// Live groups from the view model, filtered by this view's category.
+    private var liveGroups: [PhotoGroup] {
+        if title == "Duplicates" {
+            return homeViewModel.photoGroups.filter { $0.reason != .visuallySimilar }
+        }
+        return homeViewModel.photoGroups.filter { $0.reason == .visuallySimilar }
+    }
 
     enum FilterPill: String, CaseIterable {
-        case all = "All"
-        case exactDuplicate = "Exact Duplicates"
-        case nearDuplicate = "Near Duplicates"
-        case similar = "Similar"
-        case burst = "Burst"
+        case all            = "All"
+        case exactDuplicate = "Exact"
+        case nearDuplicate  = "Near"
+        case similar        = "Similar"
+        case burst          = "Burst"
+    }
+
+    /// Only show pills for reasons that actually exist in the live groups.
+    private var availableFilters: [FilterPill] {
+        let reasons = Set(liveGroups.map(\.reason))
+        var pills: [FilterPill] = [.all]
+        if reasons.contains(.exactDuplicate)  { pills.append(.exactDuplicate) }
+        if reasons.contains(.nearDuplicate)   { pills.append(.nearDuplicate) }
+        if reasons.contains(.visuallySimilar) { pills.append(.similar) }
+        if reasons.contains(.burstShot)       { pills.append(.burst) }
+        return pills
     }
 
     private var filteredGroups: [PhotoGroup] {
         switch activeFilter {
-        case .all:           return groups
-        case .exactDuplicate: return groups.filter { $0.reason == .exactDuplicate }
-        case .nearDuplicate: return groups.filter { $0.reason == .nearDuplicate }
-        case .similar:       return groups.filter { $0.reason == .visuallySimilar }
-        case .burst:         return groups.filter { $0.reason == .burstShot }
+        case .all:            return liveGroups
+        case .exactDuplicate: return liveGroups.filter { $0.reason == .exactDuplicate }
+        case .nearDuplicate:  return liveGroups.filter { $0.reason == .nearDuplicate }
+        case .similar:        return liveGroups.filter { $0.reason == .visuallySimilar }
+        case .burst:          return liveGroups.filter { $0.reason == .burstShot }
         }
-    }
-
-    private var reclaimableBytes: Int64 {
-        let assets = groups.flatMap { Array($0.assets.dropFirst()) }
-        return assets.reduce(Int64(0)) { acc, a in acc + Int64(a.pixelWidth * a.pixelHeight / 100) }
     }
 
     var body: some View {
         Group {
-            if groups.isEmpty {
+            if liveGroups.isEmpty && homeViewModel.photoScanState != .scanning {
                 EmptyStateView(title: "No Duplicates Found", icon: "photo.on.rectangle.angled",
                                message: "Your photo library looks clean.")
             } else {
                 ScrollView {
-                    VStack(spacing: 16) {
+                    VStack(spacing: 14) {
+                        if homeViewModel.photoScanState == .scanning {
+                            ScanningBanner(message: "Finding \(title.lowercased())…", color: Color.duckPink)
+                        }
                         heroCard
                         filterPills
                         if let error = deletionError {
                             Text(error).font(.duckCaption).foregroundStyle(.red).padding(.horizontal)
                         }
-                        groupList
+                        groupGrid
                     }
-                    .padding(.horizontal)
-                    .padding(.vertical, 12)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
                 }
                 .background(Color.duckBlush.ignoresSafeArea())
             }
         }
-        .navigationTitle("Similar Photos")
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                Button("Duck Mode") { showSwipeMode = true }
+                Button("Review All") { showReviewMode = true }
                     .font(.duckCaption)
                     .foregroundStyle(Color.duckPink)
 
@@ -72,11 +107,24 @@ struct PhotoResultsView: View {
                     .disabled(selectedGroups.isEmpty)
                     .foregroundStyle(Color.duckRose)
                 } else {
-                    Button(purchaseManager.isPurchased ? "Select" : "Select 🔒") {
-                        guard purchaseManager.isPurchased else { showPaywall = true; return }
-                        isSelectMode = true
+                    Menu {
+                        Button(purchaseManager.isPurchased ? "Select Photos" : "Select Photos 🔒") {
+                            guard purchaseManager.isPurchased else { showPaywall = true; return }
+                            isSelectMode = true
+                        }
+                        Button(role: .destructive) {
+                            guard purchaseManager.isPurchased else { showPaywall = true; return }
+                            reviewVM.queueAll()
+                        } label: {
+                            Label(
+                                purchaseManager.isPurchased ? "Queue All for Delete" : "Queue All 🔒",
+                                systemImage: "trash"
+                            )
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .foregroundStyle(Color.duckPink)
                     }
-                    .foregroundStyle(Color.duckPink)
                 }
             }
             if isSelectMode {
@@ -90,12 +138,50 @@ struct PhotoResultsView: View {
             }
         }
         .sheet(isPresented: $showPaywall) { PaywallView().environmentObject(purchaseManager) }
-        .fullScreenCover(isPresented: $showSwipeMode) {
-            SwipeModeView(groups: groups).environmentObject(purchaseManager)
+        .fullScreenCover(isPresented: $showReviewMode) {
+            GroupReviewView(viewModel: reviewVM).environmentObject(purchaseManager)
         }
         .onReceive(NotificationCenter.default.publisher(for: .purchaseDidSucceed)) { _ in
             showPaywall = false
         }
+        .onChange(of: activeFilter) { _ in visibleCount = 10 }
+        .overlay(alignment: .bottom) {
+            if reviewVM.markedIDs.count > 0 { floatingDeleteBar }
+        }
+    }
+
+    // MARK: - Floating delete bar
+
+    private var floatingDeleteBar: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(reviewVM.markedIDs.count) photo\(reviewVM.markedIDs.count == 1 ? "" : "s") · \(reviewVM.markedGroupCount) group\(reviewVM.markedGroupCount == 1 ? "" : "s")")
+                    .font(.duckCaption.bold())
+                    .foregroundStyle(.white)
+                Text("queued for delete")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.white.opacity(0.5))
+            }
+            Spacer()
+            Button {
+                guard purchaseManager.isPurchased else { showPaywall = true; return }
+                Task {
+                    do { try await reviewVM.commitDeletes() }
+                    catch { deletionError = error.localizedDescription }
+                }
+            } label: {
+                Text(purchaseManager.isPurchased ? "Delete All" : "Delete 🔒")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 9)
+                    .background(Color.duckRose, in: Capsule())
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) { Divider() }
     }
 
     // MARK: - Hero card
@@ -104,10 +190,12 @@ struct PhotoResultsView: View {
         DuckCard {
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(groups.count)")
+                    Text("\(filteredGroups.count)")
                         .font(Font.custom("FredokaOne-Regular", size: 32))
                         .foregroundStyle(Color.duckPink)
-                    Text("groups to review")
+                    Text(activeFilter == .all
+                         ? "groups to review"
+                         : "\(filteredGroups.count) of \(groups.count) total")
                         .font(.duckCaption)
                         .foregroundStyle(Color.duckRose)
                 }
@@ -122,63 +210,84 @@ struct PhotoResultsView: View {
 
     // MARK: - Filter pills
 
+    @ViewBuilder
     private var filterPills: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-                ForEach(FilterPill.allCases, id: \.self) { pill in
-                    Button(pill.rawValue) {
-                        activeFilter = pill
+        if availableFilters.count > 2 {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(availableFilters, id: \.self) { pill in
+                        Button(pill.rawValue) { activeFilter = pill }
+                            .font(.duckCaption)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(
+                                activeFilter == pill ? Color.duckPink : Color.duckCream,
+                                in: Capsule()
+                            )
+                            .foregroundStyle(activeFilter == pill ? Color.white : Color.duckRose)
                     }
-                    .font(.duckCaption)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(
-                        activeFilter == pill ? Color.duckPink : Color.duckCream,
-                        in: Capsule()
-                    )
-                    .foregroundStyle(activeFilter == pill ? Color.white : Color.duckRose)
                 }
+                .padding(.horizontal, 2)
             }
-            .padding(.horizontal, 2)
         }
     }
 
-    // MARK: - Group list
+    // MARK: - Group grid
 
-    private var groupList: some View {
-        VStack(spacing: 12) {
-            ForEach(filteredGroups) { group in
-                DuckCard {
-                    NavigationLink(destination: PhotoGroupDetailView(group: group).environmentObject(purchaseManager)) {
-                        GroupRow(
-                            group: group,
-                            isSelected: selectedGroups.contains(group.id),
-                            isSelectMode: isSelectMode
+    private var groupGrid: some View {
+        let gap: CGFloat = 12
+        let columns = [GridItem(.fixed(cardPt), spacing: gap),
+                       GridItem(.fixed(cardPt), spacing: gap)]
+        let visibleGroups = Array(filteredGroups.prefix(visibleCount))
+        return LazyVGrid(columns: columns, spacing: gap) {
+            ForEach(Array(visibleGroups.enumerated()), id: \.element.id) { index, group in
+                let selected = selectedGroups.contains(group.id)
+                GroupCard(
+                    group: group,
+                    cardPt: cardPt, tilePt: tilePt, tilePx: tilePx,
+                    isSelected: selected,
+                    isSelectMode: isSelectMode,
+                    onSelect: {
+                        if selected { selectedGroups.remove(group.id) }
+                        else { selectedGroups.insert(group.id) }
+                    },
+                    destination: {
+                        PhotoGroupDetailView(
+                            groups: filteredGroups,
+                            startIndex: index,
+                            markedIDs: $reviewVM.markedIDs
                         )
-                        .contentShape(Rectangle())
+                        .environmentObject(purchaseManager)
                     }
-                    .simultaneousGesture(TapGesture().onEnded {
-                        if isSelectMode {
-                            if selectedGroups.contains(group.id) {
-                                selectedGroups.remove(group.id)
-                            } else {
-                                selectedGroups.insert(group.id)
-                            }
-                        }
-                    })
-                    .padding(14)
-                }
+                )
+            }
+            if visibleCount < filteredGroups.count {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
+                    .gridCellColumns(2)
+                    .onAppear { visibleCount += 10 }
             }
         }
     }
+
+    // MARK: - Bulk delete
 
     private func bulkDelete() async {
-        let toDelete = groups
+        let toDelete = liveGroups
             .filter { selectedGroups.contains($0.id) }
             .flatMap { Array($0.assets.dropFirst()) }
+        let bytes = toDelete.reduce(Int64(0)) { sum, asset in
+            let size = PHAssetResource.assetResources(for: asset)
+                .first.flatMap { $0.value(forKey: "fileSize") as? Int64 } ?? 0
+            return sum + size
+        }
         do {
             try await PHPhotoLibrary.shared().performChanges {
                 PHAssetChangeRequest.deleteAssets(toDelete as NSFastEnumeration)
+            }
+            if bytes > 0 {
+                NotificationCenter.default.post(name: .didFreeBytes, object: nil, userInfo: ["bytes": bytes])
             }
             selectedGroups.removeAll()
             isSelectMode = false
@@ -188,81 +297,181 @@ struct PhotoResultsView: View {
     }
 }
 
-// MARK: - Group Row
+// MARK: - Shared thumbnail cache
 
-private struct GroupRow: View {
+private let _groupCardCache: NSCache<NSString, UIImage> = {
+    let c = NSCache<NSString, UIImage>()
+    c.countLimit = 600
+    c.totalCostLimit = 80 * 1024 * 1024
+    return c
+}()
+
+// MARK: - Group Card (2×2 photo mosaic + label strip)
+
+private struct GroupCard<Destination: View>: View {
     let group: PhotoGroup
+    let cardPt: CGFloat
+    let tilePt: CGFloat
+    let tilePx: CGFloat
     let isSelected: Bool
     let isSelectMode: Bool
+    let onSelect: () -> Void
+    @ViewBuilder let destination: () -> Destination
 
-    @State private var thumbnail: UIImage?
+    private let radius: CGFloat = 16
+    private let tileGap: CGFloat = 2
 
     var body: some View {
-        HStack(spacing: 12) {
-            thumbnailStack
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(reasonLabel)
-                    .font(.duckBody)
-                    .foregroundStyle(Color.duckBerry)
-                Text("\(group.assets.count) photos")
-                    .font(.duckCaption)
-                    .foregroundStyle(Color.duckRose)
+        ZStack(alignment: .topTrailing) {
+            // Card body — NavigationLink wraps when not selecting
+            if isSelectMode {
+                cardBody.onTapGesture { onSelect() }
+            } else {
+                NavigationLink(destination: destination()) {
+                    cardBody
+                }
+                .buttonStyle(.plain)
             }
 
-            Spacer()
-
+            // Select-mode checkmark badge
             if isSelectMode {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(isSelected ? Color.duckPink : Color.duckSoftPink)
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle.fill")
                     .font(.title3)
-            } else {
-                Image(systemName: "chevron.right")
-                    .font(.caption.bold())
-                    .foregroundStyle(Color.duckSoftPink)
+                    .foregroundStyle(isSelected ? Color.duckPink : Color.white.opacity(0.85))
+                    .shadow(radius: 2)
+                    .padding(8)
+                    .allowsHitTesting(false) // let the tap-gesture above fire
             }
         }
-        .task { thumbnail = await loadThumbnail(for: group.assets.first) }
+        .frame(width: cardPt, height: cardPt)
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .strokeBorder(
+                    isSelected ? Color.duckPink : Color.duckSoftPink.opacity(0.4),
+                    lineWidth: isSelected ? 2.5 : 1
+                )
+        )
+        .shadow(color: Color.duckPink.opacity(0.10), radius: 6, x: 0, y: 3)
     }
 
-    private var thumbnailStack: some View {
-        ZStack {
-            ForEach(0..<min(3, group.assets.count), id: \.self) { i in
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.duckSoftPink.opacity(0.4))
-                    .frame(width: 48, height: 48)
-                    .offset(x: CGFloat(i) * 4, y: CGFloat(-i) * 4)
+    private var cardBody: some View {
+        ZStack(alignment: .bottomTrailing) {
+            mosaicArea
+                .frame(width: cardPt, height: cardPt)
+                .clipped()
+
+            // Count badge overlay
+            Text("\(group.assets.count)")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(minWidth: 22, minHeight: 22)
+                .padding(.horizontal, 5)
+                .background(Color.duckPink, in: Capsule())
+                .padding(8)
+        }
+    }
+
+    @ViewBuilder
+    private var mosaicArea: some View {
+        let slots = Array(group.assets.prefix(4))
+        switch slots.count {
+        case 1:
+            MosaicTile(asset: slots[0], sizePt: cardPt, sizePx: cardPt * UIScreen.main.scale,
+                       cacheKey: key(0))
+                .frame(width: cardPt, height: cardPt)
+
+        case 2:
+            HStack(spacing: tileGap) {
+                MosaicTile(asset: slots[0], sizePt: tilePt, sizePx: tilePx, cacheKey: key(0))
+                    .frame(width: tilePt, height: cardPt)
+                MosaicTile(asset: slots[1], sizePt: tilePt, sizePx: tilePx, cacheKey: key(1))
+                    .frame(width: tilePt, height: cardPt)
             }
+
+        case 3:
+            HStack(spacing: tileGap) {
+                MosaicTile(asset: slots[0], sizePt: tilePt, sizePx: tilePx, cacheKey: key(0))
+                    .frame(width: tilePt, height: cardPt)
+                VStack(spacing: tileGap) {
+                    MosaicTile(asset: slots[1], sizePt: tilePt, sizePx: tilePx, cacheKey: key(1))
+                        .frame(width: tilePt, height: tilePt)
+                    MosaicTile(asset: slots[2], sizePt: tilePt, sizePx: tilePx, cacheKey: key(2))
+                        .frame(width: tilePt, height: tilePt)
+                }
+            }
+
+        default: // 4 tiles — 2×2
+            VStack(spacing: tileGap) {
+                HStack(spacing: tileGap) {
+                    MosaicTile(asset: slots[0], sizePt: tilePt, sizePx: tilePx, cacheKey: key(0))
+                        .frame(width: tilePt, height: tilePt)
+                    MosaicTile(asset: slots[1], sizePt: tilePt, sizePx: tilePx, cacheKey: key(1))
+                        .frame(width: tilePt, height: tilePt)
+                }
+                HStack(spacing: tileGap) {
+                    MosaicTile(asset: slots[2], sizePt: tilePt, sizePx: tilePx, cacheKey: key(2))
+                        .frame(width: tilePt, height: tilePt)
+                    MosaicTile(asset: slots[3], sizePt: tilePt, sizePx: tilePx, cacheKey: key(3))
+                        .frame(width: tilePt, height: tilePt)
+                }
+            }
+        }
+    }
+
+    private func key(_ index: Int) -> NSString {
+        "\(group.id.uuidString)_\(index)_mosaic" as NSString
+    }
+}
+
+// MARK: - Mosaic tile (self-loading, cancellable, fixed size)
+
+private struct MosaicTile: View {
+    let asset: PHAsset
+    let sizePt: CGFloat
+    let sizePx: CGFloat
+    let cacheKey: NSString
+
+    @State private var thumbnail: UIImage?
+    @State private var requestID: PHImageRequestID?
+
+    var body: some View {
+        ZStack {
+            Color(red: 0.15, green: 0.15, blue: 0.18)
             if let img = thumbnail {
                 Image(uiImage: img)
                     .resizable()
                     .scaledToFill()
-                    .frame(width: 48, height: 48)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                ProgressView().scaleEffect(0.5).tint(Color.white.opacity(0.3))
             }
         }
-        .frame(width: 60, height: 60)
+        .clipped()
+        .onAppear { load() }
+        .onDisappear { cancel() }
     }
 
-    private var reasonLabel: String {
-        switch group.reason {
-        case .exactDuplicate:  return "Exact Duplicate"
-        case .nearDuplicate:   return "Near Duplicate"
-        case .visuallySimilar: return "Similar"
-        case .burstShot:       return "Burst Shot"
+    private func load() {
+        if let cached = _groupCardCache.object(forKey: cacheKey) { thumbnail = cached; return }
+        let opts = PHImageRequestOptions()
+        opts.deliveryMode = .opportunistic
+        opts.isNetworkAccessAllowed = false
+        opts.resizeMode = .fast
+        let size = CGSize(width: sizePx, height: sizePx)
+        requestID = PHImageManager.default().requestImage(
+            for: asset, targetSize: size, contentMode: .aspectFill, options: opts
+        ) { image, info in
+            guard let image else { return }
+            let degraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+            if !degraded {
+                _groupCardCache.setObject(image, forKey: cacheKey,
+                                          cost: Int(image.size.width * image.size.height * 4))
+            }
+            Task { @MainActor in thumbnail = image }
         }
     }
 
-    private func loadThumbnail(for asset: PHAsset?) async -> UIImage? {
-        guard let asset else { return nil }
-        return await withCheckedContinuation { continuation in
-            let options = PHImageRequestOptions()
-            options.deliveryMode = .fastFormat
-            options.isNetworkAccessAllowed = false
-            PHImageManager.default().requestImage(
-                for: asset, targetSize: CGSize(width: 100, height: 100),
-                contentMode: .aspectFill, options: options
-            ) { image, _ in continuation.resume(returning: image) }
-        }
+    private func cancel() {
+        if let id = requestID { PHImageManager.default().cancelImageRequest(id); requestID = nil }
     }
 }

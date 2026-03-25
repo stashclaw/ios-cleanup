@@ -10,18 +10,12 @@
 		AA000001000000000000001A /* iOSCleanupApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000001B /* iOSCleanupApp.swift */; };
 		AA000001000000000000002A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000002B /* ContentView.swift */; };
 		AA000001000000000000003A /* PhotoGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000003B /* PhotoGroup.swift */; };
-		AA000001000000000000004A /* ContactMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000004B /* ContactMatch.swift */; };
 		AA000001000000000000005A /* LargeFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000005B /* LargeFile.swift */; };
-		AA000001000000000000006A /* PhoneNormalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000006B /* PhoneNormalizer.swift */; };
-		AA000001000000000000007A /* NameMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000007B /* NameMatcher.swift */; };
 		AA000001000000000000008A /* PhotoScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000008B /* PhotoScanEngine.swift */; };
-		AA000001000000000000009A /* ContactScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000009B /* ContactScanEngine.swift */; };
 		AA00000100000000000000AA /* FileScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000AB /* FileScanEngine.swift */; };
 		AA00000100000000000000BA /* Photos.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000BB /* Photos.framework */; };
-		AA00000100000000000000CA /* Contacts.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000CB /* Contacts.framework */; };
 		AA00000100000000000000DA /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000DB /* Vision.framework */; };
 		AA00000100000000000000EA /* PhotoScanEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000EB /* PhotoScanEngineTests.swift */; };
-		AA00000100000000000000FA /* ContactScanEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000FB /* ContactScanEngineTests.swift */; };
 		AA0000010000000000000100 /* FileScanEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000101 /* FileScanEngineTests.swift */; };
 		AA000002000000000000001A /* PurchaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001B /* PurchaseManager.swift */; };
 		AA000002000000000000002A /* iOSCleanup.storekit in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000002B /* iOSCleanup.storekit */; };
@@ -31,14 +25,8 @@
 		AA000005000000000000001A /* PaywallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000005000000000000001B /* PaywallView.swift */; };
 		AA000006000000000000001A /* PhotoResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000006000000000000001B /* PhotoResultsView.swift */; };
 		AA000006000000000000002A /* PhotoGroupDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000006000000000000002B /* PhotoGroupDetailView.swift */; };
-		AA000007000000000000001A /* SwipeModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000007000000000000001B /* SwipeModeView.swift */; };
-		AA000007000000000000002A /* SwipeModeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000007000000000000002B /* SwipeModeViewModel.swift */; };
-		AA000008000000000000001A /* ContactResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000008000000000000001B /* ContactResultsView.swift */; };
-		AA000008000000000000002A /* ContactMergePreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000008000000000000002B /* ContactMergePreviewView.swift */; };
+		AA000008000000000000001A /* BlurResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000008000000000000001B /* BlurResultsView.swift */; };
 		AA000009000000000000001A /* VideoCompressionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000009000000000000001B /* VideoCompressionEngine.swift */; };
-		AA00000E000000000000001A /* DuplicateHashEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000E000000000000001B /* DuplicateHashEngine.swift */; };
-		AA00000E000000000000002A /* SimilarityEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000E000000000000002B /* SimilarityEngine.swift */; };
-		AA00000E000000000000003A /* BlurScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000E000000000000003B /* BlurScanEngine.swift */; };
 		AA000009000000000000002A /* VideoCompressionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000009000000000000002B /* VideoCompressionEngineTests.swift */; };
 		AA00000A000000000000001A /* FileResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000A000000000000001B /* FileResultsView.swift */; };
 		AA00000A000000000000002A /* VideoCompressionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000A000000000000002B /* VideoCompressionView.swift */; };
@@ -50,6 +38,27 @@
 		AA00000D000000000000003A /* Nunito-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000003B /* Nunito-SemiBold.ttf */; };
 		AA00000D000000000000004A /* Nunito-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000004B /* Nunito-Bold.ttf */; };
 		AA00000D000000000000005A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000005B /* Assets.xcassets */; };
+		AA00000E000000000000001A /* DuplicateHashEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000E000000000000001B /* DuplicateHashEngine.swift */; };
+		AA00000E000000000000002A /* SimilarityEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000E000000000000002B /* SimilarityEngine.swift */; };
+		AA00000E000000000000003A /* BlurScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000E000000000000003B /* BlurScanEngine.swift */; };
+		AA00000F000000000000001A /* ImageLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000F000000000000001B /* ImageLoader.swift */; };
+		AA00000F000000000000002A /* ThreadSafeCounter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000F000000000000002B /* ThreadSafeCounter.swift */; };
+		AA00000F000000000000003A /* ProgressThrottle.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000F000000000000003B /* ProgressThrottle.swift */; };
+		BBCONFIG00000000000000001A /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBCONFIG00000000000000001B /* AppConfig.swift */; };
+		BBSCREEN000000000000001A /* ScreenshotScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBSCREEN000000000000001B /* ScreenshotScanEngine.swift */; };
+		BBSCREEN000000000000002A /* ScreenshotsResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBSCREEN000000000000002B /* ScreenshotsResultsView.swift */; };
+		CC00001000000000000000AA /* RecentlyDeletedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC00001000000000000000AB /* RecentlyDeletedView.swift */; };
+		CCLPE0000000000000001A /* LargePhotoScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCLPE0000000000000001B /* LargePhotoScanEngine.swift */; };
+		CCLPI0000000000000001A /* LargePhotoItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCLPI0000000000000001B /* LargePhotoItem.swift */; };
+		CCLPV0000000000000001A /* LargePhotosResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCLPV0000000000000001B /* LargePhotosResultsView.swift */; };
+		METARV000000000000001A /* MetadataResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = METARV000000000000001B /* MetadataResultsView.swift */; };
+		SEMGRP000000000000001A /* SemanticGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = SEMGRP000000000000001B /* SemanticGroup.swift */; };
+		SEMENG000000000000001A /* SemanticScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = SEMENG000000000000001B /* SemanticScanEngine.swift */; };
+		SEMRSV000000000000001A /* SemanticResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SEMRSV000000000000001B /* SemanticResultsView.swift */; };
+		CCSET0000000000000001A /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCSET0000000000000001B /* SettingsView.swift */; };
+		GRVIEW0000000000000001A /* GroupReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRVIEW0000000000000001B /* GroupReviewView.swift */; };
+		GRVIEW0000000000000002A /* GroupReviewViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRVIEW0000000000000002B /* GroupReviewViewModel.swift */; };
+		PQANAL000000000000001A /* PhotoQualityAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = PQANAL000000000000001B /* PhotoQualityAnalyzer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -66,18 +75,12 @@
 		AA000001000000000000001B /* iOSCleanupApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSCleanupApp.swift; sourceTree = "<group>"; };
 		AA000001000000000000002B /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		AA000001000000000000003B /* PhotoGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoGroup.swift; sourceTree = "<group>"; };
-		AA000001000000000000004B /* ContactMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactMatch.swift; sourceTree = "<group>"; };
 		AA000001000000000000005B /* LargeFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LargeFile.swift; sourceTree = "<group>"; };
-		AA000001000000000000006B /* PhoneNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneNormalizer.swift; sourceTree = "<group>"; };
-		AA000001000000000000007B /* NameMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NameMatcher.swift; sourceTree = "<group>"; };
 		AA000001000000000000008B /* PhotoScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoScanEngine.swift; sourceTree = "<group>"; };
-		AA000001000000000000009B /* ContactScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactScanEngine.swift; sourceTree = "<group>"; };
 		AA00000100000000000000AB /* FileScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileScanEngine.swift; sourceTree = "<group>"; };
 		AA00000100000000000000BB /* Photos.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Photos.framework; path = System/Library/Frameworks/Photos.framework; sourceTree = SDKROOT; };
-		AA00000100000000000000CB /* Contacts.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Contacts.framework; path = System/Library/Frameworks/Contacts.framework; sourceTree = SDKROOT; };
 		AA00000100000000000000DB /* Vision.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Vision.framework; path = System/Library/Frameworks/Vision.framework; sourceTree = SDKROOT; };
 		AA00000100000000000000EB /* PhotoScanEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoScanEngineTests.swift; sourceTree = "<group>"; };
-		AA00000100000000000000FB /* ContactScanEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactScanEngineTests.swift; sourceTree = "<group>"; };
 		AA0000010000000000000101 /* FileScanEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileScanEngineTests.swift; sourceTree = "<group>"; };
 		AA0000010000000000000201 /* iOSCleanup.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iOSCleanup.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000010000000000000301 /* iOSCleanupTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iOSCleanupTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -90,25 +93,40 @@
 		AA000005000000000000001B /* PaywallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaywallView.swift; sourceTree = "<group>"; };
 		AA000006000000000000001B /* PhotoResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoResultsView.swift; sourceTree = "<group>"; };
 		AA000006000000000000002B /* PhotoGroupDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoGroupDetailView.swift; sourceTree = "<group>"; };
-		AA000007000000000000001B /* SwipeModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeModeView.swift; sourceTree = "<group>"; };
-		AA000007000000000000002B /* SwipeModeViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeModeViewModel.swift; sourceTree = "<group>"; };
-		AA000008000000000000001B /* ContactResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactResultsView.swift; sourceTree = "<group>"; };
-		AA000008000000000000002B /* ContactMergePreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactMergePreviewView.swift; sourceTree = "<group>"; };
+		AA000008000000000000001B /* BlurResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlurResultsView.swift; sourceTree = "<group>"; };
 		AA000009000000000000001B /* VideoCompressionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionEngine.swift; sourceTree = "<group>"; };
-		AA00000E000000000000001B /* DuplicateHashEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuplicateHashEngine.swift; sourceTree = "<group>"; };
-		AA00000E000000000000002B /* SimilarityEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarityEngine.swift; sourceTree = "<group>"; };
-		AA00000E000000000000003B /* BlurScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlurScanEngine.swift; sourceTree = "<group>"; };
 		AA000009000000000000002B /* VideoCompressionEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionEngineTests.swift; sourceTree = "<group>"; };
 		AA00000A000000000000001B /* FileResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileResultsView.swift; sourceTree = "<group>"; };
 		AA00000A000000000000002B /* VideoCompressionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionView.swift; sourceTree = "<group>"; };
 		AA00000B000000000000001B /* EmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyStateView.swift; sourceTree = "<group>"; };
 		AA00000C000000000000001B /* Font+PhotoDuck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Font+PhotoDuck.swift"; sourceTree = "<group>"; };
 		AA00000C000000000000003B /* DuckComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuckComponents.swift; sourceTree = "<group>"; };
-		AA00000D000000000000001B /* FredokaOne-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "FredokaOne-Regular.ttf"; sourceTree = "<group>"; };
+		AA00000D000000000000001B /* FredokaOne-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = text; path = "FredokaOne-Regular.ttf"; sourceTree = "<group>"; };
 		AA00000D000000000000002B /* Nunito-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-Regular.ttf"; sourceTree = "<group>"; };
-		AA00000D000000000000003B /* Nunito-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-SemiBold.ttf"; sourceTree = "<group>"; };
-		AA00000D000000000000004B /* Nunito-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-Bold.ttf"; sourceTree = "<group>"; };
+		AA00000D000000000000003B /* Nunito-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Nunito-SemiBold.ttf"; sourceTree = "<group>"; };
+		AA00000D000000000000004B /* Nunito-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Nunito-Bold.ttf"; sourceTree = "<group>"; };
 		AA00000D000000000000005B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		AA00000E000000000000001B /* DuplicateHashEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuplicateHashEngine.swift; sourceTree = "<group>"; };
+		AA00000E000000000000002B /* SimilarityEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarityEngine.swift; sourceTree = "<group>"; };
+		AA00000E000000000000003B /* BlurScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlurScanEngine.swift; sourceTree = "<group>"; };
+		AA00000F000000000000001B /* ImageLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageLoader.swift; sourceTree = "<group>"; };
+		AA00000F000000000000002B /* ThreadSafeCounter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadSafeCounter.swift; sourceTree = "<group>"; };
+		AA00000F000000000000003B /* ProgressThrottle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressThrottle.swift; sourceTree = "<group>"; };
+		BBCONFIG00000000000000001B /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
+		BBSCREEN000000000000001B /* ScreenshotScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotScanEngine.swift; sourceTree = "<group>"; };
+		BBSCREEN000000000000002B /* ScreenshotsResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotsResultsView.swift; sourceTree = "<group>"; };
+		CC00001000000000000000AB /* RecentlyDeletedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentlyDeletedView.swift; sourceTree = "<group>"; };
+		CCLPE0000000000000001B /* LargePhotoScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LargePhotoScanEngine.swift; sourceTree = "<group>"; };
+		CCLPI0000000000000001B /* LargePhotoItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LargePhotoItem.swift; sourceTree = "<group>"; };
+		CCLPV0000000000000001B /* LargePhotosResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LargePhotosResultsView.swift; sourceTree = "<group>"; };
+		METARV000000000000001B /* MetadataResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetadataResultsView.swift; sourceTree = "<group>"; };
+		SEMGRP000000000000001B /* SemanticGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SemanticGroup.swift; sourceTree = "<group>"; };
+		SEMENG000000000000001B /* SemanticScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SemanticScanEngine.swift; sourceTree = "<group>"; };
+		SEMRSV000000000000001B /* SemanticResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SemanticResultsView.swift; sourceTree = "<group>"; };
+		CCSET0000000000000001B /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		GRVIEW0000000000000001B /* GroupReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupReviewView.swift; sourceTree = "<group>"; };
+		GRVIEW0000000000000002B /* GroupReviewViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupReviewViewModel.swift; sourceTree = "<group>"; };
+		PQANAL000000000000001B /* PhotoQualityAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoQualityAnalyzer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -117,7 +135,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA00000100000000000000BA /* Photos.framework in Frameworks */,
-				AA00000100000000000000CA /* Contacts.framework in Frameworks */,
 				AA00000100000000000000DA /* Vision.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -154,7 +171,6 @@
 			isa = PBXGroup;
 			children = (
 				AA00000100000000000000EB /* PhotoScanEngineTests.swift */,
-				AA00000100000000000000FB /* ContactScanEngineTests.swift */,
 				AA0000010000000000000101 /* FileScanEngineTests.swift */,
 				AA000009000000000000002B /* VideoCompressionEngineTests.swift */,
 			);
@@ -174,12 +190,14 @@
 			isa = PBXGroup;
 			children = (
 				AA000001000000000000008B /* PhotoScanEngine.swift */,
-				AA000001000000000000009B /* ContactScanEngine.swift */,
 				AA00000100000000000000AB /* FileScanEngine.swift */,
 				AA000009000000000000001B /* VideoCompressionEngine.swift */,
 				AA00000E000000000000001B /* DuplicateHashEngine.swift */,
 				AA00000E000000000000002B /* SimilarityEngine.swift */,
 				AA00000E000000000000003B /* BlurScanEngine.swift */,
+				BBSCREEN000000000000001B /* ScreenshotScanEngine.swift */,
+				CCLPE0000000000000001B /* LargePhotoScanEngine.swift */,
+				SEMENG000000000000001B /* SemanticScanEngine.swift */,
 			);
 			path = Engines;
 			sourceTree = "<group>";
@@ -188,8 +206,9 @@
 			isa = PBXGroup;
 			children = (
 				AA000001000000000000003B /* PhotoGroup.swift */,
-				AA000001000000000000004B /* ContactMatch.swift */,
 				AA000001000000000000005B /* LargeFile.swift */,
+				CCLPI0000000000000001B /* LargePhotoItem.swift */,
+				SEMGRP000000000000001B /* SemanticGroup.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -197,29 +216,19 @@
 		AA0000010000000000000606 /* Utilities */ = {
 			isa = PBXGroup;
 			children = (
-				AA000001000000000000006B /* PhoneNormalizer.swift */,
-				AA000001000000000000007B /* NameMatcher.swift */,
 				AA00000C000000000000001B /* Font+PhotoDuck.swift */,
+				AA00000F000000000000001B /* ImageLoader.swift */,
+				AA00000F000000000000002B /* ThreadSafeCounter.swift */,
+				AA00000F000000000000003B /* ProgressThrottle.swift */,
+				PQANAL000000000000001B /* PhotoQualityAnalyzer.swift */,
 			);
 			path = Utilities;
-			sourceTree = "<group>";
-		};
-		AA00000D000000000000006A /* Fonts */ = {
-			isa = PBXGroup;
-			children = (
-				AA00000D000000000000001B /* FredokaOne-Regular.ttf */,
-				AA00000D000000000000002B /* Nunito-Regular.ttf */,
-				AA00000D000000000000003B /* Nunito-SemiBold.ttf */,
-				AA00000D000000000000004B /* Nunito-Bold.ttf */,
-			);
-			path = Fonts;
 			sourceTree = "<group>";
 		};
 		AA0000010000000000000607 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
 				AA00000100000000000000BB /* Photos.framework */,
-				AA00000100000000000000CB /* Contacts.framework */,
 				AA00000100000000000000DB /* Vision.framework */,
 			);
 			name = Frameworks;
@@ -247,6 +256,7 @@
 			isa = PBXGroup;
 			children = (
 				AA000002000000000000002B /* iOSCleanup.storekit */,
+				BBCONFIG00000000000000001B /* AppConfig.swift */,
 			);
 			path = Configuration;
 			sourceTree = "<group>";
@@ -258,13 +268,39 @@
 				AA000004000000000000001B /* HomeView.swift */,
 				AA000004000000000000002B /* HomeViewModel.swift */,
 				AA000005000000000000001B /* PaywallView.swift */,
+				CCSET0000000000000001B /* SettingsView.swift */,
 				AA00000B000000000000001B /* EmptyStateView.swift */,
 				AA00000C000000000000006A /* Components */,
 				AA000006000000000000003A /* Photos */,
-				AA000008000000000000003A /* Contacts */,
 				AA00000A000000000000003A /* Files */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		AA000006000000000000003A /* Photos */ = {
+			isa = PBXGroup;
+			children = (
+				AA000006000000000000001B /* PhotoResultsView.swift */,
+				AA000006000000000000002B /* PhotoGroupDetailView.swift */,
+				GRVIEW0000000000000001B /* GroupReviewView.swift */,
+				GRVIEW0000000000000002B /* GroupReviewViewModel.swift */,
+				AA000008000000000000001B /* BlurResultsView.swift */,
+				BBSCREEN000000000000002B /* ScreenshotsResultsView.swift */,
+				CC00001000000000000000AB /* RecentlyDeletedView.swift */,
+				CCLPV0000000000000001B /* LargePhotosResultsView.swift */,
+				METARV000000000000001B /* MetadataResultsView.swift */,
+				SEMRSV000000000000001B /* SemanticResultsView.swift */,
+			);
+			path = Photos;
+			sourceTree = "<group>";
+		};
+		AA00000A000000000000003A /* Files */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000A000000000000001B /* FileResultsView.swift */,
+				AA00000A000000000000002B /* VideoCompressionView.swift */,
+			);
+			path = Files;
 			sourceTree = "<group>";
 		};
 		AA00000C000000000000006A /* Components */ = {
@@ -275,33 +311,15 @@
 			path = Components;
 			sourceTree = "<group>";
 		};
-		AA000006000000000000003A /* Photos */ = {
+		AA00000D000000000000006A /* Fonts */ = {
 			isa = PBXGroup;
 			children = (
-				AA000006000000000000001B /* PhotoResultsView.swift */,
-				AA000006000000000000002B /* PhotoGroupDetailView.swift */,
-				AA000007000000000000001B /* SwipeModeView.swift */,
-				AA000007000000000000002B /* SwipeModeViewModel.swift */,
+				AA00000D000000000000001B /* FredokaOne-Regular.ttf */,
+				AA00000D000000000000002B /* Nunito-Regular.ttf */,
+				AA00000D000000000000003B /* Nunito-SemiBold.ttf */,
+				AA00000D000000000000004B /* Nunito-Bold.ttf */,
 			);
-			path = Photos;
-			sourceTree = "<group>";
-		};
-		AA000008000000000000003A /* Contacts */ = {
-			isa = PBXGroup;
-			children = (
-				AA000008000000000000001B /* ContactResultsView.swift */,
-				AA000008000000000000002B /* ContactMergePreviewView.swift */,
-			);
-			path = Contacts;
-			sourceTree = "<group>";
-		};
-		AA00000A000000000000003A /* Files */ = {
-			isa = PBXGroup;
-			children = (
-				AA00000A000000000000001B /* FileResultsView.swift */,
-				AA00000A000000000000002B /* VideoCompressionView.swift */,
-			);
-			path = Files;
+			path = Fonts;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -403,33 +421,44 @@
 				AA000001000000000000001A /* iOSCleanupApp.swift in Sources */,
 				AA000001000000000000002A /* ContentView.swift in Sources */,
 				AA000001000000000000003A /* PhotoGroup.swift in Sources */,
-				AA000001000000000000004A /* ContactMatch.swift in Sources */,
 				AA000001000000000000005A /* LargeFile.swift in Sources */,
-				AA000001000000000000006A /* PhoneNormalizer.swift in Sources */,
-				AA000001000000000000007A /* NameMatcher.swift in Sources */,
 				AA000001000000000000008A /* PhotoScanEngine.swift in Sources */,
-				AA000001000000000000009A /* ContactScanEngine.swift in Sources */,
 				AA00000100000000000000AA /* FileScanEngine.swift in Sources */,
 				AA000002000000000000001A /* PurchaseManager.swift in Sources */,
+				BBCONFIG00000000000000001A /* AppConfig.swift in Sources */,
 				AA000003000000000000001A /* OnboardingView.swift in Sources */,
 				AA000004000000000000001A /* HomeView.swift in Sources */,
 				AA000004000000000000002A /* HomeViewModel.swift in Sources */,
 				AA000005000000000000001A /* PaywallView.swift in Sources */,
+				CCSET0000000000000001A /* SettingsView.swift in Sources */,
 				AA000006000000000000001A /* PhotoResultsView.swift in Sources */,
 				AA000006000000000000002A /* PhotoGroupDetailView.swift in Sources */,
-				AA000007000000000000001A /* SwipeModeView.swift in Sources */,
-				AA000007000000000000002A /* SwipeModeViewModel.swift in Sources */,
-				AA000008000000000000001A /* ContactResultsView.swift in Sources */,
-				AA000008000000000000002A /* ContactMergePreviewView.swift in Sources */,
+				GRVIEW0000000000000001A /* GroupReviewView.swift in Sources */,
+				GRVIEW0000000000000002A /* GroupReviewViewModel.swift in Sources */,
+				AA000008000000000000001A /* BlurResultsView.swift in Sources */,
+				CC00001000000000000000AA /* RecentlyDeletedView.swift in Sources */,
 				AA000009000000000000001A /* VideoCompressionEngine.swift in Sources */,
 				AA00000E000000000000001A /* DuplicateHashEngine.swift in Sources */,
 				AA00000E000000000000002A /* SimilarityEngine.swift in Sources */,
 				AA00000E000000000000003A /* BlurScanEngine.swift in Sources */,
+				BBSCREEN000000000000001A /* ScreenshotScanEngine.swift in Sources */,
+				BBSCREEN000000000000002A /* ScreenshotsResultsView.swift in Sources */,
+				CCLPI0000000000000001A /* LargePhotoItem.swift in Sources */,
+				CCLPE0000000000000001A /* LargePhotoScanEngine.swift in Sources */,
+				CCLPV0000000000000001A /* LargePhotosResultsView.swift in Sources */,
+				METARV000000000000001A /* MetadataResultsView.swift in Sources */,
+				SEMGRP000000000000001A /* SemanticGroup.swift in Sources */,
+				SEMENG000000000000001A /* SemanticScanEngine.swift in Sources */,
+				SEMRSV000000000000001A /* SemanticResultsView.swift in Sources */,
 				AA00000A000000000000001A /* FileResultsView.swift in Sources */,
 				AA00000A000000000000002A /* VideoCompressionView.swift in Sources */,
 				AA00000B000000000000001A /* EmptyStateView.swift in Sources */,
 				AA00000C000000000000001A /* Font+PhotoDuck.swift in Sources */,
+				AA00000F000000000000001A /* ImageLoader.swift in Sources */,
+				AA00000F000000000000002A /* ThreadSafeCounter.swift in Sources */,
+				AA00000F000000000000003A /* ProgressThrottle.swift in Sources */,
 				AA00000C000000000000003A /* DuckComponents.swift in Sources */,
+				PQANAL000000000000001A /* PhotoQualityAnalyzer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -438,7 +467,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA00000100000000000000EA /* PhotoScanEngineTests.swift in Sources */,
-				AA00000100000000000000FA /* ContactScanEngineTests.swift in Sources */,
 				AA0000010000000000000100 /* FileScanEngineTests.swift in Sources */,
 				AA000009000000000000002A /* VideoCompressionEngineTests.swift in Sources */,
 			);
@@ -587,7 +615,7 @@
 				INFOPLIST_FILE = iOSCleanup/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yourname.iOSCleanup;
+				PRODUCT_BUNDLE_IDENTIFIER = com.justinwong.iOSCleanup;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -608,7 +636,7 @@
 				INFOPLIST_FILE = iOSCleanup/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yourname.iOSCleanup;
+				PRODUCT_BUNDLE_IDENTIFIER = com.justinwong.iOSCleanup;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;

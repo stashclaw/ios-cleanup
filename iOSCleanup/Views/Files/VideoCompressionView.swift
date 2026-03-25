@@ -2,6 +2,9 @@ import SwiftUI
 import Photos
 import AVFoundation
 
+// AVAsset is thread-safe for reading; retroactively suppress the Sendable warning.
+extension AVAsset: @unchecked @retroactive Sendable {}
+
 struct VideoCompressionView: View {
     let file: LargeFile
     @EnvironmentObject private var purchaseManager: PurchaseManager
@@ -192,7 +195,7 @@ struct VideoCompressionView: View {
             let engine = VideoCompressionEngine()
             var outputURL: URL?
 
-            for await event in await engine.compress(asset: avAsset, preset: selectedPreset) {
+            for await event in engine.compress(asset: avAsset, preset: selectedPreset) {
                 switch event {
                 case .progress(let p):
                     compressionState = .compressing(progress: p)

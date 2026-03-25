@@ -1,9 +1,14 @@
 import Photos
-import Vision
+@preconcurrency import Vision
 
 actor PhotoScanEngine {
 
     static let similarityThreshold: Float = 0.12
+    private let imageLoader: any ImageLoader
+
+    init(imageLoader: any ImageLoader = PHImageLoader()) {
+        self.imageLoader = imageLoader
+    }
 
     nonisolated func scan() -> AsyncStream<Result<[PhotoGroup], Error>> {
         AsyncStream { continuation in
@@ -12,15 +17,14 @@ actor PhotoScanEngine {
                     let assets = try await fetchAssets()
                     var prints: [String: VNFeaturePrintObservation] = [:]
 
-                    // Generate feature prints with max 4 concurrent tasks
                     let total = assets.count
-                    var completed = 0
+                    let counter = ThreadSafeCounter()
+                    let throttle = ProgressThrottle(every: 50)
 
                     await withTaskGroup(of: (String, VNFeaturePrintObservation?).self) { group in
                         var nextIndex = 0
                         var inFlight = 0
 
-                        // Seed up to 4
                         while inFlight < 4, nextIndex < assets.count {
                             let a = assets[nextIndex]
                             nextIndex += 1
@@ -32,11 +36,9 @@ actor PhotoScanEngine {
                         }
 
                         for await (id, fp) in group {
-                            if let fp {
-                                prints[id] = fp
-                            }
-                            completed += 1
-                            if completed % 50 == 0 {
+                            if let fp { prints[id] = fp }
+                            let completed = counter.increment()
+                            if throttle.shouldReport(completed: completed) {
                                 _ = ScanProgress(phase: "Generating embeddings", completed: completed, total: total)
                             }
                             if nextIndex < assets.count {
@@ -53,7 +55,6 @@ actor PhotoScanEngine {
                     var groups = cluster(assets: assets, prints: prints)
                     groups += burstGroups(from: assets)
 
-                    // De-duplicate by asset identifiers
                     var seen = Set<Set<String>>()
                     let unique = groups.filter { group in
                         let key = Set(group.assets.map { $0.localIdentifier })
@@ -81,9 +82,7 @@ actor PhotoScanEngine {
 
         let result = PHAsset.fetchAssets(with: .image, options: options)
         var assets: [PHAsset] = []
-        result.enumerateObjects { asset, _, _ in
-            assets.append(asset)
-        }
+        result.enumerateObjects { asset, _, _ in assets.append(asset) }
         return assets
     }
 
@@ -94,7 +93,7 @@ actor PhotoScanEngine {
             options.isSynchronous = false
             options.isNetworkAccessAllowed = false
 
-            PHImageManager.default().requestImage(
+            imageLoader.requestImage(
                 for: asset,
                 targetSize: CGSize(width: 299, height: 299),
                 contentMode: .aspectFit,
@@ -120,17 +119,25 @@ actor PhotoScanEngine {
     private nonisolated func cluster(assets: [PHAsset], prints: [String: VNFeaturePrintObservation]) -> [PhotoGroup] {
         let ids = assets.map { $0.localIdentifier }
         var parent = Dictionary(uniqueKeysWithValues: ids.map { ($0, $0) })
+        var rank   = Dictionary(uniqueKeysWithValues: ids.map { ($0, 0) })
 
         func find(_ id: String) -> String {
-            if parent[id] != id {
-                parent[id] = find(parent[id]!)
-            }
+            if parent[id] != id { parent[id] = find(parent[id]!) }
             return parent[id]!
         }
 
         func union(_ a: String, _ b: String) {
             let ra = find(a), rb = find(b)
-            if ra != rb { parent[ra] = rb }
+            guard ra != rb else { return }
+            let rankA = rank[ra, default: 0], rankB = rank[rb, default: 0]
+            if rankA < rankB {
+                parent[ra] = rb
+            } else if rankA > rankB {
+                parent[rb] = ra
+            } else {
+                parent[rb] = ra
+                rank[ra] = rankA + 1
+            }
         }
 
         let printList = ids.compactMap { id -> (String, VNFeaturePrintObservation)? in
@@ -142,13 +149,10 @@ actor PhotoScanEngine {
             for j in (i+1)..<printList.count {
                 var distance: Float = 0
                 try? printList[i].1.computeDistance(&distance, to: printList[j].1)
-                if distance < PhotoScanEngine.similarityThreshold {
-                    union(printList[i].0, printList[j].0)
-                }
+                if distance < PhotoScanEngine.similarityThreshold { union(printList[i].0, printList[j].0) }
             }
         }
 
-        // Collect groups by root
         var groups: [String: [PHAsset]] = [:]
         for asset in assets {
             guard prints[asset.localIdentifier] != nil else { continue }
@@ -160,14 +164,19 @@ actor PhotoScanEngine {
             guard groupAssets.count >= 2 else { return nil }
             let sorted = groupAssets.sorted { ($0.creationDate ?? .distantPast) < ($1.creationDate ?? .distantPast) }
 
-            // Calculate representative similarity (first pair)
             var similarity: Float = 0
-            if let fp0 = prints[sorted[0].localIdentifier],
-               let fp1 = prints[sorted[1].localIdentifier] {
+            if let fp0 = prints[sorted[0].localIdentifier], let fp1 = prints[sorted[1].localIdentifier] {
                 try? fp0.computeDistance(&similarity, to: fp1)
             }
 
-            let reason: PhotoGroup.SimilarityReason = similarity < 0.05 ? .nearDuplicate : .visuallySimilar
+            let reason: PhotoGroup.SimilarityReason
+            if similarity < 0.01 {
+                reason = .exactDuplicate
+            } else if similarity < 0.05 {
+                reason = .nearDuplicate
+            } else {
+                reason = .visuallySimilar
+            }
             return PhotoGroup(id: UUID(), assets: sorted, similarity: similarity, reason: reason)
         }
     }
@@ -175,9 +184,7 @@ actor PhotoScanEngine {
     private nonisolated func burstGroups(from assets: [PHAsset]) -> [PhotoGroup] {
         var bursts: [String: [PHAsset]] = [:]
         for asset in assets {
-            if let burstId = asset.burstIdentifier {
-                bursts[burstId, default: []].append(asset)
-            }
+            if let burstId = asset.burstIdentifier { bursts[burstId, default: []].append(asset) }
         }
         return bursts.values.compactMap { groupAssets in
             guard groupAssets.count >= 2 else { return nil }

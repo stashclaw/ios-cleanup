@@ -6,8 +6,10 @@ final class PurchaseManager: ObservableObject {
 
     static let productID = "com.yourname.iOSCleanup.unlock"
 
-    // Persisted cache — re-verified against StoreKit on every launch
-    @AppStorage("isPurchased") private(set) var isPurchased: Bool = false
+    // Persisted cache — re-verified against StoreKit on every launch.
+    // AppConfig.unlockPremium overrides for dev builds without touching stored value.
+    @AppStorage("isPurchased") private var _isPurchased: Bool = false
+    var isPurchased: Bool { AppConfig.unlockPremium || _isPurchased }
 
     @Published private(set) var product: Product?
     @Published private(set) var isLoading: Bool = false
@@ -88,7 +90,7 @@ final class PurchaseManager: ObservableObject {
                 break
             }
         }
-        isPurchased = purchased
+        _isPurchased = purchased
     }
 
     // MARK: - Background transaction listener

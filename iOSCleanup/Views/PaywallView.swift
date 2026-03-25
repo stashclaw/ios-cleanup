@@ -2,6 +2,8 @@ import SwiftUI
 
 extension Notification.Name {
     static let purchaseDidSucceed = Notification.Name("purchaseDidSucceed")
+    /// Posted after any delete operation completes. userInfo["bytes"] = Int64 freed.
+    static let didFreeBytes = Notification.Name("photoduck.didFreeBytes")
 }
 
 struct PaywallView: View {

@@ -6,117 +6,363 @@ struct HomeView: View {
 
     @State private var showPaywall = false
     @State private var showCompletion = false
+    @State private var showSettings = false
+    @State private var now = Date()
+    @State private var navPath = NavigationPath()
+    @State private var pendingNav: NavDest? = nil
 
     private let bg = Color(red: 0.05, green: 0.05, blue: 0.08)
+    private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navPath) {
             ZStack {
                 bg.ignoresSafeArea()
                 ScrollView {
-                    VStack(spacing: 20) {
+                    VStack(spacing: 16) {
                         headerRow
-                        storageRingCard
-                        smartCleanButton
-                        categoryList
+                        topCard          // dual-purpose: scan progress OR storage
+                        if !viewModel.isAnyScanning {
+                            scanButton
+                        }
+                        categoryGrid
+                        smartCategoriesSection
                     }
                     .padding(.bottom, 32)
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: NavDest.self) { dest in
+                switch dest {
+                case .duplicates:
+                    PhotoResultsView(
+                        title: "Duplicates",
+                        groups: viewModel.photoGroups.filter { $0.reason != .visuallySimilar }
+                    )
+                    .environmentObject(purchaseManager)
+                    .environmentObject(viewModel as HomeViewModel)
+                case .similar:
+                    PhotoResultsView(
+                        title: "Similar Photos",
+                        groups: viewModel.photoGroups.filter { $0.reason == .visuallySimilar }
+                    )
+                    .environmentObject(purchaseManager)
+                    .environmentObject(viewModel as HomeViewModel)
+                case .largeVideos:
+                    FileResultsView()
+                        .environmentObject(purchaseManager)
+                        .environmentObject(viewModel as HomeViewModel)
+                case .blurry:
+                    BlurResultsView()
+                        .environmentObject(purchaseManager)
+                        .environmentObject(viewModel as HomeViewModel)
+                case .screenshots:
+                    ScreenshotsResultsView()
+                        .environmentObject(purchaseManager)
+                        .environmentObject(viewModel as HomeViewModel)
+                case .largePhotos:
+                    LargePhotosResultsView()
+                        .environmentObject(purchaseManager)
+                        .environmentObject(viewModel as HomeViewModel)
+                case .panoramas:
+                    MetadataResultsView(
+                        title: "Panoramas",
+                        subtitle: "Wide-angle panorama shots",
+                        icon: "photo.on.rectangle.angled",
+                        accent: Color(red: 0.18, green: 0.82, blue: 0.82),
+                        assets: viewModel.panoramaAssets
+                    )
+                    .environmentObject(purchaseManager)
+                    .environmentObject(viewModel as HomeViewModel)
+                case .portraitMode:
+                    MetadataResultsView(
+                        title: "Portrait Mode",
+                        subtitle: "Depth-effect portraits",
+                        icon: "person.crop.rectangle",
+                        accent: Color(red: 0.72, green: 0.45, blue: 1),
+                        assets: viewModel.portraitModeAssets
+                    )
+                    .environmentObject(purchaseManager)
+                    .environmentObject(viewModel as HomeViewModel)
+                case .livePhotos:
+                    MetadataResultsView(
+                        title: "Live Photos",
+                        subtitle: "Motion + sound photos",
+                        icon: "livephoto",
+                        accent: Color(red: 0.98, green: 0.57, blue: 0.24),
+                        assets: viewModel.livePhotoAssets
+                    )
+                    .environmentObject(purchaseManager)
+                    .environmentObject(viewModel as HomeViewModel)
+                case .semantic(let groupId):
+                    if let group = viewModel.semanticGroups.first(where: { $0.id == groupId }) {
+                        SemanticResultsView(group: group)
+                            .environmentObject(purchaseManager)
+                    }
+                }
+            }
         }
         .sheet(isPresented: $showPaywall) { PaywallView().environmentObject(purchaseManager) }
         .sheet(isPresented: $showCompletion) { CompletionOverlay(viewModel: viewModel) }
+        .sheet(isPresented: $showSettings) { SettingsView(viewModel: viewModel).environmentObject(purchaseManager) }
         .onChange(of: viewModel.isAllDone) { done in
-            if done { showCompletion = true }
+            if done && viewModel.scanRanThisSession { showCompletion = true }
+        }
+        .onReceive(ticker) { date in
+            if viewModel.isAnyScanning { now = date }
+        }
+        // Navigate as soon as first results arrive (count-based — fires mid-scan)
+        .onChange(of: viewModel.photoGroups.count) { _ in
+            guard let pending = pendingNav else { return }
+            if pending == .duplicates {
+                let groups = viewModel.photoGroups.filter { $0.reason != .visuallySimilar }
+                if !groups.isEmpty { pendingNav = nil; navPath.append(NavDest.duplicates) }
+            } else if pending == .similar {
+                let groups = viewModel.photoGroups.filter { $0.reason == .visuallySimilar }
+                if !groups.isEmpty { pendingNav = nil; navPath.append(NavDest.similar) }
+            }
+        }
+        .onChange(of: viewModel.largeFiles.count) { count in
+            guard pendingNav == .largeVideos, count > 0 else { return }
+            pendingNav = nil; navPath.append(NavDest.largeVideos)
+        }
+        .onChange(of: viewModel.blurPhotos.count) { count in
+            guard pendingNav == .blurry, count > 0 else { return }
+            pendingNav = nil; navPath.append(NavDest.blurry)
+        }
+        .onChange(of: viewModel.screenshotAssets.count) { count in
+            guard pendingNav == .screenshots, count > 0 else { return }
+            pendingNav = nil; navPath.append(NavDest.screenshots)
+        }
+        .onChange(of: viewModel.largePhotos.count) { count in
+            guard pendingNav == .largePhotos, count > 0 else { return }
+            pendingNav = nil; navPath.append(NavDest.largePhotos)
+        }
+        // Clean up pendingNav when scan finishes with 0 results
+        .onChange(of: viewModel.photoScanState) { state in
+            guard case .done = state else { return }
+            if pendingNav == .duplicates || pendingNav == .similar { pendingNav = nil }
+        }
+        .onChange(of: viewModel.fileScanState) { state in
+            guard case .done = state, pendingNav == .largeVideos else { return }
+            pendingNav = nil
+        }
+        .onChange(of: viewModel.blurScanState) { state in
+            guard case .done = state, pendingNav == .blurry else { return }
+            pendingNav = nil
+        }
+        .onChange(of: viewModel.screenshotScanState) { state in
+            guard case .done = state, pendingNav == .screenshots else { return }
+            pendingNav = nil
+        }
+        .onChange(of: viewModel.largePhotoScanState) { state in
+            guard case .done = state, pendingNav == .largePhotos else { return }
+            pendingNav = nil
+        }
+        .onAppear {
+            Task { await viewModel.fetchMetadataAssets() }
         }
     }
 
-    // MARK: - Section 1: Header Row
+    // MARK: - Header
 
     private var headerRow: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("PhotoDuck")
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(.white)
+            VStack(alignment: .leading, spacing: 4) {
+                Image("photoduck-logo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 36)
                 Text("Free up iPhone space")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.white.opacity(0.4))
             }
             Spacer()
-            if !purchaseManager.isPurchased {
-                Button("Unlock 🔒") { showPaywall = true }
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.8))
-                    .padding(.vertical, 7)
-                    .padding(.horizontal, 14)
-                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.15)))
+            HStack(spacing: 10) {
+                if !purchaseManager.isPurchased {
+                    Button("Unlock 🔒") { showPaywall = true }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.8))
+                        .padding(.vertical, 7)
+                        .padding(.horizontal, 14)
+                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.15)))
+                }
+                Button { showSettings = true } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(Color.white.opacity(0.5))
+                }
             }
         }
         .padding(.horizontal, 24)
         .padding(.top, 16)
     }
 
-    // MARK: - Section 2: Storage Ring Card
+    // MARK: - Top Card (scan progress during scan, storage otherwise)
 
-    private var storageRingCard: some View {
+    private var topCard: some View {
         HStack(spacing: 20) {
+            // Ring
             ZStack {
                 Circle()
-                    .stroke(Color.white.opacity(0.06), lineWidth: 10)
+                    .stroke(Color.white.opacity(0.06), lineWidth: 8)
                 Circle()
-                    .trim(from: 0, to: viewModel.storageUsedFraction)
+                    .trim(from: 0, to: ringFraction)
                     .stroke(
                         AngularGradient(
                             colors: [Color(red: 1, green: 0.42, blue: 0.67), Color(red: 0.45, green: 0.4, blue: 1)],
                             center: .center
                         ),
-                        style: StrokeStyle(lineWidth: 10, lineCap: .round)
+                        style: StrokeStyle(lineWidth: 8, lineCap: .round)
                     )
                     .rotationEffect(.degrees(-90))
-                VStack(spacing: 2) {
-                    Text("\(Int(viewModel.storageUsedFraction * 100))%")
-                        .font(.system(size: 19, weight: .bold))
+                    .animation(.easeInOut(duration: 0.4), value: ringFraction)
+                VStack(spacing: 1) {
+                    Text("\(Int(ringFraction * 100))")
+                        .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(.white)
-                    Text("used")
+                        .contentTransition(.numericText())
+                        .animation(.easeInOut(duration: 0.3), value: Int(ringFraction * 100))
+                    Text("%")
                         .font(.system(size: 10))
                         .foregroundStyle(Color.white.opacity(0.4))
                 }
             }
-            .frame(width: 100, height: 100)
+            .frame(width: 78, height: 78)
 
-            VStack(alignment: .leading, spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Total Storage")
-                        .font(.system(size: 13))
+            // Right column
+            if viewModel.isAnyScanning {
+                scanProgressColumn
+            } else {
+                storageColumn
+            }
+        }
+        .padding(14)
+        .background(Color(white: 1, opacity: 0.05), in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color(white: 1, opacity: 0.08)))
+        .padding(.horizontal, 20)
+    }
+
+    private var ringFraction: Double {
+        viewModel.isAnyScanning ? viewModel.overallProgressFraction : viewModel.storageUsedFraction
+    }
+
+    private var scanProgressColumn: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(viewModel.totalLibraryCount > 0
+                 ? "\(viewModel.totalLibraryCount.formatted()) photos"
+                 : "Scanning library")
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(.white)
+                .contentTransition(.numericText())
+
+            VStack(alignment: .leading, spacing: 4) {
+                if viewModel.duplicateProgress.total > 0 {
+                    engineProgressRow(
+                        label: "Duplicates",
+                        progress: viewModel.duplicateProgress,
+                        color: Color(red: 1, green: 0.42, blue: 0.67)
+                    )
+                }
+                if viewModel.similarProgress.total > 0 {
+                    engineProgressRow(
+                        label: "Similar",
+                        progress: viewModel.similarProgress,
+                        color: Color(red: 0.98, green: 0.57, blue: 0.24)
+                    )
+                }
+                if viewModel.blurProgress.total > 0 {
+                    engineProgressRow(
+                        label: "Blurry",
+                        progress: viewModel.blurProgress,
+                        color: Color(red: 0.45, green: 0.4, blue: 1)
+                    )
+                }
+                if let remaining = timeRemainingText {
+                    Text(remaining)
+                        .font(.system(size: 11))
                         .foregroundStyle(Color.white.opacity(0.4))
+                }
+            }
+
+            Button("Cancel") { viewModel.cancelScan() }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color(red: 1, green: 0.42, blue: 0.67))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(Color(red: 1, green: 0.42, blue: 0.67).opacity(0.15), in: Capsule())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func engineProgressRow(label: String, progress: (completed: Int, total: Int), color: Color) -> some View {
+        let pct = Int(Double(progress.completed) / Double(max(1, progress.total)) * 100)
+        return HStack(spacing: 6) {
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundStyle(Color.white.opacity(0.5))
+            Text("\(pct)%")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(color)
+                .monospacedDigit()
+                .contentTransition(.numericText())
+                .animation(.easeInOut(duration: 0.3), value: pct)
+        }
+    }
+
+    private var storageColumn: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Total Storage")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.white.opacity(0.4))
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(viewModel.storageTotalStripped)
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(.white)
+                    if viewModel.totalLibraryCount > 0 {
+                        Text("· \(viewModel.totalLibraryCount.formatted()) photos")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                    }
                 }
+                Text("\(viewModel.storageUsedStripped) used")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.white.opacity(0.35))
+            }
+            Divider().overlay(Color.white.opacity(0.07))
+            HStack(spacing: 0) {
+                storageStatColumn(value: viewModel.storageUsedStripped, label: "Used", color: .white)
+                storageStatColumn(value: viewModel.storageFreeFormatted, label: "Free",
+                                  color: Color(red: 0.29, green: 0.85, blue: 0.6))
+                storageStatColumn(value: viewModel.reclaimableFormatted, label: "Saveable",
+                                  color: Color(red: 1, green: 0.42, blue: 0.67))
+            }
+            if viewModel.totalBytesFreed > 0 {
                 Divider().overlay(Color.white.opacity(0.07))
-                HStack(spacing: 0) {
-                    storageStatColumn(value: viewModel.storageUsedStripped, label: "Used",
-                                      color: .white)
-                    storageStatColumn(value: viewModel.storageFreeFormatted, label: "Free",
-                                      color: Color(red: 0.29, green: 0.85, blue: 0.6))
-                    storageStatColumn(value: viewModel.reclaimableFormatted, label: "Junk",
-                                      color: Color(red: 1, green: 0.42, blue: 0.67))
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color(red: 0.98, green: 0.57, blue: 0.24))
+                    Text("Total Cleaned")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.white.opacity(0.5))
+                    Spacer()
+                    Text(viewModel.totalBytesFreedFormatted)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.98, green: 0.57, blue: 0.24))
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(20)
-        .background(Color(white: 1, opacity: 0.05), in: RoundedRectangle(cornerRadius: 24))
-        .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(Color(white: 1, opacity: 0.08)))
-        .padding(.horizontal, 20)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func storageStatColumn(value: String, label: String, color: Color) -> some View {
         VStack(spacing: 2) {
             Text(value)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
+                .minimumScaleFactor(0.6)
+                .lineLimit(1)
                 .foregroundStyle(color)
             Text(label)
                 .font(.system(size: 11))
@@ -125,215 +371,475 @@ struct HomeView: View {
         .frame(maxWidth: .infinity)
     }
 
-    // MARK: - Section 3: Smart Clean Button
+    // MARK: - Scan Button (hidden while scanning — top card takes over)
 
-    private var smartCleanButton: some View {
-        Button {
-            Task {
-                await withTaskGroup(of: Void.self) { group in
-                    group.addTask { await viewModel.scanPhotos() }
-                    group.addTask { await viewModel.scanContacts() }
-                    group.addTask { await viewModel.scanFiles() }
-                }
-            }
-        } label: {
-            Group {
-                if viewModel.isAnyScanning {
-                    HStack(spacing: 10) {
-                        ProgressView().tint(.white)
-                        Text("Scanning…")
+    private var scanButton: some View {
+        VStack(spacing: 8) {
+            Button(action: startScan) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(viewModel.hasAnyResult ? "Rescan Library" : "Smart Clean")
                             .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(.white)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .padding(.horizontal, 20)
-                } else {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Smart Clean")
-                                .font(.system(size: 16, weight: .bold))
-                                .foregroundStyle(.white)
+                        if let date = viewModel.lastScanDate {
+                            Text("Last scanned \(relativeTime(from: date))")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Color.white.opacity(0.75))
+                        } else {
                             Text("Scan all categories at once")
                                 .font(.system(size: 12))
                                 .foregroundStyle(Color.white.opacity(0.75))
                         }
-                        Spacer()
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(Color.white.opacity(0.2))
-                            .frame(width: 40, height: 40)
-                            .overlay(
-                                Image(systemName: "arrow.right")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundStyle(.white)
-                            )
                     }
-                    .padding(.vertical, 16)
-                    .padding(.horizontal, 20)
+                    Spacer()
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.white.opacity(0.2))
+                        .frame(width: 40, height: 40)
+                        .overlay(
+                            Image(systemName: viewModel.hasAnyResult ? "arrow.clockwise" : "arrow.right")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(.white)
+                        )
                 }
-            }
-            .background(
-                LinearGradient(
-                    colors: [Color(red: 1, green: 0.42, blue: 0.67), Color(red: 0.45, green: 0.4, blue: 1)],
-                    startPoint: .leading,
-                    endPoint: .trailing
+                .padding(.vertical, 16)
+                .padding(.horizontal, 20)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 1, green: 0.42, blue: 0.67), Color(red: 0.45, green: 0.4, blue: 1)],
+                        startPoint: .leading, endPoint: .trailing
+                    )
                 )
-                .opacity(viewModel.isAnyScanning ? 0.5 : 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 18))
+                .clipShape(RoundedRectangle(cornerRadius: 18))
+            }
+
+            if viewModel.hasAnyResult {
+                HStack {
+                    Button {
+                        viewModel.clearCache()
+                    } label: {
+                        Label("Clear Results", systemImage: "trash")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                    }
+                    Spacer()
+                    Button(action: startScan) {
+                        Label("Scan for new photos", systemImage: "plus.viewfinder")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                    }
+                }
+                .padding(.horizontal, 4)
+            }
         }
-        .disabled(viewModel.isAnyScanning)
         .padding(.horizontal, 20)
     }
 
-    // MARK: - Section 4: Category List
+    // MARK: - Category Grid (2-column, CleanIt-style)
 
-    private var categoryList: some View {
-        VStack(spacing: 10) {
+    private var categoryGrid: some View {
+        VStack(spacing: 12) {
             HStack {
                 Text("Categories")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
                 Spacer()
-                Text("4 tools")
+                Text("10 tools")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.white.opacity(0.35))
             }
             .padding(.horizontal, 24)
 
-            VStack(spacing: 10) {
-                CategoryRow(
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+                spacing: 12
+            ) {
+                let duplicateGroups = viewModel.photoGroups.filter { $0.reason != .visuallySimilar }
+                let similarGroups   = viewModel.photoGroups.filter { $0.reason == .visuallySimilar }
+
+                CategoryCard(
                     icon: "doc.on.doc",
                     iconColor: Color(red: 1, green: 0.42, blue: 0.67),
-                    iconBg: Color(red: 1, green: 0.42, blue: 0.67).opacity(0.15),
                     name: "Duplicates",
                     subtitle: "Near-identical photos",
-                    count: viewModel.photoGroups.count,
-                    state: viewModel.photoScanState
+                    count: duplicateGroups.count,
+                    state: viewModel.photoScanState,
+                    scanProgress: viewModel.duplicateProgress,
+                    isPaid: false
                 ) {
-                    PhotoResultsView(groups: viewModel.photoGroups).environmentObject(purchaseManager)
+                    if !duplicateGroups.isEmpty {
+                        navPath.append(NavDest.duplicates)
+                    } else {
+                        pendingNav = .duplicates
+                        if case .idle = viewModel.photoScanState { Task { await viewModel.scanPhotos() } }
+                    }
                 }
-                CategoryRow(
+                CategoryCard(
                     icon: "photo.on.rectangle.angled",
                     iconColor: Color(red: 0.98, green: 0.57, blue: 0.24),
-                    iconBg: Color(red: 0.98, green: 0.57, blue: 0.24).opacity(0.15),
                     name: "Similar",
                     subtitle: "Visually alike shots",
-                    count: viewModel.photoGroups.filter { $0.reason == .visuallySimilar }.count,
-                    state: viewModel.photoScanState
+                    count: similarGroups.count,
+                    state: viewModel.photoScanState,
+                    scanProgress: viewModel.similarProgress,
+                    isPaid: false
                 ) {
-                    PhotoResultsView(groups: viewModel.photoGroups).environmentObject(purchaseManager)
+                    if !similarGroups.isEmpty {
+                        navPath.append(NavDest.similar)
+                    } else {
+                        pendingNav = .similar
+                        if case .idle = viewModel.photoScanState { Task { await viewModel.scanPhotos() } }
+                    }
                 }
-                CategoryRow(
-                    icon: "person.2.fill",
-                    iconColor: Color(red: 0.55, green: 0.36, blue: 0.96),
-                    iconBg: Color(red: 0.55, green: 0.36, blue: 0.96).opacity(0.15),
-                    name: "Contacts",
-                    subtitle: "Duplicate entries",
-                    count: viewModel.contactMatches.count,
-                    state: viewModel.contactScanState
-                ) {
-                    ContactResultsView(matches: viewModel.contactMatches).environmentObject(purchaseManager)
-                }
-                CategoryRow(
+                CategoryCard(
                     icon: "video.fill",
                     iconColor: Color(red: 0.2, green: 0.83, blue: 0.6),
-                    iconBg: Color(red: 0.2, green: 0.83, blue: 0.6).opacity(0.15),
                     name: "Large Videos",
                     subtitle: "Files over 50 MB",
                     count: viewModel.largeFiles.count,
-                    state: viewModel.fileScanState
+                    state: viewModel.fileScanState,
+                    scanProgress: (0, 0),
+                    isPaid: false
                 ) {
-                    FileResultsView(files: viewModel.largeFiles).environmentObject(purchaseManager)
+                    if !viewModel.largeFiles.isEmpty {
+                        navPath.append(NavDest.largeVideos)
+                    } else {
+                        pendingNav = .largeVideos
+                        if case .idle = viewModel.fileScanState { Task { await viewModel.scanFiles() } }
+                    }
                 }
+                CategoryCard(
+                    icon: "camera.filters",
+                    iconColor: Color(red: 0.45, green: 0.4, blue: 1),
+                    name: "Blurry",
+                    subtitle: "Out-of-focus shots",
+                    count: viewModel.blurPhotos.count,
+                    state: viewModel.blurScanState,
+                    scanProgress: viewModel.blurProgress,
+                    isPaid: false
+                ) {
+                    if !viewModel.blurPhotos.isEmpty {
+                        navPath.append(NavDest.blurry)
+                    } else {
+                        pendingNav = .blurry
+                        if case .idle = viewModel.blurScanState { Task { await viewModel.scanBlur() } }
+                    }
+                }
+                CategoryCard(
+                    icon: "rectangle.on.rectangle",
+                    iconColor: Color(red: 0.18, green: 0.72, blue: 0.95),
+                    name: "Screenshots",
+                    subtitle: "App & system captures",
+                    count: viewModel.screenshotAssets.count,
+                    state: viewModel.screenshotScanState,
+                    scanProgress: (0, 0),
+                    isPaid: false
+                ) {
+                    if !viewModel.screenshotAssets.isEmpty {
+                        navPath.append(NavDest.screenshots)
+                    } else {
+                        pendingNav = .screenshots
+                        if case .idle = viewModel.screenshotScanState { Task { await viewModel.scanScreenshots() } }
+                    }
+                }
+                CategoryCard(
+                    icon: "photo.stack",
+                    iconColor: Color(red: 0.98, green: 0.75, blue: 0.25),
+                    name: "Large Photos",
+                    subtitle: "RAW, ProRAW & panoramas",
+                    count: viewModel.largePhotos.count,
+                    state: viewModel.largePhotoScanState,
+                    scanProgress: viewModel.largePhotoProgress,
+                    isPaid: false
+                ) {
+                    if !viewModel.largePhotos.isEmpty {
+                        navPath.append(NavDest.largePhotos)
+                    } else {
+                        pendingNav = .largePhotos
+                        if case .idle = viewModel.largePhotoScanState { Task { await viewModel.scanLargePhotos() } }
+                    }
+                }
+                CategoryCard(
+                    icon: "photo.on.rectangle.angled",
+                    iconColor: Color(red: 0.18, green: 0.82, blue: 0.82),
+                    name: "Panoramas",
+                    subtitle: "Wide panorama shots",
+                    count: viewModel.panoramaCount,
+                    state: viewModel.panoramaCount > 0 ? .done : .idle,
+                    scanProgress: (0, 0),
+                    isPaid: false
+                ) {
+                    if !viewModel.panoramaAssets.isEmpty {
+                        navPath.append(NavDest.panoramas)
+                    }
+                }
+                CategoryCard(
+                    icon: "person.crop.rectangle",
+                    iconColor: Color(red: 0.72, green: 0.45, blue: 1),
+                    name: "Portrait Mode",
+                    subtitle: "Depth-effect portraits",
+                    count: viewModel.portraitModeCount,
+                    state: viewModel.portraitModeCount > 0 ? .done : .idle,
+                    scanProgress: (0, 0),
+                    isPaid: false
+                ) {
+                    if !viewModel.portraitModeAssets.isEmpty {
+                        navPath.append(NavDest.portraitMode)
+                    }
+                }
+                CategoryCard(
+                    icon: "livephoto",
+                    iconColor: Color(red: 0.98, green: 0.57, blue: 0.24),
+                    name: "Live Photos",
+                    subtitle: "Motion + sound photos",
+                    count: viewModel.livePhotoCount,
+                    state: viewModel.livePhotoCount > 0 ? .done : .idle,
+                    scanProgress: (0, 0),
+                    isPaid: false
+                ) {
+                    if !viewModel.livePhotoAssets.isEmpty {
+                        navPath.append(NavDest.livePhotos)
+                    }
+                }
+                RecentlyDeletedCard(viewModel: viewModel)
             }
             .padding(.horizontal, 20)
         }
     }
+
+    // MARK: - Helpers
+
+    private func startScan() {
+        let task = Task {
+            await viewModel.refreshTotalLibraryCount()
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { await viewModel.scanPhotos() }
+                group.addTask { await viewModel.scanFiles() }
+                group.addTask { await viewModel.scanBlur() }
+                group.addTask { await viewModel.scanScreenshots() }
+                group.addTask { await viewModel.scanLargePhotos() }
+                group.addTask { await viewModel.scanSemantic() }
+            }
+        }
+        viewModel.registerScanTask(task)
+    }
+
+    private var timeRemainingText: String? {
+        guard let start = viewModel.scanStartTime else { return nil }
+        let fraction = viewModel.overallProgressFraction
+        guard fraction > 0.03 else { return nil }
+        let elapsed = now.timeIntervalSince(start)
+        let remaining = elapsed / fraction * (1 - fraction)
+        if remaining < 8  { return "almost done…" }
+        if remaining < 60 { return "~\(Int(remaining))s remaining" }
+        let m = Int(remaining) / 60, s = Int(remaining) % 60
+        return "~\(m)m \(s)s remaining"
+    }
+
+    private func relativeTime(from date: Date) -> String {
+        let e = Date().timeIntervalSince(date)
+        if e < 60    { return "just now" }
+        if e < 3600  { return "\(Int(e / 60))m ago" }
+        if e < 86400 { return "\(Int(e / 3600))h ago" }
+        return "\(Int(e / 86400))d ago"
+    }
 }
 
-// MARK: - Category Row
+// MARK: - Smart Categories Section
 
-private struct CategoryRow<Destination: View>: View {
+extension HomeView {
+    @ViewBuilder
+    var smartCategoriesSection: some View {
+        if viewModel.isSemanticVisible {
+            VStack(spacing: 10) {
+                HStack {
+                    Text("Smart Categories")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Spacer()
+                    if case .scanning = viewModel.semanticScanState {
+                        ProgressView()
+                            .tint(Color(red: 1, green: 0.42, blue: 0.67))
+                            .scaleEffect(0.8)
+                    } else {
+                        Text("\(viewModel.semanticGroups.count) categories")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Color.white.opacity(0.35))
+                    }
+                }
+                .padding(.horizontal, 24)
+
+                VStack(spacing: 10) {
+                    ForEach(viewModel.semanticGroups) { group in
+                        SemanticCategoryRow(group: group, navPath: $navPath)
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+        }
+    }
+}
+
+private struct SemanticCategoryRow: View {
+    let group: SemanticGroup
+    @Binding var navPath: NavigationPath
+
+    private let iconColor = Color(red: 0.4, green: 0.7, blue: 1.0)
+    private let iconBg    = Color(red: 0.4, green: 0.7, blue: 1.0).opacity(0.15)
+
+    var body: some View {
+        Button {
+            navPath.append(NavDest.semantic(group.id))
+        } label: {
+            HStack(spacing: 14) {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(iconBg)
+                    .frame(width: 46, height: 46)
+                    .overlay(
+                        Image(systemName: group.category.icon)
+                            .font(.system(size: 20))
+                            .foregroundStyle(iconColor)
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.category.rawValue)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("\(group.assets.count) photos")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.white.opacity(0.4))
+                }
+
+                Spacer()
+
+                HStack(spacing: 6) {
+                    Text("\(group.assets.count)")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(iconColor)
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(Color.white.opacity(0.2))
+                }
+            }
+            .padding(14)
+            .background(Color(white: 1, opacity: 0.05), in: RoundedRectangle(cornerRadius: 18))
+            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color(white: 1, opacity: 0.07)))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Navigation destinations
+
+private enum NavDest: Hashable {
+    case duplicates, similar, largeVideos, blurry, screenshots, largePhotos
+    case panoramas, portraitMode, livePhotos
+    case semantic(UUID)   // UUID of the SemanticGroup
+}
+
+// MARK: - Category Card (2-column grid tile)
+
+private struct CategoryCard: View {
     let icon: String
     let iconColor: Color
-    let iconBg: Color
     let name: String
     let subtitle: String
     let count: Int
     let state: HomeViewModel.ScanState
-    @ViewBuilder let destination: () -> Destination
-
-    private var isNavigable: Bool {
-        if case .done = state { return count > 0 }
-        return false
-    }
+    let scanProgress: (completed: Int, total: Int)
+    let isPaid: Bool
+    let onTap: () -> Void
 
     var body: some View {
-        Group {
-            if isNavigable {
-                NavigationLink(destination: destination) { rowContent }
-            } else {
-                rowContent
-            }
+        Button(action: onTap) {
+            cardContent
         }
-        .background(Color(white: 1, opacity: 0.05), in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color(white: 1, opacity: 0.07)))
+        .buttonStyle(.plain)
+        .background(Color(white: 1, opacity: 0.05), in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color(white: 1, opacity: 0.07)))
     }
 
-    private var rowContent: some View {
-        HStack(spacing: 14) {
-            RoundedRectangle(cornerRadius: 14)
-                .fill(iconBg)
-                .frame(width: 46, height: 46)
-                .overlay(
-                    Image(systemName: icon)
-                        .font(.system(size: 20))
-                        .foregroundStyle(iconColor)
-                )
+    private var cardContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Top row: count badge (+ lock) on right
+            HStack(alignment: .top) {
+                Spacer()
+                HStack(spacing: 4) {
+                    countBadge
+                    if isPaid {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
 
+            // Icon centered
+            HStack {
+                Spacer()
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(iconColor.opacity(0.15))
+                    .frame(width: 52, height: 52)
+                    .overlay(
+                        Image(systemName: icon)
+                            .font(.system(size: 22))
+                            .foregroundStyle(iconColor)
+                    )
+                Spacer()
+            }
+            .padding(.vertical, 14)
+
+            // Name + subtitle
             VStack(alignment: .leading, spacing: 2) {
                 Text(name)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white)
                 Text(subtitle)
-                    .font(.system(size: 12))
+                    .font(.system(size: 11))
                     .foregroundStyle(Color.white.opacity(0.4))
+                    .lineLimit(1)
             }
-
-            Spacer()
-
-            VStack(spacing: 4) {
-                badgeView
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(Color.white.opacity(0.2))
-            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 14)
         }
-        .padding(14)
     }
 
     @ViewBuilder
-    private var badgeView: some View {
+    private var countBadge: some View {
         switch state {
         case .idle:
             Text("—")
-                .font(.system(size: 13))
+                .font(.system(size: 12))
                 .foregroundStyle(Color.white.opacity(0.3))
         case .scanning:
-            ProgressView()
-                .tint(iconColor)
-                .scaleEffect(0.7)
-        case .done:
             if count > 0 {
-                Text("\(count)")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(iconColor)
+                // Live count — animates upward as results arrive
+                Text(count.formatted())
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+                    .monospacedDigit()
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(iconColor, in: Capsule())
+                    .contentTransition(.numericText())
+                    .animation(.easeInOut(duration: 0.2), value: count)
             } else {
-                Text("0")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.white.opacity(0.25))
+                ProgressView()
+                    .tint(iconColor)
+                    .scaleEffect(0.75)
+                    .frame(width: 28, height: 20)
             }
+        case .done:
+            let label = count > 0 ? count.formatted() : "0"
+            Text(label)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(count > 0 ? .white : Color.white.opacity(0.3))
+                .monospacedDigit()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(count > 0 ? iconColor : Color.white.opacity(0.07), in: Capsule())
+                .contentTransition(.numericText())
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 13))
@@ -357,23 +863,30 @@ private struct CompletionOverlay: View {
                     .padding(.top, 40)
 
                 VStack(spacing: 6) {
-                    Text("All cleaned up! ✦")
+                    Text("Scan complete! ✦")
                         .font(.duckDisplay)
                         .foregroundStyle(Color.duckBerry)
-                    Text("Your library is looking fresh.")
+                    Text("Here's what we found in your library.")
                         .font(.duckCaption)
                         .foregroundStyle(Color.duckRose)
                 }
 
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
-                    StatCell(label: "GB Freed", value: viewModel.reclaimableFormatted, color: .duckPink)
-                    StatCell(label: "Photos Removed", value: "\(viewModel.photoGroups.count)", color: .duckOrange)
-                    StatCell(label: "Contacts Merged", value: "\(viewModel.contactMatches.count)", color: .duckBerry)
-                    StatCell(label: "Videos Compressed", value: "\(viewModel.largeFiles.count)", color: .green)
+                    StatCell(label: "Reclaimable", value: viewModel.reclaimableFormatted, color: .duckPink)
+                    let dupCount = viewModel.photoGroups.filter { $0.reason != .visuallySimilar }.count
+                    StatCell(label: "Duplicate Groups", value: "\(dupCount)", color: .duckOrange)
+                    StatCell(label: "Similar Groups", value: "\(viewModel.photoGroups.filter { $0.reason == .visuallySimilar }.count)", color: Color(red: 0.45, green: 0.4, blue: 1))
+                    StatCell(label: "Blurry Photos", value: "\(viewModel.blurPhotos.count)", color: .green)
                 }
                 .padding(.horizontal)
 
-                DuckPrimaryButton(title: "✦ Back to Library") { dismiss() }
+                Text("Tap any category below to review and delete.")
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.duckRose)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+
+                DuckPrimaryButton(title: "✦ Review Results") { dismiss() }
                     .padding(.horizontal)
                     .padding(.bottom, 32)
             }
@@ -404,13 +917,109 @@ private struct StatCell: View {
     }
 }
 
-// MARK: - HomeViewModel extension
+// MARK: - Recently Deleted Card
+
+private struct RecentlyDeletedCard: View {
+    @ObservedObject var viewModel: HomeViewModel
+
+    private let iconColor = Color(red: 1, green: 0.6, blue: 0.2)
+
+    var body: some View {
+        Group {
+            if case .done = viewModel.recentlyDeletedScanState,
+               viewModel.recentlyDeletedPhotos.count > 0 {
+                NavigationLink {
+                    RecentlyDeletedView(viewModel: viewModel)
+                } label: {
+                    cardContent
+                }
+            } else {
+                Button {
+                    Task { await viewModel.scanRecentlyDeleted() }
+                } label: {
+                    cardContent
+                }
+                .disabled({
+                    if case .scanning = viewModel.recentlyDeletedScanState { return true }
+                    return false
+                }())
+            }
+        }
+        .background(Color(white: 1, opacity: 0.05), in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color(white: 1, opacity: 0.07)))
+    }
+
+    private var cardContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                Spacer()
+                badgeView
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+
+            HStack {
+                Spacer()
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(iconColor.opacity(0.15))
+                    .frame(width: 52, height: 52)
+                    .overlay(
+                        Image(systemName: "trash.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(iconColor)
+                    )
+                Spacer()
+            }
+            .padding(.vertical, 14)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Recently Deleted")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                Text("Recover space now")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.white.opacity(0.4))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 14)
+        }
+    }
+
+    @ViewBuilder
+    private var badgeView: some View {
+        switch viewModel.recentlyDeletedScanState {
+        case .idle:
+            Text("Tap to scan")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.white.opacity(0.3))
+        case .scanning:
+            ProgressView()
+                .tint(iconColor)
+                .scaleEffect(0.75)
+                .frame(width: 28, height: 20)
+        case .done:
+            let count = viewModel.recentlyDeletedPhotos.count
+            Text(count > 0 ? count.formatted() : "0")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(count > 0 ? .white : Color.white.opacity(0.3))
+                .monospacedDigit()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(count > 0 ? iconColor : Color.white.opacity(0.07), in: Capsule())
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(.red)
+        }
+    }
+}
+
+// MARK: - HomeViewModel display extensions
 
 extension HomeViewModel {
     var storageFreeFormatted: String {
-        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
-        let free = (attrs?[.systemFreeSize] as? Int64) ?? 0
-        return ByteCountFormatter.string(fromByteCount: free, countStyle: .file)
+        ByteCountFormatter.string(fromByteCount: storageCapacity.available, countStyle: .file)
     }
     var storageTotalStripped: String {
         storageTotalFormatted.replacingOccurrences(of: " total", with: "")

@@ -1,6 +1,5 @@
 import SwiftUI
 import Photos
-import Contacts
 
 struct OnboardingView: View {
     @AppStorage("hasOnboarded") private var hasOnboarded = false
@@ -10,10 +9,8 @@ struct OnboardingView: View {
         TabView(selection: $page) {
             WelcomeStep(onNext: { page = 1 })
                 .tag(0)
-            PhotoPermissionStep(onNext: { page = 2 })
+            PhotoPermissionStep(onNext: { hasOnboarded = true })
                 .tag(1)
-            ContactPermissionStep(onDone: { hasOnboarded = true })
-                .tag(2)
         }
         .tabViewStyle(.page)
         .indexViewStyle(.page(backgroundDisplayMode: .always))
@@ -110,56 +107,3 @@ private struct PhotoPermissionStep: View {
     }
 }
 
-// MARK: - Step 3: Contact Permission
-
-private struct ContactPermissionStep: View {
-    let onDone: () -> Void
-    @State private var status = CNContactStore.authorizationStatus(for: .contacts)
-    @Environment(\.openURL) private var openURL
-
-    var body: some View {
-        VStack(spacing: 28) {
-            Spacer()
-            RoundedRectangle(cornerRadius: 28)
-                .fill(Color.duckSoftPink)
-                .frame(width: 180, height: 180)
-
-            VStack(spacing: 10) {
-                Text("All Set!")
-                    .font(.duckDisplay)
-                    .foregroundStyle(Color.duckBerry)
-                    .multilineTextAlignment(.center)
-                Text("PhotoDuck is ready to clean.")
-                    .font(.duckCaption)
-                    .foregroundStyle(Color.duckRose)
-                    .multilineTextAlignment(.center)
-            }
-
-            Spacer()
-
-            VStack(spacing: 12) {
-                if status == .denied || status == .restricted {
-                    DuckPrimaryButton(title: "Open Settings") {
-                        if let url = URL(string: "app-settings:") { openURL(url) }
-                    }
-                } else if status == .notDetermined {
-                    DuckPrimaryButton(title: "Allow Contacts Access") {
-                        Task {
-                            let store = CNContactStore()
-                            _ = try? await store.requestAccess(for: .contacts)
-                            status = CNContactStore.authorizationStatus(for: .contacts)
-                            onDone()
-                        }
-                    }
-                } else {
-                    DuckPrimaryButton(title: "Let's Go", action: onDone)
-                }
-                Button("Skip for now", action: onDone)
-                    .font(.duckCaption)
-                    .foregroundStyle(Color.duckRose)
-            }
-            .padding(.horizontal, 32)
-            .padding(.bottom, 60)
-        }
-    }
-}

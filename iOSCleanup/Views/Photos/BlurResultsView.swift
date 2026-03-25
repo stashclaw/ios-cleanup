@@ -1,0 +1,226 @@
+import SwiftUI
+import Photos
+
+struct BlurResultsView: View {
+    @EnvironmentObject private var purchaseManager: PurchaseManager
+    @EnvironmentObject private var homeViewModel: HomeViewModel
+
+    private var assets: [PHAsset] { homeViewModel.blurPhotos }
+
+    @State private var selectedAssets = Set<String>()
+    @State private var isDeleting = false
+    @State private var deleteError: String?
+    @State private var showPaywall = false
+    @State private var visibleCount = 60
+
+    var body: some View {
+        Group {
+            if assets.isEmpty && homeViewModel.blurScanState != .scanning {
+                EmptyStateView(
+                    title: "No Blurry Photos",
+                    icon: "camera.filters",
+                    message: "Your photos are all in focus!"
+                )
+            } else {
+                ScrollView {
+                    VStack(spacing: 14) {
+                        if homeViewModel.blurScanState == .scanning {
+                            ScanningBanner(message: "Finding blurry photos…", color: Color(red: 0.45, green: 0.4, blue: 1))
+                        }
+                        heroCard
+                        if let error = deleteError {
+                            Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal)
+                        }
+                        photoGrid
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                }
+                .background(Color.duckBlush.ignoresSafeArea())
+            }
+        }
+        .navigationTitle("Blurry Photos")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if selectedAssets.isEmpty {
+                    Button(purchaseManager.isPurchased ? "Select All" : "Select 🔒") {
+                        guard purchaseManager.isPurchased else { showPaywall = true; return }
+                        assets.prefix(visibleCount).forEach { selectedAssets.insert($0.localIdentifier) }
+                    }
+                    .font(.system(size: 14))
+                    .foregroundStyle(Color.duckPink)
+                } else {
+                    Button("Delete (\(selectedAssets.count))") {
+                        guard purchaseManager.isPurchased else { showPaywall = true; return }
+                        Task { await deleteSelected() }
+                    }
+                    .disabled(isDeleting)
+                    .foregroundStyle(Color.duckRose)
+                }
+            }
+        }
+        .sheet(isPresented: $showPaywall) { PaywallView().environmentObject(purchaseManager) }
+        .onReceive(NotificationCenter.default.publisher(for: .purchaseDidSucceed)) { _ in
+            showPaywall = false
+        }
+    }
+
+    // MARK: - Hero card
+
+    private var heroCard: some View {
+        DuckCard {
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(assets.count)")
+                        .font(Font.custom("FredokaOne-Regular", size: 32))
+                        .foregroundStyle(Color.duckPink)
+                    Text("blurry photos")
+                        .font(.duckCaption)
+                        .foregroundStyle(Color.duckRose)
+                }
+                Spacer()
+                Image(systemName: "camera.filters")
+                    .font(.largeTitle)
+                    .foregroundStyle(Color.duckSoftPink)
+            }
+            .padding(16)
+        }
+    }
+
+    // MARK: - Photo grid (3 columns, rounded square cells)
+
+    private var photoGrid: some View {
+        let gap: CGFloat = 10
+        let cardPt = (UIScreen.main.bounds.width - 52) / 3   // 16+16 padding + 10+10 gaps
+        let columns = Array(repeating: GridItem(.flexible(), spacing: gap), count: 3)
+        return LazyVGrid(columns: columns, spacing: gap) {
+            ForEach(assets.prefix(visibleCount), id: \.localIdentifier) { asset in
+                BlurPhotoCell(
+                    asset: asset,
+                    isSelected: selectedAssets.contains(asset.localIdentifier),
+                    onTap: {
+                        if selectedAssets.contains(asset.localIdentifier) {
+                            selectedAssets.remove(asset.localIdentifier)
+                        } else {
+                            selectedAssets.insert(asset.localIdentifier)
+                        }
+                    }
+                )
+                .frame(height: cardPt)
+                .clipped()
+            }
+            if visibleCount < assets.count {
+                Color.clear.frame(height: 1).gridCellColumns(3)
+                    .onAppear { visibleCount = min(visibleCount + 60, assets.count) }
+            }
+        }
+    }
+
+    // MARK: - Delete
+
+    private func deleteSelected() async {
+        isDeleting = true
+        defer { isDeleting = false }
+        let toDelete = assets.filter { selectedAssets.contains($0.localIdentifier) }
+        let bytes = toDelete.reduce(Int64(0)) { sum, asset in
+            let size = PHAssetResource.assetResources(for: asset)
+                .first.flatMap { $0.value(forKey: "fileSize") as? Int64 } ?? 0
+            return sum + size
+        }
+        do {
+            try await PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.deleteAssets(toDelete as NSFastEnumeration)
+            }
+            if bytes > 0 {
+                NotificationCenter.default.post(name: .didFreeBytes, object: nil,
+                                                userInfo: ["bytes": bytes])
+            }
+            selectedAssets.removeAll()
+        } catch {
+            deleteError = error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Cell (self-loading)
+
+private let _blurCellCache: NSCache<NSString, UIImage> = {
+    let c = NSCache<NSString, UIImage>()
+    c.countLimit = 300
+    c.totalCostLimit = 40 * 1024 * 1024
+    return c
+}()
+
+@MainActor
+private let _blurCellPx: CGFloat = {
+    let scale = UIScreen.main.scale
+    return ((UIScreen.main.bounds.width - 32 - 20) / 3) * scale  // 16pt padding × 2, 10pt gap × 2
+}()
+
+@MainActor
+private let _blurCardPt: CGFloat = (UIScreen.main.bounds.width - 52) / 3  // 16+16 padding + 10+10 gaps
+
+private struct BlurPhotoCell: View {
+    let asset: PHAsset
+    let isSelected: Bool
+    let onTap: () -> Void
+
+    @State private var thumbnail: UIImage?
+    @State private var requestID: PHImageRequestID?
+
+    var body: some View {
+        Button(action: onTap) {
+            ZStack(alignment: .topTrailing) {
+                Group {
+                    if let img = thumbnail {
+                        Image(uiImage: img).resizable().scaledToFill()
+                    } else {
+                        Color.duckSoftPink.opacity(0.3).overlay(ProgressView().scaleEffect(0.6))
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .overlay(isSelected ? Color.duckPink.opacity(0.35) : Color.clear)
+
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 20)).foregroundStyle(.white)
+                        .background(Circle().fill(Color.duckPink).padding(2))
+                        .padding(5)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(isSelected ? Color.duckPink : Color.duckSoftPink.opacity(0.3), lineWidth: isSelected ? 2 : 1))
+        .onAppear { load() }
+        .onDisappear { cancel() }
+    }
+
+    private func load() {
+        let key = "\(asset.localIdentifier)_blur" as NSString
+        if let cached = _blurCellCache.object(forKey: key) { thumbnail = cached; return }
+        let opts = PHImageRequestOptions()
+        opts.deliveryMode = .opportunistic
+        opts.isNetworkAccessAllowed = false
+        opts.resizeMode = .fast
+        let px = _blurCellPx
+        requestID = PHImageManager.default().requestImage(
+            for: asset, targetSize: CGSize(width: px, height: px),
+            contentMode: .aspectFill, options: opts
+        ) { image, info in
+            guard let image else { return }
+            let degraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+            if !degraded {
+                _blurCellCache.setObject(image, forKey: key, cost: Int(image.size.width * image.size.height * 4))
+            }
+            DispatchQueue.main.async { thumbnail = image }
+        }
+    }
+
+    private func cancel() {
+        if let id = requestID { PHImageManager.default().cancelImageRequest(id); requestID = nil }
+    }
+}

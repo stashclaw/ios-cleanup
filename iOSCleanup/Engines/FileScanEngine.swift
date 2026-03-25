@@ -81,14 +81,12 @@ actor FileScanEngine {
 
     private func fileSize(for asset: PHAsset) -> Int64? {
         let resources = PHAssetResource.assetResources(for: asset)
-        var total: Int64 = 0
-        for resource in resources {
-            if let size = resource.value(forKey: "fileSize") as? Int64 {
-                total += size
-            } else if let size = resource.value(forKey: "fileSize") as? Int {
-                total += Int64(size)
-            }
-        }
-        return total > 0 ? total : nil
+        // Only use the primary resource to avoid double-counting (original + pairedVideo + fullSizeVideo, etc.)
+        let primaryType: PHAssetResourceType = asset.mediaType == .video ? .video : .photo
+        let primary = resources.first(where: { $0.type == primaryType }) ?? resources.first
+        guard let resource = primary else { return nil }
+        if let size = resource.value(forKey: "fileSize") as? Int64 { return size }
+        if let size = resource.value(forKey: "fileSize") as? Int { return Int64(size) }
+        return nil
     }
 }

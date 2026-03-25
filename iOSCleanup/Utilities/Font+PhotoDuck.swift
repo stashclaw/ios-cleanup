@@ -1,5 +1,9 @@
 import SwiftUI
 
+// NSCache is thread-safe per Apple documentation but is not annotated as Sendable.
+// This retroactive conformance silences Swift 6 concurrency warnings project-wide.
+extension NSCache: @unchecked @retroactive Sendable {}
+
 extension Font {
     static let duckDisplay  = Font.custom("FredokaOne-Regular", size: 32)
     static let duckTitle    = Font.custom("FredokaOne-Regular", size: 22)
