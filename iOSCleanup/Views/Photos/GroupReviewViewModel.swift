@@ -163,9 +163,82 @@ final class GroupReviewViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Training data capture
+
+    /// Builds UserDecision records for every group that has marked (queued-for-delete) assets.
+    /// Must be called BEFORE PHPhotoLibrary.performChanges — deleted assets cannot be accessed afterwards.
+    func buildDecisions() async -> [UserDecision] {
+        var decisions: [UserDecision] = []
+
+        for group in queue {
+            // Find which assets in this group are queued for deletion.
+            let groupAssetIDs = Set(group.assets.map(\.localIdentifier))
+            let groupMarked = markedIDs.intersection(groupAssetIDs)
+            guard !groupMarked.isEmpty else { continue }
+
+            // The kept asset is the one in this group NOT queued for deletion.
+            // If all are marked (deleteAllAndAdvance), there is no "kept" — skip pairwise record.
+            let keptIDs = groupAssetIDs.subtracting(groupMarked)
+            guard let keptID = keptIDs.first else { continue }
+
+            // Look up assets by localIdentifier.
+            let keptFetch = PHAsset.fetchAssets(withLocalIdentifiers: [keptID], options: nil)
+            guard let keptAsset = keptFetch.firstObject else { continue }
+
+            let deletedIDs = Array(groupMarked)
+            let deletedFetch = PHAsset.fetchAssets(withLocalIdentifiers: deletedIDs, options: nil)
+            var deletedAssets: [PHAsset] = []
+            deletedFetch.enumerateObjects { a, _, _ in deletedAssets.append(a) }
+            guard !deletedAssets.isEmpty else { continue }
+
+            // Fetch quality data — should be cached from display, so no new Vision work.
+            let keptLabels = await PhotoQualityAnalyzer.shared.labels(for: keptAsset)
+            let keptScore  = await PhotoQualityAnalyzer.shared.qualityScore(for: keptAsset)
+
+            var deletedLabels: [[String]] = []
+            var deletedScores: [Float] = []
+            for asset in deletedAssets {
+                let labels = await PhotoQualityAnalyzer.shared.labels(for: asset)
+                let score  = await PhotoQualityAnalyzer.shared.qualityScore(for: asset)
+                deletedLabels.append(labels.map(\.rawValue))
+                deletedScores.append(score)
+            }
+
+            let reasonString: String
+            switch group.reason {
+            case .nearDuplicate:   reasonString = "nearDuplicate"
+            case .exactDuplicate:  reasonString = "exactDuplicate"
+            case .visuallySimilar: reasonString = "visuallySimilar"
+            case .burstShot:       reasonString = "burstShot"
+            }
+
+            let decision = UserDecision(
+                id: UUID(),
+                recordedAt: Date(),
+                keptAssetID: keptID,
+                deletedAssetIDs: deletedIDs,
+                groupID: group.id,
+                similarityReason: reasonString,
+                keptLabels: keptLabels.map(\.rawValue),
+                deletedLabels: deletedLabels,
+                keptQualityScore: keptScore,
+                deletedQualityScores: deletedScores
+            )
+            decisions.append(decision)
+        }
+
+        return decisions
+    }
+
     // MARK: - Bulk delete (single PHPhotoLibrary call)
 
     func commitDeletes() async throws {
+        // Capture training decisions BEFORE deletion — assets won't be accessible afterwards.
+        let decisions = await buildDecisions()
+        for decision in decisions {
+            await UserDecisionStore.shared.record(decision)
+        }
+
         let ids = Array(markedIDs)
         guard !ids.isEmpty else { clearCache(); return }
 

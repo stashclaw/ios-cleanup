@@ -102,7 +102,7 @@ actor PhotoQualityAnalyzer {
         }
     }
 
-    // MARK: - Blur (Laplacian variance)
+    // MARK: - Blur (Laplacian variance, adaptive threshold)
 
     private func isBlurry(_ image: CGImage) -> Bool {
         let w = min(image.width, 200), h = min(image.height, 200)
@@ -115,6 +115,24 @@ actor PhotoQualityAnalyzer {
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
         guard let ptr = ctx.data else { return false }
         let buf = ptr.bindMemory(to: UInt8.self, capacity: w * h)
+
+        // Compute mean luminance (0–255) from the same grayscale buffer.
+        // Reusing this pass avoids a second render. Mean luminance is used
+        // to build an adaptive threshold: dark/night shots have lower Laplacian
+        // variance even when sharp (fewer bright edges), so they need a lower
+        // threshold to avoid being falsely flagged as blurry.
+        var pixelSum: Double = 0
+        let pixelTotal = w * h
+        for i in 0..<pixelTotal { pixelSum += Double(buf[i]) }
+        let meanLuminance = pixelTotal > 0 ? pixelSum / Double(pixelTotal) : 128.0
+
+        // Adaptive threshold: scales from ~26 (very dark) to 80 (fully bright).
+        // Formula: threshold = 80 * (0.33 + 0.67 * brightnessFactor)
+        // At meanLuminance =   0 (black): threshold ≈ 26
+        // At meanLuminance = 255 (white): threshold  = 80
+        let brightnessFactor = meanLuminance / 255.0
+        let adaptiveThreshold = 80.0 * (0.33 + 0.67 * brightnessFactor)
+
         var sumSq: Double = 0
         var n = 0
         for y in 1..<(h - 1) {
@@ -127,7 +145,7 @@ actor PhotoQualityAnalyzer {
                 n += 1
             }
         }
-        return n > 0 && (sumSq / Double(n)) < 80.0
+        return n > 0 && (sumSq / Double(n)) < adaptiveThreshold
     }
 
     // MARK: - Exposure (mean luminance)

@@ -99,6 +99,14 @@ struct HomeView: View {
                         SemanticResultsView(group: group)
                             .environmentObject(purchaseManager)
                     }
+                case .eventRolls:
+                    EventRollResultsView(rolls: viewModel.eventRolls)
+                        .environmentObject(purchaseManager)
+                        .environmentObject(viewModel as HomeViewModel)
+                case .videoDuplicates:
+                    VideoGroupResultsView(groups: viewModel.videoGroups)
+                        .environmentObject(purchaseManager)
+                        .environmentObject(viewModel as HomeViewModel)
                 }
             }
         }
@@ -157,6 +165,22 @@ struct HomeView: View {
         }
         .onChange(of: viewModel.largePhotoScanState) { state in
             guard case .done = state, pendingNav == .largePhotos else { return }
+            pendingNav = nil
+        }
+        .onChange(of: viewModel.eventRolls.count) { count in
+            guard pendingNav == .eventRolls, count > 0 else { return }
+            pendingNav = nil; navPath.append(NavDest.eventRolls)
+        }
+        .onChange(of: viewModel.eventRollScanState) { state in
+            guard case .done = state, pendingNav == .eventRolls else { return }
+            pendingNav = nil
+        }
+        .onChange(of: viewModel.videoGroups.count) { count in
+            guard pendingNav == .videoDuplicates, count > 0 else { return }
+            pendingNav = nil; navPath.append(NavDest.videoDuplicates)
+        }
+        .onChange(of: viewModel.videoDuplicateScanState) { state in
+            guard case .done = state, pendingNav == .videoDuplicates else { return }
             pendingNav = nil
         }
         .onAppear {
@@ -443,7 +467,7 @@ struct HomeView: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
                 Spacer()
-                Text("10 tools")
+                Text("11 tools")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.white.opacity(0.35))
             }
@@ -601,6 +625,40 @@ struct HomeView: View {
                     }
                 }
                 RecentlyDeletedCard(viewModel: viewModel)
+                CategoryCard(
+                    icon: "photo.stack",
+                    iconColor: Color(red: 0.4, green: 0.6, blue: 1.0),
+                    name: "Event Rolls",
+                    subtitle: "Photos from trips & events",
+                    count: viewModel.eventRolls.count,
+                    state: viewModel.eventRollScanState,
+                    scanProgress: (0, 0),
+                    isPaid: false
+                ) {
+                    if !viewModel.eventRolls.isEmpty {
+                        navPath.append(NavDest.eventRolls)
+                    } else {
+                        pendingNav = .eventRolls
+                        if case .idle = viewModel.eventRollScanState { Task { await viewModel.scanEventRolls() } }
+                    }
+                }
+                CategoryCard(
+                    icon: "video.badge.plus",
+                    iconColor: Color(red: 1.0, green: 0.4, blue: 0.3),
+                    name: "Duplicate Videos",
+                    subtitle: "Similar & repeated clips",
+                    count: viewModel.videoGroups.count,
+                    state: viewModel.videoDuplicateScanState,
+                    scanProgress: (0, 0),
+                    isPaid: false
+                ) {
+                    if !viewModel.videoGroups.isEmpty {
+                        navPath.append(NavDest.videoDuplicates)
+                    } else {
+                        pendingNav = .videoDuplicates
+                        if case .idle = viewModel.videoDuplicateScanState { Task { await viewModel.scanVideoDuplicates() } }
+                    }
+                }
             }
             .padding(.horizontal, 20)
         }
@@ -618,6 +676,7 @@ struct HomeView: View {
                 group.addTask { await viewModel.scanScreenshots() }
                 group.addTask { await viewModel.scanLargePhotos() }
                 group.addTask { await viewModel.scanSemantic() }
+                group.addTask { await viewModel.scanEventRolls() }
             }
         }
         viewModel.registerScanTask(task)
@@ -734,6 +793,8 @@ private enum NavDest: Hashable {
     case duplicates, similar, largeVideos, blurry, screenshots, largePhotos
     case panoramas, portraitMode, livePhotos
     case semantic(UUID)   // UUID of the SemanticGroup
+    case eventRolls
+    case videoDuplicates
 }
 
 // MARK: - Category Card (2-column grid tile)

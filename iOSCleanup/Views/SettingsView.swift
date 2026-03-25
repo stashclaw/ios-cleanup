@@ -8,6 +8,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var showRescanConfirm = false
+    @State private var decisionCount: Int = 0
 
     private let bg    = Color(red: 0.05, green: 0.05, blue: 0.08)
     private let card  = Color(white: 1, opacity: 0.05)
@@ -178,8 +179,38 @@ struct SettingsView: View {
                             hasOnboarded = false
                             dismiss()
                         }
+                        Divider().overlay(stroke)
+                        HStack {
+                            Label {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Training Decisions")
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(.white)
+                                    Text("\(decisionCount) decision\(decisionCount == 1 ? "" : "s") recorded")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(Color.white.opacity(0.35))
+                                }
+                            } icon: {
+                                Image(systemName: "brain.head.profile")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(Color(red: 0.45, green: 0.4, blue: 1))
+                                    .frame(width: 28)
+                            }
+                            Spacer()
+                        }
+                        .padding(16)
+                        Divider().overlay(stroke)
+                        settingsRow(icon: "trash.circle", iconColor: .red, title: "Clear Decision History") {
+                            Task {
+                                await UserDecisionStore.shared.clearAll()
+                                decisionCount = await UserDecisionStore.shared.decisionCount()
+                            }
+                        }
                     }
                 }
+            }
+            .task {
+                decisionCount = await UserDecisionStore.shared.decisionCount()
             }
         }
     }

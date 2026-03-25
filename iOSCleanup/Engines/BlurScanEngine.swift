@@ -28,6 +28,10 @@ struct BlurAnalyzer {
     /// Algorithm: scales to 1024px long-edge, computes Laplacian variance over a 4×4 tile
     /// grid, then reasons about p10/p50/p90 of tile variances. Face-aware when observations
     /// are supplied: judges sharpness only within face bounding boxes to avoid bokeh false-positives.
+    ///
+    /// Key thresholds are adaptive: scaled by mean pixel luminance so that intentional dark/night
+    /// shots are not false-positively flagged as blurry. A pitch-black image has ~40% of the
+    /// threshold of a fully-lit image.
     static func isBlurry(cgImage: CGImage, faces: [VNFaceObservation] = []) -> Bool {
         // Scale to 1024 on the long edge for consistent threshold behaviour.
         let maxSide = 1024
@@ -47,24 +51,43 @@ struct BlurAnalyzer {
               let pixels = grayscaleFloats(from: source, width: width, height: height)
         else { return false }
 
+        // Compute mean luminance (0–255) from the same grayscale buffer.
+        // Used to build adaptive thresholds: dark images need lower thresholds
+        // because low-light scenes naturally produce weaker Laplacian responses
+        // even when sharp (fewer bright edges = less contrast to detect).
+        let pixelCount = pixels.count
+        let meanLuminance: Double = pixelCount > 0
+            ? pixels.reduce(0.0) { $0 + Double($1) } / Double(pixelCount)
+            : 128.0
+
+        // Brightness factor in [0, 1] (0 = black, 1 = white).
+        let brightnessFactor = meanLuminance / 255.0
+
+        // Adaptive scaling for all variance thresholds.
+        // Formula: threshold = base * (0.33 + 0.67 * brightnessFactor)
+        // At brightnessFactor = 0 (black): multiplier = 0.33 (33% of daytime threshold)
+        // At brightnessFactor = 1 (white): multiplier = 1.0  (full threshold)
+        let adaptiveScale = 0.33 + 0.67 * brightnessFactor
+
         // Low-texture guard: featureless scenes (solid sky, blank walls) → not blurry.
         let globalVar = laplacianVariance(pixels: pixels, width: width, height: height)
-        guard globalVar > textureGuardMin else { return false }
+        guard globalVar > textureGuardMin * adaptiveScale else { return false }
 
         // Face-aware path: judge sharpness within face regions only.
         if !faces.isEmpty {
+            let adaptiveFaceThreshold = faceThreshold * adaptiveScale
             let maxFaceVar = faces.compactMap { obs -> Double? in
                 let rect = pixelRect(for: obs, imageWidth: width, imageHeight: height)
                 return regionVariance(pixels: pixels, imageWidth: width, region: rect)
             }.max() ?? globalVar
-            return maxFaceVar < faceThreshold
+            return maxFaceVar < adaptiveFaceThreshold
         }
 
         // Tile-based analysis: 4×4 grid → 16 Laplacian variances.
         let raw = tileVariances(pixels: pixels, width: width, height: height)
         let tileVars = raw.sorted()
         guard tileVars.count >= 4 else {
-            return globalVar < 80.0  // fallback for tiny images
+            return globalVar < 80.0 * adaptiveScale  // fallback for tiny images
         }
 
         let p10 = percentile(tileVars, 10)
@@ -73,17 +96,21 @@ struct BlurAnalyzer {
 
         // Sharp region guard: at least one tile clearly sharp → photo is in focus somewhere.
         // Protects bokeh shots where the subject is sharp but background is blurred.
+        // Not scaled: a bright sharp region is equally sharp in any lighting.
         if p90 > sharpRegionThreshold { return false }
 
         // Bokeh spread: large ratio between sharpest and blurriest tile
         // → intentional depth-of-field, not camera shake or focus miss.
         if p10 > 1.0, (p90 / p10) >= bokehSpreadRatio { return false }
 
-        // Global blur: p90 below threshold → every tile is blurry.
-        if p90 < globalBlurThreshold { return true }
+        // Global blur: p90 below adaptive threshold → every tile is blurry.
+        let adaptiveGlobalBlurThreshold  = globalBlurThreshold * adaptiveScale
+        let adaptiveAmbiguousThreshold   = ambiguousThreshold  * adaptiveScale
+
+        if p90 < adaptiveGlobalBlurThreshold { return true }
 
         // Ambiguous zone: use median as tiebreaker.
-        return p50 < ambiguousThreshold
+        return p50 < adaptiveAmbiguousThreshold
     }
 
     /// Raw Laplacian variance of the full image (lower = blurrier).

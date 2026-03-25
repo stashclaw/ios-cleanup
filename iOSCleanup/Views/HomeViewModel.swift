@@ -136,7 +136,9 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     @Published var blurScanState:       ScanState = .idle
     @Published var screenshotScanState: ScanState = .idle
     @Published var largePhotoScanState: ScanState = .idle
-    @Published var semanticScanState:   ScanState = .idle
+    @Published var semanticScanState:       ScanState = .idle
+    @Published var eventRollScanState:      ScanState = .idle
+    @Published var videoDuplicateScanState: ScanState = .idle
 
     @Published var duplicateProgress:   (completed: Int, total: Int) = (0, 0)
     @Published var similarProgress:     (completed: Int, total: Int) = (0, 0)
@@ -150,6 +152,8 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     @Published var screenshotAssets:     [PHAsset]         = []
     @Published var largePhotos:          [LargePhotoItem]  = []
     @Published var semanticGroups:       [SemanticGroup]   = []
+    @Published var eventRolls:           [EventRoll]       = []
+    @Published var videoGroups:          [VideoGroup]      = []
     @Published var recentlyDeletedPhotos:[PHAsset]         = []
     @Published var recentlyDeletedBytes: Int64        = 0
     @Published var recentlyDeletedScanState: ScanState = .idle
@@ -165,7 +169,9 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     private var blurScanId       = UUID()
     private var screenshotScanId = UUID()
     private var largePhotoScanId = UUID()
-    private var semanticScanId   = UUID()
+    private var semanticScanId         = UUID()
+    private var eventRollScanId        = UUID()
+    private var videoDuplicateScanId   = UUID()
 
     @Published var lastScanDate: Date? = nil
     @Published var scanRanThisSession: Bool = false
@@ -303,12 +309,12 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     }
 
     var isAnyScanning: Bool {
-        [photoScanState, fileScanState, blurScanState, screenshotScanState, largePhotoScanState, semanticScanState].contains {
+        [photoScanState, fileScanState, blurScanState, screenshotScanState, largePhotoScanState, semanticScanState, eventRollScanState].contains {
             if case .scanning = $0 { return true }; return false
         }
     }
     var isAllDone: Bool {
-        [photoScanState, fileScanState, blurScanState, screenshotScanState, largePhotoScanState, semanticScanState].allSatisfy {
+        [photoScanState, fileScanState, blurScanState, screenshotScanState, largePhotoScanState, semanticScanState, eventRollScanState].allSatisfy {
             if case .done = $0 { return true }; return false
         }
     }
@@ -609,6 +615,62 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         semanticScanState = .done
     }
 
+    func scanEventRolls() async {
+        let currentId = UUID()
+        eventRollScanId    = currentId
+        eventRollScanState = .scanning
+        eventRolls         = []
+
+        let engine = EventRollScanEngine()
+        do {
+            for try await event in engine.scan() {
+                guard eventRollScanId == currentId else { return }
+                switch event {
+                case .progress:
+                    break   // progress not surfaced to UI (geocoding serialises anyway)
+                case .rollsFound(let rolls):
+                    eventRolls = rolls
+                }
+            }
+        } catch {
+            guard eventRollScanId == currentId else { return }
+            eventRollScanState = .failed(error.localizedDescription)
+            return
+        }
+
+        guard eventRollScanId == currentId else { return }
+        eventRollScanState = .done
+    }
+
+    // MARK: - Video Duplicates
+
+    func scanVideoDuplicates() async {
+        let currentId = UUID()
+        videoDuplicateScanId    = currentId
+        videoDuplicateScanState = .scanning
+        videoGroups             = []
+
+        let engine = VideoDuplicateEngine()
+        do {
+            for try await event in engine.scan() {
+                guard videoDuplicateScanId == currentId else { return }
+                switch event {
+                case .progress:
+                    break   // progress not surfaced to UI for video scanning
+                case .groupsFound(let groups):
+                    videoGroups = groups
+                }
+            }
+        } catch {
+            guard videoDuplicateScanId == currentId else { return }
+            videoDuplicateScanState = .failed(error.localizedDescription)
+            return
+        }
+
+        guard videoDuplicateScanId == currentId else { return }
+        videoDuplicateScanState = .done
+    }
+
     // MARK: - Recently Deleted
 
     func scanRecentlyDeleted() async {
@@ -819,13 +881,17 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         screenshotAssets = []
         largePhotos      = []
         semanticGroups   = []
-        photoScanState      = .idle
-        fileScanState       = .idle
-        blurScanState       = .idle
-        screenshotScanState = .idle
-        largePhotoScanState = .idle
-        semanticScanState   = .idle
-        lastScanDate        = nil
+        eventRolls       = []
+        videoGroups      = []
+        photoScanState          = .idle
+        fileScanState           = .idle
+        blurScanState           = .idle
+        screenshotScanState     = .idle
+        largePhotoScanState     = .idle
+        semanticScanState       = .idle
+        eventRollScanState      = .idle
+        videoDuplicateScanState = .idle
+        lastScanDate            = nil
     }
 
     /// Wipes all cached results and runs every engine from scratch.
@@ -840,6 +906,7 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
             group.addTask { await self.scanScreenshots() }
             group.addTask { await self.scanLargePhotos() }
             group.addTask { await self.scanSemantic() }
+            group.addTask { await self.scanEventRolls() }
         }
     }
 
@@ -857,9 +924,11 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         photoScanState      = .idle
         fileScanState       = .idle
         blurScanState       = .idle
-        screenshotScanState = .idle
-        largePhotoScanState = .idle
-        semanticScanState   = .idle
-        scanStartTime       = nil
+        screenshotScanState     = .idle
+        largePhotoScanState     = .idle
+        semanticScanState       = .idle
+        eventRollScanState      = .idle
+        videoDuplicateScanState = .idle
+        scanStartTime           = nil
     }
 }

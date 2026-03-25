@@ -18,6 +18,7 @@
 		AA00000100000000000000EA /* PhotoScanEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000EB /* PhotoScanEngineTests.swift */; };
 		AA0000010000000000000100 /* FileScanEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000010000000000000101 /* FileScanEngineTests.swift */; };
 		AA000002000000000000001A /* PurchaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001B /* PurchaseManager.swift */; };
+		USRDCS000000000000001A /* UserDecisionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = USRDCS000000000000001B /* UserDecisionStore.swift */; };
 		AA000002000000000000002A /* iOSCleanup.storekit in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000002B /* iOSCleanup.storekit */; };
 		AA000003000000000000001A /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000003000000000000001B /* OnboardingView.swift */; };
 		AA000004000000000000001A /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000004000000000000001B /* HomeView.swift */; };
@@ -59,6 +60,12 @@
 		GRVIEW0000000000000001A /* GroupReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRVIEW0000000000000001B /* GroupReviewView.swift */; };
 		GRVIEW0000000000000002A /* GroupReviewViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRVIEW0000000000000002B /* GroupReviewViewModel.swift */; };
 		PQANAL000000000000001A /* PhotoQualityAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = PQANAL000000000000001B /* PhotoQualityAnalyzer.swift */; };
+		VIDGRP000000000000001A /* VideoGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = VIDGRP000000000000001B /* VideoGroup.swift */; };
+		VIDENG000000000000001A /* VideoDuplicateEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = VIDENG000000000000001B /* VideoDuplicateEngine.swift */; };
+		VIDGRV000000000000001A /* VideoGroupResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = VIDGRV000000000000001B /* VideoGroupResultsView.swift */; };
+		EVROLL000000000000001A /* EventRoll.swift in Sources */ = {isa = PBXBuildFile; fileRef = EVROLL000000000000001B /* EventRoll.swift */; };
+		EVENG0000000000000001A /* EventRollScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = EVENG0000000000000001B /* EventRollScanEngine.swift */; };
+		EVRSV0000000000000001A /* EventRollResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EVRSV0000000000000001B /* EventRollResultsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -86,6 +93,7 @@
 		AA0000010000000000000301 /* iOSCleanupTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iOSCleanupTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000010000000000000401 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA000002000000000000001B /* PurchaseManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PurchaseManager.swift; sourceTree = "<group>"; };
+		USRDCS000000000000001B /* UserDecisionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserDecisionStore.swift; sourceTree = "<group>"; };
 		AA000002000000000000002B /* iOSCleanup.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = iOSCleanup.storekit; sourceTree = "<group>"; };
 		AA000003000000000000001B /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		AA000004000000000000001B /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
@@ -127,6 +135,12 @@
 		GRVIEW0000000000000001B /* GroupReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupReviewView.swift; sourceTree = "<group>"; };
 		GRVIEW0000000000000002B /* GroupReviewViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupReviewViewModel.swift; sourceTree = "<group>"; };
 		PQANAL000000000000001B /* PhotoQualityAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoQualityAnalyzer.swift; sourceTree = "<group>"; };
+		VIDGRP000000000000001B /* VideoGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoGroup.swift; sourceTree = "<group>"; };
+		VIDENG000000000000001B /* VideoDuplicateEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDuplicateEngine.swift; sourceTree = "<group>"; };
+		VIDGRV000000000000001B /* VideoGroupResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoGroupResultsView.swift; sourceTree = "<group>"; };
+		EVROLL000000000000001B /* EventRoll.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventRoll.swift; sourceTree = "<group>"; };
+		EVENG0000000000000001B /* EventRollScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventRollScanEngine.swift; sourceTree = "<group>"; };
+		EVRSV0000000000000001B /* EventRollResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventRollResultsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -198,6 +212,8 @@
 				BBSCREEN000000000000001B /* ScreenshotScanEngine.swift */,
 				CCLPE0000000000000001B /* LargePhotoScanEngine.swift */,
 				SEMENG000000000000001B /* SemanticScanEngine.swift */,
+				VIDENG000000000000001B /* VideoDuplicateEngine.swift */,
+				EVENG0000000000000001B /* EventRollScanEngine.swift */,
 			);
 			path = Engines;
 			sourceTree = "<group>";
@@ -209,6 +225,8 @@
 				AA000001000000000000005B /* LargeFile.swift */,
 				CCLPI0000000000000001B /* LargePhotoItem.swift */,
 				SEMGRP000000000000001B /* SemanticGroup.swift */,
+				VIDGRP000000000000001B /* VideoGroup.swift */,
+				EVROLL000000000000001B /* EventRoll.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -248,6 +266,7 @@
 			isa = PBXGroup;
 			children = (
 				AA000002000000000000001B /* PurchaseManager.swift */,
+				USRDCS000000000000001B /* UserDecisionStore.swift */,
 			);
 			path = Store;
 			sourceTree = "<group>";
@@ -290,6 +309,8 @@
 				CCLPV0000000000000001B /* LargePhotosResultsView.swift */,
 				METARV000000000000001B /* MetadataResultsView.swift */,
 				SEMRSV000000000000001B /* SemanticResultsView.swift */,
+				VIDGRV000000000000001B /* VideoGroupResultsView.swift */,
+				EVRSV0000000000000001B /* EventRollResultsView.swift */,
 			);
 			path = Photos;
 			sourceTree = "<group>";
@@ -425,6 +446,7 @@
 				AA000001000000000000008A /* PhotoScanEngine.swift in Sources */,
 				AA00000100000000000000AA /* FileScanEngine.swift in Sources */,
 				AA000002000000000000001A /* PurchaseManager.swift in Sources */,
+				USRDCS000000000000001A /* UserDecisionStore.swift in Sources */,
 				BBCONFIG00000000000000001A /* AppConfig.swift in Sources */,
 				AA000003000000000000001A /* OnboardingView.swift in Sources */,
 				AA000004000000000000001A /* HomeView.swift in Sources */,
@@ -459,6 +481,9 @@
 				AA00000F000000000000003A /* ProgressThrottle.swift in Sources */,
 				AA00000C000000000000003A /* DuckComponents.swift in Sources */,
 				PQANAL000000000000001A /* PhotoQualityAnalyzer.swift in Sources */,
+				VIDGRP000000000000001A /* VideoGroup.swift in Sources */,
+				VIDENG000000000000001A /* VideoDuplicateEngine.swift in Sources */,
+				VIDGRV000000000000001A /* VideoGroupResultsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
