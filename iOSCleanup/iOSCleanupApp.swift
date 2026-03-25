@@ -5,6 +5,7 @@ struct iOSCleanupApp: App {
     @StateObject private var purchaseManager = PurchaseManager()
 
     init() {
+        BackgroundScanScheduler.registerAll()  // MUST be before first runloop tick
         configureAppearance()
     }
 
@@ -12,7 +13,10 @@ struct iOSCleanupApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(purchaseManager)
-                .task { await purchaseManager.updatePurchaseStatus() }
+                .task {
+                    await purchaseManager.updatePurchaseStatus()
+                    BackgroundScanScheduler.scheduleIfNeeded()
+                }
         }
     }
 

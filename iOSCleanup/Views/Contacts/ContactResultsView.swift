@@ -5,97 +5,120 @@ struct ContactResultsView: View {
     let matches: [ContactMatch]
     @EnvironmentObject private var purchaseManager: PurchaseManager
 
-    private var certain: [ContactMatch]  { matches.filter { $0.confidence == .certain } }
+    private let bg = Color(red: 0.05, green: 0.05, blue: 0.08)
+
+    private var certain:  [ContactMatch] { matches.filter { $0.confidence == .certain } }
     private var probable: [ContactMatch] { matches.filter { $0.confidence == .probable } }
     private var possible: [ContactMatch] { matches.filter { $0.confidence == .possible } }
 
     var body: some View {
-        Group {
+        ZStack {
+            bg.ignoresSafeArea()
+
             if matches.isEmpty {
-                EmptyStateView(title: "No Duplicates Found", icon: "person.2.fill",
-                               message: "Your contacts look clean.")
+                VStack(spacing: 16) {
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: 48))
+                        .foregroundStyle(Color(red: 0.4, green: 0.8, blue: 0.6).opacity(0.6))
+                    Text("No Duplicate Contacts")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("Your contacts look clean.")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.white.opacity(0.4))
+                }
             } else {
                 ScrollView {
                     VStack(spacing: 20) {
                         if !certain.isEmpty {
-                            section(title: "Certain (\(certain.count))", items: certain)
+                            section(title: "Certain", accent: Color(red: 1, green: 0.42, blue: 0.67), items: certain)
                         }
                         if !probable.isEmpty {
-                            section(title: "Probable (\(probable.count))", items: probable)
+                            section(title: "Probable", accent: Color(red: 0.98, green: 0.57, blue: 0.24), items: probable)
                         }
                         if !possible.isEmpty {
-                            section(title: "Possible (\(possible.count))", items: possible)
+                            section(title: "Possible", accent: Color(red: 0.45, green: 0.4, blue: 1), items: possible)
                         }
                     }
-                    .padding(.horizontal)
-                    .padding(.vertical, 12)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
                 }
-                .background(Color.duckBlush.ignoresSafeArea())
             }
         }
         .navigationTitle("Duplicate Contacts")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(.large)
+        .toolbarColorScheme(.dark, for: .navigationBar)
     }
 
-    private func section(title: String, items: [ContactMatch]) -> some View {
+    private func section(title: String, accent: Color, items: [ContactMatch]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            DuckSectionHeader(title: title)
+            HStack {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(accent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(accent.opacity(0.15), in: Capsule())
+                Text("\(items.count)")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.white.opacity(0.4))
+                Spacer()
+            }
+
             ForEach(items) { match in
-                DuckCard {
-                    NavigationLink(destination: ContactMergePreviewView(match: match)
-                        .environmentObject(purchaseManager)) {
-                        ContactMatchRow(match: match)
-                            .padding(14)
-                    }
+                NavigationLink(destination: ContactMergePreviewView(match: match)
+                    .environmentObject(purchaseManager)) {
+                    ContactMatchRow(match: match, accent: accent)
                 }
+                .buttonStyle(.plain)
             }
         }
     }
 }
 
-// MARK: - Row
+// MARK: - Match Row
 
 private struct ContactMatchRow: View {
     let match: ContactMatch
+    let accent: Color
 
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 14) {
+            // Avatar placeholder
+            ZStack {
+                Circle()
+                    .fill(accent.opacity(0.15))
+                    .frame(width: 44, height: 44)
+                Text(initials(match.primary))
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(accent)
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
                 Text(fullName(match.primary))
-                    .font(.duckBody)
-                    .foregroundStyle(Color.duckBerry)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
                 Text(fullName(match.duplicate))
-                    .font(.duckCaption)
-                    .foregroundStyle(Color.duckRose)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.white.opacity(0.5))
+                    .lineLimit(1)
                 if !match.reasons.isEmpty {
                     Text(reasonSummary)
-                        .font(.duckLabel)
-                        .foregroundStyle(Color.duckSoftPink)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.white.opacity(0.35))
                 }
             }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 4) {
-                confidenceBadge
-                Image(systemName: "chevron.right")
-                    .font(.caption.bold())
-                    .foregroundStyle(Color.duckSoftPink)
-            }
-        }
-    }
 
-    private var confidenceBadge: some View {
-        let (label, color): (String, Color) = switch match.confidence {
-        case .certain:  ("Certain", Color.duckPink)
-        case .probable: ("Probable", Color.duckOrange)
-        case .possible: ("Possible", Color.duckSoftPink)
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.2))
         }
-        return Text(label)
-            .font(.duckLabel)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(color.opacity(0.15))
-            .foregroundStyle(color)
-            .clipShape(Capsule())
+        .padding(14)
+        .background(Color(white: 1, opacity: 0.05), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color(white: 1, opacity: 0.07)))
     }
 
     private var reasonSummary: String {
@@ -105,11 +128,22 @@ private struct ContactMatchRow: View {
             case .identicalEmail:           return "Same email"
             case .sameNameDifferentFormat:  return "Same name"
             case .fuzzyName(let d):         return "Similar name (±\(d))"
+            case .semanticOrganization:     return "Similar organization"
             }
         }.joined(separator: " · ")
     }
 
     private func fullName(_ contact: CNContact) -> String {
-        [contact.givenName, contact.familyName].filter { !$0.isEmpty }.joined(separator: " ")
+        let name = [contact.givenName, contact.familyName]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return name.isEmpty ? contact.organizationName : name
+    }
+
+    private func initials(_ contact: CNContact) -> String {
+        let g = contact.givenName.first.map(String.init) ?? ""
+        let f = contact.familyName.first.map(String.init) ?? ""
+        let combined = g + f
+        return combined.isEmpty ? "?" : combined.uppercased()
     }
 }

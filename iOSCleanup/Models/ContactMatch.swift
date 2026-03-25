@@ -18,5 +18,6 @@ struct ContactMatch: Identifiable, @unchecked Sendable {
         case identicalEmail
         case sameNameDifferentFormat
         case fuzzyName(distance: Int)
+        case semanticOrganization
     }
 }

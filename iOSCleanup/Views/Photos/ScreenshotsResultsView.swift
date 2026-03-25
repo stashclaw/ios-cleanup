@@ -13,13 +13,32 @@ struct ScreenshotsResultsView: View {
     @State private var showPaywall = false
     @State private var visibleCount = 60          // progressive loading cap across all sections
 
+    // OCR tagging
+    @State private var assetTags: [String: ScreenshotTag] = [:]
+    @State private var isTagging = false
+    @State private var selectedTag: ScreenshotTag? = nil
+
     // Age buckets: screenshots older than 30 days are "safe to delete".
     private static let oldDays = 30
     private var cutoff: Date {
         Calendar.current.date(byAdding: .day, value: -Self.oldDays, to: Date()) ?? Date()
     }
-    private var oldAssets: [PHAsset]    { assets.filter { ($0.creationDate ?? .distantPast) < cutoff } }
-    private var recentAssets: [PHAsset] { assets.filter { ($0.creationDate ?? .distantPast) >= cutoff } }
+
+    /// All assets after applying the active tag filter.
+    private var filteredAssets: [PHAsset] {
+        guard let tag = selectedTag else { return assets }
+        return assets.filter { assetTags[$0.localIdentifier] == tag }
+    }
+
+    private var oldAssets: [PHAsset]    { filteredAssets.filter { ($0.creationDate ?? .distantPast) < cutoff } }
+    private var recentAssets: [PHAsset] { filteredAssets.filter { ($0.creationDate ?? .distantPast) >= cutoff } }
+
+    /// Tags that have at least one matching asset — determines which pills to show.
+    private var presentTags: [ScreenshotTag] {
+        ScreenshotTag.allCases.filter { tag in
+            assets.contains { assetTags[$0.localIdentifier] == tag }
+        }
+    }
 
     /// Per-section slice counts. Old items fill first, then recent items get the remainder.
     private var oldVisible: [PHAsset] {
@@ -45,6 +64,18 @@ struct ScreenshotsResultsView: View {
                             ScanningBanner(message: "Finding screenshots…", color: Color(red: 0.18, green: 0.72, blue: 0.95))
                         }
                         heroCard
+                        if !assetTags.isEmpty {
+                            tagFilterPills
+                        } else if isTagging {
+                            HStack(spacing: 8) {
+                                ProgressView().scaleEffect(0.75)
+                                Text("Tagging screenshots…")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(Color.duckRose)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 4)
+                        }
                         if let error = deleteError {
                             Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal)
                         }
@@ -54,7 +85,7 @@ struct ScreenshotsResultsView: View {
                                 subtitle: "\(oldAssets.count) · \(Self.oldDays)+ days old",
                                 color: Color(red: 1, green: 0.42, blue: 0.67)
                             )
-                            screenshotGrid(for: oldVisible, sentinel: visibleCount < assets.count)
+                            screenshotGrid(for: oldVisible, sentinel: visibleCount < filteredAssets.count)
                         }
                         if !recentAssets.isEmpty {
                             sectionHeader(
@@ -73,6 +104,24 @@ struct ScreenshotsResultsView: View {
         }
         .navigationTitle("Screenshots")
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            guard assets.count > 0 && assetTags.isEmpty && !isTagging else { return }
+            isTagging = true
+            let engine = ScreenshotTagEngine()
+            do {
+                for try await event in engine.tag(assets: assets) {
+                    switch event {
+                    case .progress:
+                        break   // could show inline progress if desired
+                    case .tagsFound(let tags):
+                        assetTags = tags
+                    }
+                }
+            } catch {
+                // Tagging is best-effort; silently drop errors
+            }
+            isTagging = false
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 if selectedAssets.isEmpty {
@@ -95,6 +144,79 @@ struct ScreenshotsResultsView: View {
         .sheet(isPresented: $showPaywall) { PaywallView().environmentObject(purchaseManager) }
         .onReceive(NotificationCenter.default.publisher(for: .purchaseDidSucceed)) { _ in
             showPaywall = false
+        }
+    }
+
+    // MARK: - Tag filter pills
+
+    private var tagFilterPills: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                // "All" pill
+                Button {
+                    selectedTag = nil
+                } label: {
+                    Text("All")
+                        .font(.system(size: 13, weight: .medium))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(
+                            selectedTag == nil
+                                ? Color.duckPink
+                                : Color.duckSoftPink.opacity(0.15)
+                        )
+                        .foregroundStyle(
+                            selectedTag == nil
+                                ? Color.white
+                                : Color.duckRose
+                        )
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(
+                                    selectedTag == nil ? Color.clear : Color.duckSoftPink.opacity(0.4),
+                                    lineWidth: 1
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+
+                ForEach(presentTags, id: \.rawValue) { tag in
+                    Button {
+                        selectedTag = (selectedTag == tag) ? nil : tag
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: tag.icon)
+                                .font(.system(size: 11))
+                            Text(tag.rawValue)
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(
+                            selectedTag == tag
+                                ? Color.duckPink
+                                : Color.duckSoftPink.opacity(0.15)
+                        )
+                        .foregroundStyle(
+                            selectedTag == tag
+                                ? Color.white
+                                : Color.duckRose
+                        )
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(
+                                    selectedTag == tag ? Color.clear : Color.duckSoftPink.opacity(0.4),
+                                    lineWidth: 1
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
         }
     }
 
@@ -160,6 +282,7 @@ struct ScreenshotsResultsView: View {
                 ScreenshotCell(
                     asset: asset,
                     isSelected: selectedAssets.contains(asset.localIdentifier),
+                    tag: assetTags[asset.localIdentifier],
                     onTap: {
                         if selectedAssets.contains(asset.localIdentifier) {
                             selectedAssets.remove(asset.localIdentifier)
@@ -176,7 +299,7 @@ struct ScreenshotsResultsView: View {
                 Color.clear
                     .frame(height: 1)
                     .gridCellColumns(3)
-                    .onAppear { visibleCount = min(visibleCount + 60, assets.count) }
+                    .onAppear { visibleCount = min(visibleCount + 60, filteredAssets.count) }
             }
         }
     }
@@ -236,10 +359,12 @@ private let _ssCardHeight: CGFloat = ((UIScreen.main.bounds.width - 52) / 3) * (
 private struct ScreenshotCell: View {
     let asset: PHAsset
     let isSelected: Bool
+    let tag: ScreenshotTag?
     let onTap: () -> Void
 
     @State private var thumbnail: UIImage?
     @State private var requestID: PHImageRequestID?
+    @State private var isICloud = false
 
     var body: some View {
         Button(action: onTap) {
@@ -255,11 +380,61 @@ private struct ScreenshotCell: View {
                 .clipped()
                 .overlay(isSelected ? Color.duckPink.opacity(0.35) : Color.clear)
 
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 20)).foregroundStyle(.white)
-                        .background(Circle().fill(Color.duckPink).padding(2))
+                // Top-right: iCloud badge or selection checkmark
+                VStack {
+                    HStack {
+                        Spacer()
+                        if isICloud {
+                            Image(systemName: "icloud")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color.white.opacity(0.9))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 3)
+                                .background(Color.black.opacity(0.55))
+                                .clipShape(Capsule())
+                                .padding(5)
+                        } else if isSelected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 20)).foregroundStyle(.white)
+                                .background(Circle().fill(Color.duckPink).padding(2))
+                                .padding(5)
+                        }
+                    }
+                    Spacer()
+                }
+
+                // When iCloud badge shown and item is selected, put checkmark bottom-right
+                if isICloud && isSelected {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 18)).foregroundStyle(.white)
+                                .background(Circle().fill(Color.duckPink).padding(2))
+                                .padding(5)
+                        }
+                    }
+                }
+
+                // Tag badge — bottom-left corner
+                if let tag {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            HStack(spacing: 3) {
+                                Image(systemName: tag.icon)
+                                    .font(.system(size: 9, weight: .medium))
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Capsule())
+                            .foregroundStyle(Color.secondary)
+                            Spacer()
+                        }
                         .padding(5)
+                    }
                 }
             }
         }
@@ -267,8 +442,17 @@ private struct ScreenshotCell: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
             .strokeBorder(isSelected ? Color.duckPink : Color.duckSoftPink.opacity(0.3), lineWidth: isSelected ? 2 : 1))
-        .onAppear { startLoading() }
+        .onAppear {
+            startLoading()
+            isICloud = !Self.isStoredLocally(asset)
+        }
         .onDisappear { cancelLoading() }
+    }
+
+    private static func isStoredLocally(_ asset: PHAsset) -> Bool {
+        let resources = PHAssetResource.assetResources(for: asset)
+        guard let resource = resources.first(where: { $0.type == .photo || $0.type == .video }) else { return true }
+        return (resource.value(forKey: "locallyAvailable") as? Bool) ?? true
     }
 
     private func startLoading() {

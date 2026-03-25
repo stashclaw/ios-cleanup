@@ -17,6 +17,9 @@ struct UserDecision: Codable, Sendable {
     // Composite scores at decision time
     let keptQualityScore: Float
     let deletedQualityScores: [Float]
+    // Feature vectors captured BEFORE deletion — nil for old records (backward compat)
+    let featureVector: [Float]?           // kept asset's VNFeaturePrintObservation flattened
+    let deletedFeatureVectors: [[Float]]? // each deleted asset's feature vector, parallel to deletedAssetIDs
 }
 
 // MARK: - Store

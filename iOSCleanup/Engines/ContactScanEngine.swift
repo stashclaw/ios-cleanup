@@ -1,4 +1,5 @@
 import Contacts
+import NaturalLanguage
 
 actor ContactScanEngine {
 
@@ -7,6 +8,8 @@ actor ContactScanEngine {
         let index = phoneIndex(from: contacts)
         return findMatches(contacts: contacts, index: index)
     }
+
+    // MARK: - Fetch
 
     private func fetchContacts() async throws -> [CNContact] {
         let store = CNContactStore()
@@ -19,7 +22,7 @@ actor ContactScanEngine {
             CNContactPhoneNumbersKey as CNKeyDescriptor,
             CNContactEmailAddressesKey as CNKeyDescriptor,
             CNContactBirthdayKey as CNKeyDescriptor,
-            CNContactImageDataAvailableKey as CNKeyDescriptor
+            CNContactImageDataAvailableKey as CNKeyDescriptor,
         ]
 
         let request = CNContactFetchRequest(keysToFetch: keys)
@@ -29,6 +32,8 @@ actor ContactScanEngine {
         }
         return contacts
     }
+
+    // MARK: - Phone index
 
     private func phoneIndex(from contacts: [CNContact]) -> [String: [CNContact]] {
         var index: [String: [CNContact]] = [:]
@@ -42,13 +47,14 @@ actor ContactScanEngine {
         return index
     }
 
+    // MARK: - Match finding
+
     private func findMatches(contacts: [CNContact], index: [String: [CNContact]]) -> [ContactMatch] {
         var matches: [ContactMatch] = []
         var matchedPairs = Set<String>()
 
         func pairKey(_ a: CNContact, _ b: CNContact) -> String {
-            let ids = [a.identifier, b.identifier].sorted()
-            return ids.joined(separator: "|")
+            [a.identifier, b.identifier].sorted().joined(separator: "|")
         }
 
         // Phase 1: phone-based matches
@@ -84,14 +90,14 @@ actor ContactScanEngine {
             }
         }
 
-        // Phase 2: name-only fuzzy matches for unmatched contacts
-        var phonematched = Set<String>()
+        // Phase 2: name-only fuzzy + semantic organization matches for unmatched contacts
+        var phoneMatched = Set<String>()
         for match in matches {
-            phonematched.insert(match.primary.identifier)
-            phonematched.insert(match.duplicate.identifier)
+            phoneMatched.insert(match.primary.identifier)
+            phoneMatched.insert(match.duplicate.identifier)
         }
 
-        let unmatched = contacts.filter { !phonematched.contains($0.identifier) }
+        let unmatched = contacts.filter { !phoneMatched.contains($0.identifier) }
         for i in 0..<unmatched.count {
             for j in (i+1)..<unmatched.count {
                 let a = unmatched[i], b = unmatched[j]
@@ -100,21 +106,90 @@ actor ContactScanEngine {
 
                 let nameA = fullName(a), nameB = fullName(b)
                 let dist = NameMatcher.distance(nameA, nameB)
-                guard dist <= 2, !nameA.isEmpty, !nameB.isEmpty else { continue }
 
-                let (primary, duplicate) = determinePrimary(a, b)
-                matches.append(ContactMatch(
-                    id: UUID(),
-                    primary: primary,
-                    duplicate: duplicate,
-                    confidence: .possible,
-                    reasons: [.fuzzyName(distance: dist)]
-                ))
+                if dist <= 2, !nameA.isEmpty, !nameB.isEmpty {
+                    let (primary, duplicate) = determinePrimary(a, b)
+                    matches.append(ContactMatch(
+                        id: UUID(),
+                        primary: primary,
+                        duplicate: duplicate,
+                        confidence: .possible,
+                        reasons: [.fuzzyName(distance: dist)]
+                    ))
+                    continue
+                }
+
+                // Phase 2b: semantic org name matching (iOS 17+)
+                if #available(iOS 17, *) {
+                    let orgA = a.organizationName, orgB = b.organizationName
+                    if !orgA.isEmpty, !orgB.isEmpty, orgA != orgB {
+                        let sim = semanticSimilarity(org1: orgA, org2: orgB)
+                        if sim > 0.75 {
+                            let (primary, duplicate) = determinePrimary(a, b)
+                            // Also check if names are close enough (or both empty) to warrant surfacing.
+                            let nameMatch = nameA.isEmpty && nameB.isEmpty
+                                || (!nameA.isEmpty && !nameB.isEmpty && NameMatcher.distance(nameA, nameB) <= 4)
+                            if nameMatch {
+                                matches.append(ContactMatch(
+                                    id: UUID(),
+                                    primary: primary,
+                                    duplicate: duplicate,
+                                    confidence: .possible,
+                                    reasons: [.semanticOrganization]
+                                ))
+                            }
+                        }
+                    }
+                }
             }
         }
 
         return matches
     }
+
+    // MARK: - NLEmbedding semantic similarity (iOS 17+)
+
+    /// Computes cosine similarity between two organization name embeddings.
+    /// Returns a value in [0, 1] — 1 is identical, 0 is orthogonal.
+    @available(iOS 17, *)
+    private func semanticSimilarity(org1: String, org2: String) -> Float {
+        guard let embedding = NLEmbedding.wordEmbedding(for: .english) else { return 0 }
+
+        // Tokenize each org name and average its token vectors.
+        func averageVector(for text: String) -> [Double]? {
+            let tokens = text
+                .lowercased()
+                .components(separatedBy: .whitespacesAndNewlines)
+                .flatMap { $0.components(separatedBy: .punctuationCharacters) }
+                .filter { !$0.isEmpty }
+
+            var sum: [Double]? = nil
+            var count = 0
+            for token in tokens {
+                guard let vec = embedding.vector(for: token) else { continue }
+                if sum == nil { sum = Array(repeating: 0, count: vec.count) }
+                for (idx, val) in vec.enumerated() {
+                    sum![idx] += val
+                }
+                count += 1
+            }
+            guard let s = sum, count > 0 else { return nil }
+            return s.map { $0 / Double(count) }
+        }
+
+        guard let v1 = averageVector(for: org1), let v2 = averageVector(for: org2),
+              v1.count == v2.count else { return 0 }
+
+        let dot = zip(v1, v2).reduce(0.0) { $0 + $1.0 * $1.1 }
+        let mag1 = sqrt(v1.reduce(0.0) { $0 + $1 * $1 })
+        let mag2 = sqrt(v2.reduce(0.0) { $0 + $1 * $1 })
+        guard mag1 > 0, mag2 > 0 else { return 0 }
+        let cosine = dot / (mag1 * mag2)
+        // Clamp to [0, 1] — cosine can be slightly negative for unrelated terms.
+        return Float(max(0, min(1, cosine)))
+    }
+
+    // MARK: - Helpers
 
     private func fullName(_ contact: CNContact) -> String {
         [contact.givenName, contact.familyName]
@@ -124,13 +199,13 @@ actor ContactScanEngine {
 
     private func filledFieldCount(_ contact: CNContact) -> Int {
         var count = 0
-        if !contact.givenName.isEmpty { count += 1 }
-        if !contact.familyName.isEmpty { count += 1 }
+        if !contact.givenName.isEmpty        { count += 1 }
+        if !contact.familyName.isEmpty       { count += 1 }
         if !contact.organizationName.isEmpty { count += 1 }
-        if !contact.phoneNumbers.isEmpty { count += 1 }
-        if !contact.emailAddresses.isEmpty { count += 1 }
-        if contact.birthday != nil { count += 1 }
-        if contact.imageDataAvailable { count += 1 }
+        if !contact.phoneNumbers.isEmpty     { count += 1 }
+        if !contact.emailAddresses.isEmpty   { count += 1 }
+        if contact.birthday != nil           { count += 1 }
+        if contact.imageDataAvailable        { count += 1 }
         return count
     }
 

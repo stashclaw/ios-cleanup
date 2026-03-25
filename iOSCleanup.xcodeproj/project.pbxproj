@@ -34,6 +34,7 @@
 		AA00000B000000000000001A /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000B000000000000001B /* EmptyStateView.swift */; };
 		AA00000C000000000000001A /* Font+PhotoDuck.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000C000000000000001B /* Font+PhotoDuck.swift */; };
 		AA00000C000000000000003A /* DuckComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000C000000000000003B /* DuckComponents.swift */; };
+		AA02TSS000000000000001A /* TrashSummarySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA02TSS000000000000001B /* TrashSummarySheet.swift */; };
 		AA00000D000000000000001A /* FredokaOne-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000001B /* FredokaOne-Regular.ttf */; };
 		AA00000D000000000000002A /* Nunito-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000002B /* Nunito-Regular.ttf */; };
 		AA00000D000000000000003A /* Nunito-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000003B /* Nunito-SemiBold.ttf */; };
@@ -46,6 +47,7 @@
 		AA00000F000000000000002A /* ThreadSafeCounter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000F000000000000002B /* ThreadSafeCounter.swift */; };
 		AA00000F000000000000003A /* ProgressThrottle.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000F000000000000003B /* ProgressThrottle.swift */; };
 		BBCONFIG00000000000000001A /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBCONFIG00000000000000001B /* AppConfig.swift */; };
+		AA01TAG0000000000000001A /* ScreenshotTagEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA01TAG0000000000000001B /* ScreenshotTagEngine.swift */; };
 		BBSCREEN000000000000001A /* ScreenshotScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBSCREEN000000000000001B /* ScreenshotScanEngine.swift */; };
 		BBSCREEN000000000000002A /* ScreenshotsResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBSCREEN000000000000002B /* ScreenshotsResultsView.swift */; };
 		CC00001000000000000000AA /* RecentlyDeletedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC00001000000000000000AB /* RecentlyDeletedView.swift */; };
@@ -66,6 +68,15 @@
 		EVROLL000000000000001A /* EventRoll.swift in Sources */ = {isa = PBXBuildFile; fileRef = EVROLL000000000000001B /* EventRoll.swift */; };
 		EVENG0000000000000001A /* EventRollScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = EVENG0000000000000001B /* EventRollScanEngine.swift */; };
 		EVRSV0000000000000001A /* EventRollResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EVRSV0000000000000001B /* EventRollResultsView.swift */; };
+		AB01SMRT000000000000001A /* SmartPicksResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB01SMRT000000000000001B /* SmartPicksResultsView.swift */; };
+		AC0100000000000000001A /* BackgroundScanScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0100000000000000001B /* BackgroundScanScheduler.swift */; };
+		AC0200000000000000001A /* BackgroundScanCacheWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0200000000000000001B /* BackgroundScanCacheWriter.swift */; };
+		CTENG0000000000000001A /* ContactScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTENG0000000000000001B /* ContactScanEngine.swift */; };
+		CTMTC0000000000000001A /* ContactMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTMTC0000000000000001B /* ContactMatch.swift */; };
+		CTNMM0000000000000001A /* NameMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTNMM0000000000000001B /* NameMatcher.swift */; };
+		CTPHN0000000000000001A /* PhoneNormalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTPHN0000000000000001B /* PhoneNormalizer.swift */; };
+		CTRSV0000000000000001A /* ContactResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTRSV0000000000000001B /* ContactResultsView.swift */; };
+		CTMPV0000000000000001A /* ContactMergePreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTMPV0000000000000001B /* ContactMergePreviewView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -109,6 +120,7 @@
 		AA00000B000000000000001B /* EmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyStateView.swift; sourceTree = "<group>"; };
 		AA00000C000000000000001B /* Font+PhotoDuck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Font+PhotoDuck.swift"; sourceTree = "<group>"; };
 		AA00000C000000000000003B /* DuckComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuckComponents.swift; sourceTree = "<group>"; };
+		AA02TSS000000000000001B /* TrashSummarySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrashSummarySheet.swift; sourceTree = "<group>"; };
 		AA00000D000000000000001B /* FredokaOne-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = text; path = "FredokaOne-Regular.ttf"; sourceTree = "<group>"; };
 		AA00000D000000000000002B /* Nunito-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-Regular.ttf"; sourceTree = "<group>"; };
 		AA00000D000000000000003B /* Nunito-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Nunito-SemiBold.ttf"; sourceTree = "<group>"; };
@@ -121,6 +133,7 @@
 		AA00000F000000000000002B /* ThreadSafeCounter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadSafeCounter.swift; sourceTree = "<group>"; };
 		AA00000F000000000000003B /* ProgressThrottle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressThrottle.swift; sourceTree = "<group>"; };
 		BBCONFIG00000000000000001B /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
+		AA01TAG0000000000000001B /* ScreenshotTagEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotTagEngine.swift; sourceTree = "<group>"; };
 		BBSCREEN000000000000001B /* ScreenshotScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotScanEngine.swift; sourceTree = "<group>"; };
 		BBSCREEN000000000000002B /* ScreenshotsResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotsResultsView.swift; sourceTree = "<group>"; };
 		CC00001000000000000000AB /* RecentlyDeletedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentlyDeletedView.swift; sourceTree = "<group>"; };
@@ -141,6 +154,15 @@
 		EVROLL000000000000001B /* EventRoll.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventRoll.swift; sourceTree = "<group>"; };
 		EVENG0000000000000001B /* EventRollScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventRollScanEngine.swift; sourceTree = "<group>"; };
 		EVRSV0000000000000001B /* EventRollResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventRollResultsView.swift; sourceTree = "<group>"; };
+		AB01SMRT000000000000001B /* SmartPicksResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartPicksResultsView.swift; sourceTree = "<group>"; };
+		AC0100000000000000001B /* BackgroundScanScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundScanScheduler.swift; sourceTree = "<group>"; };
+		AC0200000000000000001B /* BackgroundScanCacheWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundScanCacheWriter.swift; sourceTree = "<group>"; };
+		CTENG0000000000000001B /* ContactScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactScanEngine.swift; sourceTree = "<group>"; };
+		CTMTC0000000000000001B /* ContactMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactMatch.swift; sourceTree = "<group>"; };
+		CTNMM0000000000000001B /* NameMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NameMatcher.swift; sourceTree = "<group>"; };
+		CTPHN0000000000000001B /* PhoneNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneNormalizer.swift; sourceTree = "<group>"; };
+		CTRSV0000000000000001B /* ContactResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactResultsView.swift; sourceTree = "<group>"; };
+		CTMPV0000000000000001B /* ContactMergePreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactMergePreviewView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -209,11 +231,15 @@
 				AA00000E000000000000001B /* DuplicateHashEngine.swift */,
 				AA00000E000000000000002B /* SimilarityEngine.swift */,
 				AA00000E000000000000003B /* BlurScanEngine.swift */,
+				AA01TAG0000000000000001B /* ScreenshotTagEngine.swift */,
 				BBSCREEN000000000000001B /* ScreenshotScanEngine.swift */,
 				CCLPE0000000000000001B /* LargePhotoScanEngine.swift */,
 				SEMENG000000000000001B /* SemanticScanEngine.swift */,
 				VIDENG000000000000001B /* VideoDuplicateEngine.swift */,
 				EVENG0000000000000001B /* EventRollScanEngine.swift */,
+				AC0100000000000000001B /* BackgroundScanScheduler.swift */,
+				AC0200000000000000001B /* BackgroundScanCacheWriter.swift */,
+				CTENG0000000000000001B /* ContactScanEngine.swift */,
 			);
 			path = Engines;
 			sourceTree = "<group>";
@@ -227,6 +253,7 @@
 				SEMGRP000000000000001B /* SemanticGroup.swift */,
 				VIDGRP000000000000001B /* VideoGroup.swift */,
 				EVROLL000000000000001B /* EventRoll.swift */,
+				CTMTC0000000000000001B /* ContactMatch.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -239,6 +266,8 @@
 				AA00000F000000000000002B /* ThreadSafeCounter.swift */,
 				AA00000F000000000000003B /* ProgressThrottle.swift */,
 				PQANAL000000000000001B /* PhotoQualityAnalyzer.swift */,
+				CTNMM0000000000000001B /* NameMatcher.swift */,
+				CTPHN0000000000000001B /* PhoneNormalizer.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -292,6 +321,7 @@
 				AA00000C000000000000006A /* Components */,
 				AA000006000000000000003A /* Photos */,
 				AA00000A000000000000003A /* Files */,
+				CTCNT0000000000000001A /* Contacts */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -311,6 +341,7 @@
 				SEMRSV000000000000001B /* SemanticResultsView.swift */,
 				VIDGRV000000000000001B /* VideoGroupResultsView.swift */,
 				EVRSV0000000000000001B /* EventRollResultsView.swift */,
+				AB01SMRT000000000000001B /* SmartPicksResultsView.swift */,
 			);
 			path = Photos;
 			sourceTree = "<group>";
@@ -324,10 +355,20 @@
 			path = Files;
 			sourceTree = "<group>";
 		};
+		CTCNT0000000000000001A /* Contacts */ = {
+			isa = PBXGroup;
+			children = (
+				CTRSV0000000000000001B /* ContactResultsView.swift */,
+				CTMPV0000000000000001B /* ContactMergePreviewView.swift */,
+			);
+			path = Contacts;
+			sourceTree = "<group>";
+		};
 		AA00000C000000000000006A /* Components */ = {
 			isa = PBXGroup;
 			children = (
 				AA00000C000000000000003B /* DuckComponents.swift */,
+				AA02TSS000000000000001B /* TrashSummarySheet.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -463,6 +504,7 @@
 				AA00000E000000000000001A /* DuplicateHashEngine.swift in Sources */,
 				AA00000E000000000000002A /* SimilarityEngine.swift in Sources */,
 				AA00000E000000000000003A /* BlurScanEngine.swift in Sources */,
+				AA01TAG0000000000000001A /* ScreenshotTagEngine.swift in Sources */,
 				BBSCREEN000000000000001A /* ScreenshotScanEngine.swift in Sources */,
 				BBSCREEN000000000000002A /* ScreenshotsResultsView.swift in Sources */,
 				CCLPI0000000000000001A /* LargePhotoItem.swift in Sources */,
@@ -480,10 +522,20 @@
 				AA00000F000000000000002A /* ThreadSafeCounter.swift in Sources */,
 				AA00000F000000000000003A /* ProgressThrottle.swift in Sources */,
 				AA00000C000000000000003A /* DuckComponents.swift in Sources */,
+				AA02TSS000000000000001A /* TrashSummarySheet.swift in Sources */,
 				PQANAL000000000000001A /* PhotoQualityAnalyzer.swift in Sources */,
 				VIDGRP000000000000001A /* VideoGroup.swift in Sources */,
 				VIDENG000000000000001A /* VideoDuplicateEngine.swift in Sources */,
 				VIDGRV000000000000001A /* VideoGroupResultsView.swift in Sources */,
+				AB01SMRT000000000000001A /* SmartPicksResultsView.swift in Sources */,
+				AC0100000000000000001A /* BackgroundScanScheduler.swift in Sources */,
+				AC0200000000000000001A /* BackgroundScanCacheWriter.swift in Sources */,
+				CTENG0000000000000001A /* ContactScanEngine.swift in Sources */,
+				CTMTC0000000000000001A /* ContactMatch.swift in Sources */,
+				CTNMM0000000000000001A /* NameMatcher.swift in Sources */,
+				CTPHN0000000000000001A /* PhoneNormalizer.swift in Sources */,
+				CTRSV0000000000000001A /* ContactResultsView.swift in Sources */,
+				CTMPV0000000000000001A /* ContactMergePreviewView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

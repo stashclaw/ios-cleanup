@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Photos
+import Contacts
 
 // MARK: - Cache types (Codable surrogates for PHAsset-bearing models)
 
@@ -136,9 +137,13 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     @Published var blurScanState:       ScanState = .idle
     @Published var screenshotScanState: ScanState = .idle
     @Published var largePhotoScanState: ScanState = .idle
+    @Published var contactScanState:        ScanState = .idle
     @Published var semanticScanState:       ScanState = .idle
     @Published var eventRollScanState:      ScanState = .idle
     @Published var videoDuplicateScanState: ScanState = .idle
+    @Published var smartPicksScanState:     ScanState = .idle
+
+    @Published var smartPicks: [PHAsset] = []
 
     @Published var duplicateProgress:   (completed: Int, total: Int) = (0, 0)
     @Published var similarProgress:     (completed: Int, total: Int) = (0, 0)
@@ -147,6 +152,7 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     @Published var scanStartTime: Date? = nil
 
     @Published var photoGroups:          [PhotoGroup]      = []
+    @Published var contactMatches:       [ContactMatch]    = []
     @Published var largeFiles:           [LargeFile]       = []
     @Published var blurPhotos:           [PHAsset]         = []
     @Published var screenshotAssets:     [PHAsset]         = []
@@ -157,6 +163,10 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     @Published var recentlyDeletedPhotos:[PHAsset]         = []
     @Published var recentlyDeletedBytes: Int64        = 0
     @Published var recentlyDeletedScanState: ScanState = .idle
+
+    /// Photo-library breakdown for the segmented storage donut.
+    @Published var photoLibraryBytes: Int64 = 0   // image assets only
+    @Published var videoLibraryBytes: Int64 = 0   // video assets only
 
     /// Persistent cumulative count of bytes freed across all sessions.
     @Published var totalBytesFreed: Int64 = 0
@@ -169,6 +179,7 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     private var blurScanId       = UUID()
     private var screenshotScanId = UUID()
     private var largePhotoScanId = UUID()
+    private var contactScanId          = UUID()
     private var semanticScanId         = UUID()
     private var eventRollScanId        = UUID()
     private var videoDuplicateScanId   = UUID()
@@ -242,6 +253,51 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         }
         Task { await refreshTotalLibraryCount() }
         Task { await fetchMetadataAssets() }
+        Task { await fetchStorageBreakdown() }
+    }
+
+    /// Scans PHAssetResource file sizes for all images and videos to populate
+    /// `photoLibraryBytes` and `videoLibraryBytes` used by the segmented donut chart.
+    /// Sequential — no image decoding, so this is fast (KVC file size read only).
+    func fetchStorageBreakdown() async {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited else { return }
+
+        var photos: Int64 = 0
+        var videos: Int64 = 0
+
+        // Images
+        let imageResult = PHAsset.fetchAssets(with: .image, options: nil)
+        imageResult.enumerateObjects { asset, _, _ in
+            let resources = PHAssetResource.assetResources(for: asset)
+            for resource in resources {
+                if resource.type == .photo || resource.type == .fullSizePhoto {
+                    if let size = resource.value(forKey: "fileSize") as? Int64 {
+                        photos += size
+                        break
+                    }
+                }
+            }
+        }
+
+        // Videos
+        let videoResult = PHAsset.fetchAssets(with: .video, options: nil)
+        videoResult.enumerateObjects { asset, _, _ in
+            let resources = PHAssetResource.assetResources(for: asset)
+            for resource in resources {
+                if resource.type == .video || resource.type == .fullSizeVideo {
+                    if let size = resource.value(forKey: "fileSize") as? Int64 {
+                        videos += size
+                        break
+                    }
+                }
+            }
+        }
+
+        await MainActor.run {
+            self.photoLibraryBytes = photos
+            self.videoLibraryBytes = videos
+        }
     }
 
     /// Fetches the real library size across all media types (no filters).
@@ -309,12 +365,14 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     }
 
     var isAnyScanning: Bool {
-        [photoScanState, fileScanState, blurScanState, screenshotScanState, largePhotoScanState, semanticScanState, eventRollScanState].contains {
+        [photoScanState, fileScanState, blurScanState, screenshotScanState, largePhotoScanState,
+         contactScanState, semanticScanState, eventRollScanState].contains {
             if case .scanning = $0 { return true }; return false
         }
     }
     var isAllDone: Bool {
-        [photoScanState, fileScanState, blurScanState, screenshotScanState, largePhotoScanState, semanticScanState, eventRollScanState].allSatisfy {
+        [photoScanState, fileScanState, blurScanState, screenshotScanState, largePhotoScanState,
+         contactScanState, semanticScanState, eventRollScanState].allSatisfy {
             if case .done = $0 { return true }; return false
         }
     }
@@ -469,6 +527,11 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
 
         photoScanState = .done
         saveCache()
+
+        // Kick off Smart Picks computation if we have material from either scan
+        if !blurPhotos.isEmpty || !photoGroups.isEmpty {
+            Task { await self.computeSmartPicks() }
+        }
     }
 
     func scanScreenshots() async {
@@ -518,6 +581,24 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         }
     }
 
+    func scanContacts() async {
+        let currentId = UUID()
+        contactScanId    = currentId
+        contactScanState = .scanning
+        contactMatches   = []
+
+        let engine = ContactScanEngine()
+        do {
+            let matches = try await engine.scan()
+            guard contactScanId == currentId else { return }
+            contactMatches   = matches
+            contactScanState = .done
+        } catch {
+            guard contactScanId == currentId else { return }
+            contactScanState = .failed(error.localizedDescription)
+        }
+    }
+
     func scanBlur() async {
         let currentId = UUID()
         blurScanId = currentId
@@ -551,6 +632,11 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         guard blurScanId == currentId else { return }
         blurScanState = .done
         saveCache()
+
+        // Kick off Smart Picks computation if we have material from either scan
+        if !blurPhotos.isEmpty || !photoGroups.isEmpty {
+            Task { await self.computeSmartPicks() }
+        }
     }
 
     func scanLargePhotos() async {
@@ -640,6 +726,67 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
 
         guard eventRollScanId == currentId else { return }
         eventRollScanState = .done
+    }
+
+    // MARK: - Smart Picks
+
+    func computeSmartPicks() async {
+        smartPicksScanState = .scanning
+        smartPicks = []
+
+        // Gather candidates: blur photos + non-best assets from photo groups
+        var candidates: [PHAsset] = []
+
+        // From blur scan results (already scanned)
+        candidates.append(contentsOf: blurPhotos)
+
+        // From photo groups: all assets EXCEPT assets[0] (best) in each group
+        for group in photoGroups {
+            candidates.append(contentsOf: group.assets.dropFirst())
+        }
+
+        // Deduplicate by localIdentifier
+        var seen = Set<String>()
+        candidates = candidates.filter { seen.insert($0.localIdentifier).inserted }
+
+        guard !candidates.isEmpty else {
+            smartPicksScanState = .done
+            return
+        }
+
+        // Score all candidates concurrently (max 4 in-flight)
+        var scored: [(asset: PHAsset, score: Float)] = []
+        await withTaskGroup(of: (PHAsset, Float).self) { group in
+            var nextIndex = 0
+            var inFlight = 0
+
+            while inFlight < 4, nextIndex < candidates.count {
+                let a = candidates[nextIndex]; nextIndex += 1
+                group.addTask {
+                    let score = await PhotoQualityAnalyzer.shared.qualityScore(for: a)
+                    return (a, score)
+                }
+                inFlight += 1
+            }
+
+            for await (asset, score) in group {
+                scored.append((asset, score))
+                if nextIndex < candidates.count {
+                    let a = candidates[nextIndex]; nextIndex += 1
+                    group.addTask {
+                        let score = await PhotoQualityAnalyzer.shared.qualityScore(for: a)
+                        return (a, score)
+                    }
+                }
+            }
+        }
+
+        // Sort ascending (lowest quality = most likely to delete)
+        scored.sort { $0.score < $1.score }
+
+        // Take top 200 worst-quality photos
+        smartPicks = scored.prefix(200).map(\.asset)
+        smartPicksScanState = .done
     }
 
     // MARK: - Video Duplicates
@@ -876,6 +1023,7 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     func clearCache() {
         try? FileManager.default.removeItem(at: cacheURL)
         photoGroups      = []
+        contactMatches   = []
         largeFiles       = []
         blurPhotos       = []
         screenshotAssets = []
@@ -888,9 +1036,12 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         blurScanState           = .idle
         screenshotScanState     = .idle
         largePhotoScanState     = .idle
+        contactScanState        = .idle
         semanticScanState       = .idle
         eventRollScanState      = .idle
         videoDuplicateScanState = .idle
+        smartPicks              = []
+        smartPicksScanState     = .idle
         lastScanDate            = nil
     }
 
@@ -905,6 +1056,7 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
             group.addTask { await self.scanBlur() }
             group.addTask { await self.scanScreenshots() }
             group.addTask { await self.scanLargePhotos() }
+            group.addTask { await self.scanContacts() }
             group.addTask { await self.scanSemantic() }
             group.addTask { await self.scanEventRolls() }
         }
@@ -926,9 +1078,11 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         blurScanState       = .idle
         screenshotScanState     = .idle
         largePhotoScanState     = .idle
+        contactScanState        = .idle
         semanticScanState       = .idle
         eventRollScanState      = .idle
         videoDuplicateScanState = .idle
+        smartPicksScanState     = .idle
         scanStartTime           = nil
     }
 }

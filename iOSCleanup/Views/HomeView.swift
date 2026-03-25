@@ -10,6 +10,8 @@ struct HomeView: View {
     @State private var now = Date()
     @State private var navPath = NavigationPath()
     @State private var pendingNav: NavDest? = nil
+    @State private var trashSummaryBytes: Int64 = 0
+    @State private var showTrashSummary = false
 
     private let bg = Color(red: 0.05, green: 0.05, blue: 0.08)
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -107,12 +109,29 @@ struct HomeView: View {
                     VideoGroupResultsView(groups: viewModel.videoGroups)
                         .environmentObject(purchaseManager)
                         .environmentObject(viewModel as HomeViewModel)
+                case .smartPicks:
+                    SmartPicksResultsView(assets: viewModel.smartPicks)
+                        .environmentObject(purchaseManager)
+                case .contacts:
+                    ContactResultsView(matches: viewModel.contactMatches)
+                        .environmentObject(purchaseManager)
+                        .environmentObject(viewModel as HomeViewModel)
                 }
             }
         }
         .sheet(isPresented: $showPaywall) { PaywallView().environmentObject(purchaseManager) }
         .sheet(isPresented: $showCompletion) { CompletionOverlay(viewModel: viewModel) }
         .sheet(isPresented: $showSettings) { SettingsView(viewModel: viewModel).environmentObject(purchaseManager) }
+        .sheet(isPresented: $showTrashSummary) {
+            TrashSummarySheet(bytesFreed: trashSummaryBytes)
+                .presentationDetents([.medium])
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .didFreeBytes)) { notification in
+            if let bytes = notification.userInfo?["bytes"] as? Int64, bytes > 0 {
+                trashSummaryBytes = bytes
+                showTrashSummary = true
+            }
+        }
         .onChange(of: viewModel.isAllDone) { done in
             if done && viewModel.scanRanThisSession { showCompletion = true }
         }
@@ -183,6 +202,22 @@ struct HomeView: View {
             guard case .done = state, pendingNav == .videoDuplicates else { return }
             pendingNav = nil
         }
+        .onChange(of: viewModel.smartPicks.count) { count in
+            guard pendingNav == .smartPicks, count > 0 else { return }
+            pendingNav = nil; navPath.append(NavDest.smartPicks)
+        }
+        .onChange(of: viewModel.smartPicksScanState) { state in
+            guard case .done = state, pendingNav == .smartPicks else { return }
+            pendingNav = nil
+        }
+        .onChange(of: viewModel.contactMatches.count) { count in
+            guard pendingNav == .contacts, count > 0 else { return }
+            pendingNav = nil; navPath.append(NavDest.contacts)
+        }
+        .onChange(of: viewModel.contactScanState) { state in
+            guard case .done = state, pendingNav == .contacts else { return }
+            pendingNav = nil
+        }
         .onAppear {
             Task { await viewModel.fetchMetadataAssets() }
         }
@@ -226,33 +261,75 @@ struct HomeView: View {
 
     private var topCard: some View {
         HStack(spacing: 20) {
-            // Ring
-            ZStack {
-                Circle()
-                    .stroke(Color.white.opacity(0.06), lineWidth: 8)
-                Circle()
-                    .trim(from: 0, to: ringFraction)
-                    .stroke(
-                        AngularGradient(
-                            colors: [Color(red: 1, green: 0.42, blue: 0.67), Color(red: 0.45, green: 0.4, blue: 1)],
-                            center: .center
-                        ),
-                        style: StrokeStyle(lineWidth: 8, lineCap: .round)
-                    )
-                    .rotationEffect(.degrees(-90))
-                    .animation(.easeInOut(duration: 0.4), value: ringFraction)
-                VStack(spacing: 1) {
-                    Text("\(Int(ringFraction * 100))")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(.white)
-                        .contentTransition(.numericText())
-                        .animation(.easeInOut(duration: 0.3), value: Int(ringFraction * 100))
-                    Text("%")
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color.white.opacity(0.4))
+            // Ring — progress ring while scanning, segmented donut when idle
+            if viewModel.isAnyScanning {
+                ZStack {
+                    Circle()
+                        .stroke(Color.white.opacity(0.06), lineWidth: 8)
+                    Circle()
+                        .trim(from: 0, to: viewModel.overallProgressFraction)
+                        .stroke(
+                            AngularGradient(
+                                colors: [Color(red: 1, green: 0.42, blue: 0.67), Color(red: 0.45, green: 0.4, blue: 1)],
+                                center: .center
+                            ),
+                            style: StrokeStyle(lineWidth: 8, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+                        .animation(.easeInOut(duration: 0.4), value: viewModel.overallProgressFraction)
+                    VStack(spacing: 1) {
+                        Text("\(Int(viewModel.overallProgressFraction * 100))")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(.white)
+                            .contentTransition(.numericText())
+                            .animation(.easeInOut(duration: 0.3), value: Int(viewModel.overallProgressFraction * 100))
+                        Text("%")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                    }
                 }
+                .frame(width: 78, height: 78)
+            } else if viewModel.photoLibraryBytes > 0 || viewModel.videoLibraryBytes > 0 {
+                // Segmented donut: Photos / Videos / Other
+                ZStack {
+                    storageDonut
+                    VStack(spacing: 1) {
+                        Text("\(Int(viewModel.storageUsedFraction * 100))")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(.white)
+                            .contentTransition(.numericText())
+                        Text("%")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                    }
+                }
+                .frame(width: 78, height: 78)
+            } else {
+                // Fallback single-arc ring (breakdown not yet computed)
+                ZStack {
+                    Circle()
+                        .stroke(Color.white.opacity(0.06), lineWidth: 8)
+                    Circle()
+                        .trim(from: 0, to: viewModel.storageUsedFraction)
+                        .stroke(
+                            AngularGradient(
+                                colors: [Color(red: 1, green: 0.42, blue: 0.67), Color(red: 0.45, green: 0.4, blue: 1)],
+                                center: .center
+                            ),
+                            style: StrokeStyle(lineWidth: 8, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+                    VStack(spacing: 1) {
+                        Text("\(Int(viewModel.storageUsedFraction * 100))")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(.white)
+                        Text("%")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                    }
+                }
+                .frame(width: 78, height: 78)
             }
-            .frame(width: 78, height: 78)
 
             // Right column
             if viewModel.isAnyScanning {
@@ -267,8 +344,50 @@ struct HomeView: View {
         .padding(.horizontal, 20)
     }
 
-    private var ringFraction: Double {
-        viewModel.isAnyScanning ? viewModel.overallProgressFraction : viewModel.storageUsedFraction
+    // MARK: - Segmented storage donut (Canvas-based)
+
+    private static let photoDonutColor = Color(red: 1, green: 0.42, blue: 0.67)   // pink
+    private static let videoDonutColor = Color(red: 0.45, green: 0.4, blue: 1)    // purple
+    private static let otherDonutColor = Color(red: 0.4,  green: 0.5, blue: 0.65) // blue-gray
+
+    private var storageDonut: some View {
+        let totalUsed = max(viewModel.storageCapacity.total - viewModel.storageCapacity.available, 1)
+        let photoFrac = Double(viewModel.photoLibraryBytes) / Double(totalUsed)
+        let videoFrac = Double(viewModel.videoLibraryBytes) / Double(totalUsed)
+        let otherBytes = max(totalUsed - viewModel.photoLibraryBytes - viewModel.videoLibraryBytes, 0)
+        let otherFrac  = Double(otherBytes) / Double(totalUsed)
+
+        return Canvas { ctx, size in
+            let center    = CGPoint(x: size.width / 2, y: size.height / 2)
+            let radius    = min(size.width, size.height) / 2 - 6
+            let lineWidth: CGFloat = 10
+
+            // Background track
+            var trackPath = Path()
+            trackPath.addArc(center: center, radius: radius,
+                             startAngle: .degrees(0), endAngle: .degrees(360), clockwise: false)
+            ctx.stroke(trackPath, with: .color(.white.opacity(0.06)),
+                       style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+
+            // Segments
+            let segments: [(frac: Double, color: Color)] = [
+                (photoFrac, Self.photoDonutColor),
+                (videoFrac, Self.videoDonutColor),
+                (otherFrac, Self.otherDonutColor),
+            ]
+            var startAngle = -90.0
+            for seg in segments where seg.frac > 0.01 {
+                let sweep = seg.frac * 360.0
+                var segPath = Path()
+                segPath.addArc(center: center, radius: radius,
+                               startAngle: .degrees(startAngle),
+                               endAngle: .degrees(startAngle + sweep - 1),
+                               clockwise: false)
+                ctx.stroke(segPath, with: .color(seg.color),
+                           style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                startAngle += sweep
+            }
+        }
     }
 
     private var scanProgressColumn: some View {
@@ -362,6 +481,10 @@ struct HomeView: View {
                 storageStatColumn(value: viewModel.reclaimableFormatted, label: "Saveable",
                                   color: Color(red: 1, green: 0.42, blue: 0.67))
             }
+            if viewModel.photoLibraryBytes > 0 || viewModel.videoLibraryBytes > 0 {
+                Divider().overlay(Color.white.opacity(0.07))
+                donutLegend
+            }
             if viewModel.totalBytesFreed > 0 {
                 Divider().overlay(Color.white.opacity(0.07))
                 HStack(spacing: 6) {
@@ -393,6 +516,40 @@ struct HomeView: View {
                 .foregroundStyle(Color.white.opacity(0.4))
         }
         .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - Donut legend
+
+    private var donutLegend: some View {
+        let totalUsed  = max(viewModel.storageCapacity.total - viewModel.storageCapacity.available, 1)
+        let otherBytes = max(totalUsed - viewModel.photoLibraryBytes - viewModel.videoLibraryBytes, 0)
+        return HStack(spacing: 10) {
+            donutLegendItem(color: Self.photoDonutColor, label: "Photos",
+                            bytes: viewModel.photoLibraryBytes)
+            donutLegendItem(color: Self.videoDonutColor, label: "Videos",
+                            bytes: viewModel.videoLibraryBytes)
+            donutLegendItem(color: Self.otherDonutColor, label: "Other",
+                            bytes: otherBytes)
+        }
+    }
+
+    private func donutLegendItem(color: Color, label: String, bytes: Int64) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(color)
+                .frame(width: 7, height: 7)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(label)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.45))
+                Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(color)
+                    .minimumScaleFactor(0.7)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Scan Button (hidden while scanning — top card takes over)
@@ -467,7 +624,7 @@ struct HomeView: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
                 Spacer()
-                Text("11 tools")
+                Text("12 tools")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.white.opacity(0.35))
             }
@@ -659,6 +816,42 @@ struct HomeView: View {
                         if case .idle = viewModel.videoDuplicateScanState { Task { await viewModel.scanVideoDuplicates() } }
                     }
                 }
+                CategoryCard(
+                    icon: "sparkles",
+                    iconColor: Color(red: 1, green: 0.8, blue: 0.2),
+                    name: "Smart Picks",
+                    subtitle: "Lowest quality shots",
+                    count: viewModel.smartPicks.count,
+                    state: viewModel.smartPicksScanState,
+                    scanProgress: (0, 0),
+                    isPaid: false
+                ) {
+                    if !viewModel.smartPicks.isEmpty {
+                        navPath.append(NavDest.smartPicks)
+                    } else {
+                        pendingNav = .smartPicks
+                        if case .idle = viewModel.smartPicksScanState {
+                            Task { await viewModel.computeSmartPicks() }
+                        }
+                    }
+                }
+                CategoryCard(
+                    icon: "person.2",
+                    iconColor: Color(red: 0.4, green: 0.8, blue: 0.6),
+                    name: "Contacts",
+                    subtitle: "Duplicate contacts",
+                    count: viewModel.contactMatches.count,
+                    state: viewModel.contactScanState,
+                    scanProgress: (0, 0),
+                    isPaid: false
+                ) {
+                    if !viewModel.contactMatches.isEmpty {
+                        navPath.append(NavDest.contacts)
+                    } else {
+                        pendingNav = .contacts
+                        if case .idle = viewModel.contactScanState { Task { await viewModel.scanContacts() } }
+                    }
+                }
             }
             .padding(.horizontal, 20)
         }
@@ -675,6 +868,7 @@ struct HomeView: View {
                 group.addTask { await viewModel.scanBlur() }
                 group.addTask { await viewModel.scanScreenshots() }
                 group.addTask { await viewModel.scanLargePhotos() }
+                group.addTask { await viewModel.scanContacts() }
                 group.addTask { await viewModel.scanSemantic() }
                 group.addTask { await viewModel.scanEventRolls() }
             }
@@ -795,6 +989,8 @@ private enum NavDest: Hashable {
     case semantic(UUID)   // UUID of the SemanticGroup
     case eventRolls
     case videoDuplicates
+    case smartPicks
+    case contacts
 }
 
 // MARK: - Category Card (2-column grid tile)

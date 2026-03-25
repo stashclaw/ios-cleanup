@@ -1,5 +1,85 @@
 import Foundation
 
+/// A hardcoded nickname map for common given-name aliases.
+/// Lets "Bob" match "Robert", "Bill" match "William", etc.
+private let nicknameMap: [String: String] = [
+    "bob": "robert",
+    "bill": "william",
+    "will": "william",
+    "billy": "william",
+    "rob": "robert",
+    "bobby": "robert",
+    "rob": "robert",
+    "rich": "richard",
+    "dick": "richard",
+    "rick": "richard",
+    "ricky": "richard",
+    "mike": "michael",
+    "mick": "michael",
+    "mickey": "michael",
+    "jim": "james",
+    "jimmy": "james",
+    "jamie": "james",
+    "jack": "john",
+    "johnny": "john",
+    "jon": "john",
+    "chris": "christopher",
+    "kate": "katherine",
+    "kathy": "katherine",
+    "cathy": "catherine",
+    "cat": "catherine",
+    "liz": "elizabeth",
+    "beth": "elizabeth",
+    "betty": "elizabeth",
+    "lisa": "elizabeth",
+    "dave": "david",
+    "davy": "david",
+    "dan": "daniel",
+    "danny": "daniel",
+    "nick": "nicholas",
+    "nicky": "nicholas",
+    "pete": "peter",
+    "mat": "matthew",
+    "matt": "matthew",
+    "steve": "steven",
+    "steph": "stephanie",
+    "sue": "susan",
+    "susie": "susan",
+    "sam": "samuel",
+    "al": "albert",
+    "alex": "alexander",
+    "tony": "anthony",
+    "andy": "andrew",
+    "drew": "andrew",
+    "jen": "jennifer",
+    "jenny": "jennifer",
+    "joe": "joseph",
+    "joey": "joseph",
+    "ben": "benjamin",
+    "benny": "benjamin",
+    "charlie": "charles",
+    "chuck": "charles",
+    "tom": "thomas",
+    "tommy": "thomas",
+    "tim": "timothy",
+    "timmy": "timothy",
+    "fred": "frederick",
+    "freddy": "frederick",
+    "frank": "francis",
+    "francesca": "frances",
+    "fran": "frances",
+    "pat": "patricia",
+    "pam": "pamela",
+    "deb": "deborah",
+    "debbie": "deborah",
+    "maggie": "margaret",
+    "meg": "margaret",
+    "peg": "margaret",
+    "peggy": "margaret",
+    "amy": "amelia",
+    "emmy": "emily",
+]
+
 struct NameMatcher {
     /// Levenshtein distance between two strings.
     static func levenshtein(_ a: String, _ b: String) -> Int {
@@ -22,12 +102,26 @@ struct NameMatcher {
         return dp[m][n]
     }
 
-    /// Normalize a full name: lowercase, trim, collapse whitespace.
+    /// Normalize a full name: lowercase, trim, fold diacritics, collapse whitespace.
     private static func normalize(_ name: String) -> String {
-        name.lowercased()
+        name.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
             .trimmingCharacters(in: .whitespaces)
             .components(separatedBy: .whitespaces)
             .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    /// Expand a single token using the nickname map (e.g. "bob" → "robert").
+    private static func expandToken(_ token: String) -> String {
+        nicknameMap[token] ?? token
+    }
+
+    /// Expand all tokens in a name and rejoin.
+    private static func expandNicknames(_ name: String) -> String {
+        normalize(name)
+            .components(separatedBy: " ")
+            .map { expandToken($0) }
             .joined(separator: " ")
     }
 
@@ -37,12 +131,17 @@ struct NameMatcher {
         return parts.reversed().joined(separator: " ")
     }
 
-    /// Minimum Levenshtein distance across both orderings.
+    /// Minimum Levenshtein distance across both orderings and nickname expansions.
     static func distance(_ a: String, _ b: String) -> Int {
-        let na = normalize(a), nb = normalize(b)
-        let forward = levenshtein(na, nb)
-        let rev = levenshtein(reversed(na), nb)
-        return min(forward, rev)
+        let na  = normalize(a),         nb  = normalize(b)
+        let ena = expandNicknames(a),   enb = expandNicknames(b)
+        let candidates = [
+            levenshtein(na,  nb),
+            levenshtein(reversed(na), nb),
+            levenshtein(ena, enb),
+            levenshtein(reversed(ena), enb),
+        ]
+        return candidates.min() ?? 0
     }
 
     /// Returns true if distance ≤ 2.

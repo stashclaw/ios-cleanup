@@ -1,7 +1,8 @@
+import CoreML
 import Foundation
 import Photos
-import Vision
 import UIKit
+import Vision
 
 // MARK: - Quality label
 
@@ -32,6 +33,21 @@ actor PhotoQualityAnalyzer {
     private var cache: [String: [PhotoQualityLabel]] = [:]
     private var scoreCache: [String: Float] = [:]
 
+    // MARK: - Core ML model (optional — falls back to heuristics if absent)
+
+    /// Lazily loaded on first use. Looks for PhotoQualityClassifier.mlmodelc in the main bundle,
+    /// which Xcode compiles automatically from PhotoQualityClassifier.mlmodel when it is added
+    /// to the target. If the model is not bundled, this stays nil and all scoring uses the
+    /// existing heuristic pipeline — no behaviour change for users without the model.
+    private lazy var qualityVNModel: VNCoreMLModel? = {
+        guard let url = Bundle.main.url(
+            forResource: "PhotoQualityClassifier",
+            withExtension: "mlmodelc"
+        ) else { return nil }
+        guard let mlModel = try? MLModel(contentsOf: url) else { return nil }
+        return try? VNCoreMLModel(for: mlModel)
+    }()
+
     func labels(for asset: PHAsset) async -> [PhotoQualityLabel] {
         if let hit = cache[asset.localIdentifier] { return hit }
         let result = await computeLabels(asset)
@@ -40,19 +56,100 @@ actor PhotoQualityAnalyzer {
     }
 
     /// Returns a composite quality score 0.0–1.0 (higher = better quality, keep this one).
-    /// Factors: face capture quality, blur, exposure, eyes-closed penalty.
+    ///
+    /// Primary path (when PhotoQualityClassifier.mlmodelc is bundled):
+    ///   Runs a VNCoreMLRequest and derives a score from class confidences:
+    ///   score = P(sharp) − 0.7·P(blurry) − 0.5·P(overexposed) − 0.5·P(underexposed)
+    ///   shifted and clamped to [0, 1].
+    ///
+    /// Fallback path (no model):
+    ///   Derives score from heuristic quality labels (Laplacian blur, luminance, Vision face).
     func qualityScore(for asset: PHAsset) async -> Float {
         if let hit = scoreCache[asset.localIdentifier] { return hit }
+        let score: Float
+        if let vnModel = qualityVNModel {
+            score = await coreMLQualityScore(for: asset, vnModel: vnModel)
+        } else {
+            score = await heuristicQualityScore(for: asset)
+        }
+        scoreCache[asset.localIdentifier] = score
+        return score
+    }
+
+    // MARK: - Core ML scoring path
+
+    private func coreMLQualityScore(for asset: PHAsset, vnModel: VNCoreMLModel) async -> Float {
+        // Request a 299×299 thumbnail — matches the Inception-style input size that
+        // Create ML uses internally. fastFormat is fine; we just need pixel data.
+        let image: UIImage? = await withCheckedContinuation { continuation in
+            var resumed = false
+            let opts = PHImageRequestOptions()
+            opts.deliveryMode = .fastFormat
+            opts.isNetworkAccessAllowed = false
+            opts.isSynchronous = false
+            PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: CGSize(width: 299, height: 299),
+                contentMode: .aspectFill,
+                options: opts
+            ) { img, info in
+                guard !resumed else { return }
+                // Skip the low-resolution degraded thumbnail delivered first by
+                // some async requests — wait for the final delivery.
+                if info?[PHImageResultIsDegradedKey] as? Bool == true { return }
+                resumed = true
+                continuation.resume(returning: img)
+            }
+        }
+
+        guard let cgImage = image?.cgImage else {
+            return await heuristicQualityScore(for: asset)
+        }
+
+        let request = VNCoreMLRequest(model: vnModel)
+        // Center-crop (default) is fine for quality classification.
+        request.imageCropAndScaleOption = .centerCrop
+
+        do {
+            try VNImageRequestHandler(cgImage: cgImage, options: [:]).perform([request])
+        } catch {
+            return await heuristicQualityScore(for: asset)
+        }
+
+        guard let observations = request.results as? [VNClassificationObservation] else {
+            return await heuristicQualityScore(for: asset)
+        }
+
+        // Pull confidences by identifier (0.0 if class not present in results).
+        func conf(_ id: String) -> Float {
+            observations.first(where: { $0.identifier == id })?.confidence ?? 0
+        }
+        let sharpConf = conf("sharp")
+        let blurryConf = conf("blurry")
+        let overConf  = conf("overexposed")
+        let underConf = conf("underexposed")
+
+        // Score: high sharpness lifts it, degraded classes pull it down.
+        // Weights: blur is penalised more heavily than exposure issues because
+        // blur is unrecoverable, while exposure can sometimes be edited.
+        // Adding 0.5 shifts the neutral midpoint so a balanced prediction → 0.5.
+        let raw = sharpConf - 0.7 * blurryConf - 0.5 * overConf - 0.5 * underConf
+        return min(1.0, max(0.0, raw + 0.5))
+    }
+
+    // MARK: - Heuristic scoring path (original logic, now a named function)
+
+    /// Derives a quality score from the label pipeline (Laplacian blur, luminance, Vision face).
+    /// Used when no Core ML model is present, and as the error-path fallback from Core ML.
+    private func heuristicQualityScore(for asset: PHAsset) async -> Float {
         let qualityLabels = await labels(for: asset)
         var score: Float = 0.5
-        if qualityLabels.contains(.blurry)         { score -= 0.3  }
-        if qualityLabels.contains(.eyesClosed)      { score -= 0.2  }
-        if qualityLabels.contains(.underexposed)    { score -= 0.15 }
-        if qualityLabels.contains(.overexposed)     { score -= 0.15 }
-        if qualityLabels.contains(.lowFaceQuality)  { score -= 0.2  }
-        let clamped = min(1.0, max(0.0, score))
-        scoreCache[asset.localIdentifier] = clamped
-        return clamped
+        if qualityLabels.contains(.blurry)        { score -= 0.3  }
+        if qualityLabels.contains(.eyesClosed)     { score -= 0.2  }
+        if qualityLabels.contains(.underexposed)   { score -= 0.15 }
+        if qualityLabels.contains(.overexposed)    { score -= 0.15 }
+        if qualityLabels.contains(.lowFaceQuality) { score -= 0.2  }
+        return min(1.0, max(0.0, score))
     }
 
     // MARK: - Top-level pipeline

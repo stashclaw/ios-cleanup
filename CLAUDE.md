@@ -265,7 +265,6 @@ New HomeView cards unlocked by `VNClassifyImageRequest` + metadata — no new mo
 | Saliency-based "no subject" label | Add `VNGenerateAttentionBasedSaliencyImageRequest` to `PhotoQualityAnalyzer`. If `salientObjects` is empty, emit `.noSubject` label. Combined with moderate blur score = strong throwaway signal. Shown as badge in `GroupReviewView` cells alongside existing `.blurry`, `.eyesClosed` etc. | `PhotoQualityAnalyzer`, `GroupReviewView` | med |
 | Event Roll clustering | Group photos by GPS location (~1km radius) + time window (~30 min) using `PHAsset.creationDate` + `PHAsset.location`. No Vision required — pure algorithm. Surfaces "Event Rolls" card on HomeView for batch review of trip/event bursts. | `HomeViewModel`, new `EventRollScanEngine`, `HomeView` | med |
 | Adaptive blur threshold | Fixed threshold causes false positives on low-light shots. Normalize Laplacian variance by mean pixel brightness so dark scenes aren't flagged blurry | `BlurScanEngine` | med |
-| Nickname dictionary for contacts | Levenshtein misses "Bob" vs "Robert". Add hardcoded nickname map + `NLTokenizer` for diacritic-safe tokenization before matching | `ContactScanEngine` | med |
 
 ### Phase 4 — New on-device ML engines (no external packages)
 

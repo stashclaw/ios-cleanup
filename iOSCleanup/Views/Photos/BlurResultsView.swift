@@ -12,6 +12,7 @@ struct BlurResultsView: View {
     @State private var deleteError: String?
     @State private var showPaywall = false
     @State private var visibleCount = 60
+    @State private var showICloudDeleteAlert = false
 
     var body: some View {
         Group {
@@ -53,7 +54,15 @@ struct BlurResultsView: View {
                 } else {
                     Button("Delete (\(selectedAssets.count))") {
                         guard purchaseManager.isPurchased else { showPaywall = true; return }
-                        Task { await deleteSelected() }
+                        let hasICloud = selectedAssets.contains { id in
+                            guard let asset = assets.first(where: { $0.localIdentifier == id }) else { return false }
+                            return !BlurPhotoCell.isStoredLocally(asset)
+                        }
+                        if hasICloud {
+                            showICloudDeleteAlert = true
+                        } else {
+                            Task { await deleteSelected() }
+                        }
                     }
                     .disabled(isDeleting)
                     .foregroundStyle(Color.duckRose)
@@ -63,6 +72,18 @@ struct BlurResultsView: View {
         .sheet(isPresented: $showPaywall) { PaywallView().environmentObject(purchaseManager) }
         .onReceive(NotificationCenter.default.publisher(for: .purchaseDidSucceed)) { _ in
             showPaywall = false
+        }
+        .confirmationDialog(
+            "Some photos are stored in iCloud",
+            isPresented: $showICloudDeleteAlert,
+            titleVisibility: .visible
+        ) {
+            Button("Delete from iCloud Too", role: .destructive) {
+                Task { await deleteSelected() }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("These photos exist only in iCloud. Deleting them will remove them from iCloud and all your devices.")
         }
     }
 
@@ -168,6 +189,7 @@ private struct BlurPhotoCell: View {
 
     @State private var thumbnail: UIImage?
     @State private var requestID: PHImageRequestID?
+    @State private var isICloud = false
 
     var body: some View {
         Button(action: onTap) {
@@ -183,11 +205,40 @@ private struct BlurPhotoCell: View {
                 .clipped()
                 .overlay(isSelected ? Color.duckPink.opacity(0.35) : Color.clear)
 
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 20)).foregroundStyle(.white)
-                        .background(Circle().fill(Color.duckPink).padding(2))
-                        .padding(5)
+                VStack {
+                    HStack {
+                        Spacer()
+                        if isICloud {
+                            Image(systemName: "icloud")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color.white.opacity(0.9))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 3)
+                                .background(Color.black.opacity(0.55))
+                                .clipShape(Capsule())
+                                .padding(5)
+                        } else if isSelected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 20)).foregroundStyle(.white)
+                                .background(Circle().fill(Color.duckPink).padding(2))
+                                .padding(5)
+                        }
+                    }
+                    Spacer()
+                }
+                // When both iCloud badge and selection checkmark need to coexist,
+                // show checkmark underneath the iCloud badge in bottom-right.
+                if isICloud && isSelected {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 18)).foregroundStyle(.white)
+                                .background(Circle().fill(Color.duckPink).padding(2))
+                                .padding(5)
+                        }
+                    }
                 }
             }
         }
@@ -195,8 +246,17 @@ private struct BlurPhotoCell: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
             .strokeBorder(isSelected ? Color.duckPink : Color.duckSoftPink.opacity(0.3), lineWidth: isSelected ? 2 : 1))
-        .onAppear { load() }
+        .onAppear {
+            load()
+            isICloud = !Self.isStoredLocally(asset)
+        }
         .onDisappear { cancel() }
+    }
+
+    static func isStoredLocally(_ asset: PHAsset) -> Bool {
+        let resources = PHAssetResource.assetResources(for: asset)
+        guard let resource = resources.first(where: { $0.type == .photo || $0.type == .video }) else { return true }
+        return (resource.value(forKey: "locallyAvailable") as? Bool) ?? true
     }
 
     private func load() {

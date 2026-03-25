@@ -1,6 +1,10 @@
 import Foundation
 import Photos
 import SwiftUI
+@preconcurrency import Vision
+
+// VNFeaturePrintObservation is not Sendable in the SDK headers; suppress the warning.
+extension VNFeaturePrintObservation: @retroactive @unchecked Sendable {}
 
 @MainActor
 final class GroupReviewViewModel: ObservableObject {
@@ -165,8 +169,53 @@ final class GroupReviewViewModel: ObservableObject {
 
     // MARK: - Training data capture
 
+    /// Requests a 224×224 thumbnail for `asset` and returns the flattened
+    /// `VNFeaturePrintObservation` as `[Float]`, or `nil` if extraction fails.
+    /// Uses the same ImageNet input size as `SimilarityEngine`.
+    private func extractFeatureVector(for asset: PHAsset) async -> [Float]? {
+        // Request a 224×224 thumbnail from the photo library.
+        let image: UIImage? = await withCheckedContinuation { continuation in
+            var resumed = false
+            let opts = PHImageRequestOptions()
+            opts.deliveryMode = .opportunistic
+            opts.isNetworkAccessAllowed = false
+            opts.isSynchronous = false
+            PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: CGSize(width: 224, height: 224),
+                contentMode: .aspectFill,
+                options: opts
+            ) { img, info in
+                guard !resumed else { return }
+                // Skip the first (degraded/low-res preview) delivery.
+                if info?[PHImageResultIsDegradedKey] as? Bool == true { return }
+                resumed = true
+                continuation.resume(returning: img)
+            }
+        }
+
+        guard let image, let cgImage = image.cgImage else { return nil }
+
+        // Run VNGenerateImageFeaturePrintRequest synchronously on this thread.
+        let request = VNGenerateImageFeaturePrintRequest()
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        try? handler.perform([request])
+        guard let observation = request.results?.first as? VNFeaturePrintObservation else { return nil }
+
+        // Copy the raw float data out of the observation.
+        let count = observation.elementCount
+        var vector = [Float](repeating: 0, count: count)
+        observation.data.withUnsafeBytes { ptr in
+            if let floatPtr = ptr.baseAddress?.assumingMemoryBound(to: Float.self) {
+                for i in 0..<count { vector[i] = floatPtr[i] }
+            }
+        }
+        return vector.isEmpty ? nil : vector
+    }
+
     /// Builds UserDecision records for every group that has marked (queued-for-delete) assets.
     /// Must be called BEFORE PHPhotoLibrary.performChanges — deleted assets cannot be accessed afterwards.
+    /// Extracts VNFeaturePrintObservation vectors concurrently (max 4 tasks) for kept + deleted assets.
     func buildDecisions() async -> [UserDecision] {
         var decisions: [UserDecision] = []
 
@@ -191,17 +240,56 @@ final class GroupReviewViewModel: ObservableObject {
             deletedFetch.enumerateObjects { a, _, _ in deletedAssets.append(a) }
             guard !deletedAssets.isEmpty else { continue }
 
+            // All assets whose vectors we need: kept first, then deleted (in deletedIDs order).
+            let allAssets: [PHAsset] = [keptAsset] + deletedAssets
+
+            // Extract feature vectors concurrently, capping at 4 parallel tasks to
+            // avoid memory pressure from simultaneous large image decompresses.
+            var vectorsByID: [String: [Float]] = [:]
+            await withTaskGroup(of: (String, [Float]?).self) { taskGroup in
+                var inFlight = 0
+                var assetIter = allAssets.makeIterator()
+
+                // Seed the first batch.
+                while inFlight < 4, let asset = assetIter.next() {
+                    let id = asset.localIdentifier
+                    taskGroup.addTask { [weak self] in
+                        guard let self else { return (id, nil) }
+                        let vec = await self.extractFeatureVector(for: asset)
+                        return (id, vec)
+                    }
+                    inFlight += 1
+                }
+
+                // Drain results and schedule remaining assets.
+                for await (id, vec) in taskGroup {
+                    if let vec { vectorsByID[id] = vec }
+                    inFlight -= 1
+                    if let next = assetIter.next() {
+                        let nextID = next.localIdentifier
+                        taskGroup.addTask { [weak self] in
+                            guard let self else { return (nextID, nil) }
+                            let v = await self.extractFeatureVector(for: next)
+                            return (nextID, v)
+                        }
+                        inFlight += 1
+                    }
+                }
+            }
+
             // Fetch quality data — should be cached from display, so no new Vision work.
             let keptLabels = await PhotoQualityAnalyzer.shared.labels(for: keptAsset)
             let keptScore  = await PhotoQualityAnalyzer.shared.qualityScore(for: keptAsset)
 
             var deletedLabels: [[String]] = []
             var deletedScores: [Float] = []
+            var deletedVectors: [[Float]] = []
             for asset in deletedAssets {
                 let labels = await PhotoQualityAnalyzer.shared.labels(for: asset)
                 let score  = await PhotoQualityAnalyzer.shared.qualityScore(for: asset)
                 deletedLabels.append(labels.map(\.rawValue))
                 deletedScores.append(score)
+                deletedVectors.append(vectorsByID[asset.localIdentifier] ?? [])
             }
 
             let reasonString: String
@@ -222,7 +310,10 @@ final class GroupReviewViewModel: ObservableObject {
                 keptLabels: keptLabels.map(\.rawValue),
                 deletedLabels: deletedLabels,
                 keptQualityScore: keptScore,
-                deletedQualityScores: deletedScores
+                deletedQualityScores: deletedScores,
+                featureVector: vectorsByID[keptID],
+                // Keep parallel structure with deletedAssetIDs; empty sub-array means extraction failed for that asset.
+                deletedFeatureVectors: deletedVectors
             )
             decisions.append(decision)
         }

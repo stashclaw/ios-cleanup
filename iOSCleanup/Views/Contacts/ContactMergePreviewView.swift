@@ -11,137 +11,175 @@ struct ContactMergePreviewView: View {
     @State private var mergeError: String?
     @State private var showPaywall = false
 
+    private let bg = Color(red: 0.05, green: 0.05, blue: 0.08)
+    private let accent = Color(red: 0.4, green: 0.8, blue: 0.6)
+
     var body: some View {
-        Group {
+        ZStack {
+            bg.ignoresSafeArea()
+
             if isMerged {
-                EmptyStateView(title: "Merged!", icon: "checkmark.circle.fill", message: "")
-                    .tint(.green)
+                VStack(spacing: 20) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 64))
+                        .foregroundStyle(accent)
+                    Text("Contacts Merged")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(.white)
+                    Text("The duplicate has been removed.")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.white.opacity(0.5))
+                }
             } else {
                 ScrollView {
                     VStack(spacing: 20) {
-                        headerLabel
+                        headerCard
                         diffGrid
                         mergeButton
                     }
-                    .padding()
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
                 }
             }
         }
         .navigationTitle("Merge Preview")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showPaywall) { PaywallView() }
+        .toolbarColorScheme(.dark, for: .navigationBar)
+        .sheet(isPresented: $showPaywall) {
+            PaywallView().environmentObject(purchaseManager)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .purchaseDidSucceed)) { _ in
             showPaywall = false
         }
     }
 
-    // MARK: - Header
+    // MARK: - Header card
 
-    private var headerLabel: some View {
-        VStack(spacing: 6) {
-            Text("Keep primary, merge duplicate into it")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-            HStack(spacing: 4) {
-                Text(fullName(match.primary)).font(.headline)
-                Image(systemName: "arrow.left").foregroundStyle(.blue)
-                Text(fullName(match.duplicate)).font(.headline).foregroundStyle(.secondary)
+    private var headerCard: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Keep", systemImage: "checkmark.circle.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(accent)
+                Text(displayName(match.primary))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Image(systemName: "arrow.left")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.4))
+
+            VStack(alignment: .trailing, spacing: 4) {
+                Label("Remove", systemImage: "xmark.circle.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color(red: 1, green: 0.42, blue: 0.67))
+                Text(displayName(match.duplicate))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.6))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .padding()
-        .frame(maxWidth: .infinity)
-        .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .padding(16)
+        .background(Color(white: 1, opacity: 0.05), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color(white: 1, opacity: 0.07)))
     }
 
     // MARK: - Two-column diff grid
 
     private var diffGrid: some View {
         VStack(spacing: 0) {
-            // Header row
+            // Column headers
             HStack(spacing: 0) {
-                columnHeader("Primary (Keep)", color: .blue)
-                columnHeader("Duplicate (Merge)", color: .secondary)
+                columnHeader("Primary (Keep)", color: accent)
+                Divider().frame(width: 1).background(Color(white: 1, opacity: 0.08))
+                columnHeader("Duplicate (Merge)", color: Color(red: 1, green: 0.42, blue: 0.67))
             }
-            Divider()
+            .frame(height: 36)
 
-            // Field rows
             ForEach(diffRows, id: \.label) { row in
+                Divider().background(Color(white: 1, opacity: 0.06))
                 HStack(spacing: 0) {
-                    fieldCell(row.primaryValue, added: row.addedFromPrimary)
-                    Divider()
-                    fieldCell(row.duplicateValue, added: row.addedFromDuplicate, dropped: row.droppedFromDuplicate)
+                    fieldCell(row.primaryValue, highlight: row.addedFromPrimary ? .green : nil)
+                    Divider().frame(width: 1).background(Color(white: 1, opacity: 0.06))
+                    fieldCell(row.duplicateValue,
+                              highlight: row.addedFromDuplicate ? .green : row.droppedFromDuplicate ? .red : nil,
+                              strikethrough: row.droppedFromDuplicate)
                 }
-                Divider()
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color(UIColor.separator))
-        )
+        .background(Color(white: 1, opacity: 0.04), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color(white: 1, opacity: 0.07)))
     }
 
     private func columnHeader(_ title: String, color: Color) -> some View {
         Text(title)
-            .font(.caption.bold())
+            .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(color)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
             .padding(.horizontal, 12)
-            .background(color.opacity(0.08))
     }
 
-    private func fieldCell(_ value: String?, added: Bool = false, dropped: Bool = false) -> some View {
+    private func fieldCell(
+        _ value: String?,
+        highlight: Color? = nil,
+        strikethrough: Bool = false
+    ) -> some View {
         Group {
             if let value, !value.isEmpty {
                 Text(value)
-                    .font(.caption)
-                    .foregroundStyle(added ? .green : dropped ? .red : .primary)
-                    .strikethrough(dropped)
+                    .font(.system(size: 12))
+                    .foregroundStyle(highlight != nil ? highlight! : Color.white.opacity(0.75))
+                    .strikethrough(strikethrough, color: Color(red: 1, green: 0.42, blue: 0.67))
             } else {
                 Text("—")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.white.opacity(0.2))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 8)
+        .padding(.vertical, 9)
         .padding(.horizontal, 12)
-        .background(added ? Color.green.opacity(0.08) : dropped ? Color.red.opacity(0.08) : Color.clear)
+        .background(
+            highlight.map { $0.opacity(0.08) } ?? Color.clear,
+            in: Rectangle()
+        )
     }
 
     // MARK: - Merge button
 
     private var mergeButton: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 10) {
             if let error = mergeError {
                 Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color(red: 1, green: 0.42, blue: 0.67))
+                    .multilineTextAlignment(.center)
             }
 
-            Button(action: {
+            Button {
                 guard purchaseManager.isPurchased else { showPaywall = true; return }
                 Task { await merge() }
-            }) {
+            } label: {
                 Group {
                     if isMerging {
-                        ProgressView()
-                            .tint(.white)
+                        ProgressView().tint(.white)
                     } else {
                         Label(
                             purchaseManager.isPurchased ? "Merge Contacts" : "Merge Contacts 🔒",
                             systemImage: "person.2.fill"
                         )
-                        .font(.headline)
+                        .font(.system(size: 16, weight: .semibold))
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .padding()
-                .background(.blue)
-                .foregroundStyle(Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .padding(.vertical, 16)
+                .background(accent)
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
             }
             .disabled(isMerging)
         }
@@ -152,15 +190,17 @@ struct ContactMergePreviewView: View {
     private func merge() async {
         isMerging = true
         defer { isMerging = false }
+
         let store = CNContactStore()
         let request = CNSaveRequest()
+
         guard let mutablePrimary = match.primary.mutableCopy() as? CNMutableContact else {
             mergeError = "Could not prepare contact for editing."
             return
         }
         let duplicate = match.duplicate
 
-        // Merge fields: phone numbers
+        // Phone numbers: add any from duplicate not already in primary
         let existingPhones = Set(mutablePrimary.phoneNumbers.map { $0.value.stringValue })
         let newPhones = duplicate.phoneNumbers.filter { !existingPhones.contains($0.value.stringValue) }
         mutablePrimary.phoneNumbers += newPhones
@@ -170,13 +210,14 @@ struct ContactMergePreviewView: View {
         let newEmails = duplicate.emailAddresses.filter { !existingEmails.contains($0.value as String) }
         mutablePrimary.emailAddresses += newEmails
 
-        // Fill empty fields
+        // Fill empty scalar fields from duplicate
         if mutablePrimary.organizationName.isEmpty { mutablePrimary.organizationName = duplicate.organizationName }
-        if mutablePrimary.birthday == nil { mutablePrimary.birthday = duplicate.birthday }
+        if mutablePrimary.birthday == nil           { mutablePrimary.birthday = duplicate.birthday }
 
         request.update(mutablePrimary)
+
         guard let mutableDuplicate = duplicate.mutableCopy() as? CNMutableContact else {
-            mergeError = "Could not prepare duplicate contact for deletion."
+            mergeError = "Could not prepare duplicate for deletion."
             return
         }
         request.delete(mutableDuplicate)
@@ -219,7 +260,10 @@ struct ContactMergePreviewView: View {
         ]
     }
 
-    private func fullName(_ contact: CNContact) -> String {
-        [contact.givenName, contact.familyName].filter { !$0.isEmpty }.joined(separator: " ")
+    private func displayName(_ contact: CNContact) -> String {
+        let name = [contact.givenName, contact.familyName]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return name.isEmpty ? contact.organizationName : name
     }
 }
