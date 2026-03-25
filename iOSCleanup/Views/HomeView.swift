@@ -17,6 +17,44 @@ struct HomeView: View {
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
+        coreStack
+            // Phase 2 nav observers (split to avoid type-checker timeout)
+            .onChange(of: viewModel.eventRolls.count) { count in
+                guard pendingNav == .eventRolls, count > 0 else { return }
+                pendingNav = nil; navPath.append(NavDest.eventRolls)
+            }
+            .onChange(of: viewModel.eventRollScanState) { state in
+                guard case .done = state, pendingNav == .eventRolls else { return }
+                pendingNav = nil
+            }
+            .onChange(of: viewModel.videoGroups.count) { count in
+                guard pendingNav == .videoDuplicates, count > 0 else { return }
+                pendingNav = nil; navPath.append(NavDest.videoDuplicates)
+            }
+            .onChange(of: viewModel.videoDuplicateScanState) { state in
+                guard case .done = state, pendingNav == .videoDuplicates else { return }
+                pendingNav = nil
+            }
+            .onChange(of: viewModel.smartPicks.count) { count in
+                guard pendingNav == .smartPicks, count > 0 else { return }
+                pendingNav = nil; navPath.append(NavDest.smartPicks)
+            }
+            .onChange(of: viewModel.smartPicksScanState) { state in
+                guard case .done = state, pendingNav == .smartPicks else { return }
+                pendingNav = nil
+            }
+            .onChange(of: viewModel.contactMatches.count) { count in
+                guard pendingNav == .contacts, count > 0 else { return }
+                pendingNav = nil; navPath.append(NavDest.contacts)
+            }
+            .onChange(of: viewModel.contactScanState) { state in
+                guard case .done = state, pendingNav == .contacts else { return }
+                pendingNav = nil
+            }
+    }
+
+    // Split body to avoid Swift type-checker timeout on long modifier chains.
+    private var coreStack: some View {
         NavigationStack(path: $navPath) {
             ZStack {
                 bg.ignoresSafeArea()
@@ -35,88 +73,7 @@ struct HomeView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: NavDest.self) { dest in
-                switch dest {
-                case .duplicates:
-                    PhotoResultsView(
-                        title: "Duplicates",
-                        groups: viewModel.photoGroups.filter { $0.reason != .visuallySimilar }
-                    )
-                    .environmentObject(purchaseManager)
-                    .environmentObject(viewModel as HomeViewModel)
-                case .similar:
-                    PhotoResultsView(
-                        title: "Similar Photos",
-                        groups: viewModel.photoGroups.filter { $0.reason == .visuallySimilar }
-                    )
-                    .environmentObject(purchaseManager)
-                    .environmentObject(viewModel as HomeViewModel)
-                case .largeVideos:
-                    FileResultsView()
-                        .environmentObject(purchaseManager)
-                        .environmentObject(viewModel as HomeViewModel)
-                case .blurry:
-                    BlurResultsView()
-                        .environmentObject(purchaseManager)
-                        .environmentObject(viewModel as HomeViewModel)
-                case .screenshots:
-                    ScreenshotsResultsView()
-                        .environmentObject(purchaseManager)
-                        .environmentObject(viewModel as HomeViewModel)
-                case .largePhotos:
-                    LargePhotosResultsView()
-                        .environmentObject(purchaseManager)
-                        .environmentObject(viewModel as HomeViewModel)
-                case .panoramas:
-                    MetadataResultsView(
-                        title: "Panoramas",
-                        subtitle: "Wide-angle panorama shots",
-                        icon: "photo.on.rectangle.angled",
-                        accent: Color(red: 0.18, green: 0.82, blue: 0.82),
-                        assets: viewModel.panoramaAssets
-                    )
-                    .environmentObject(purchaseManager)
-                    .environmentObject(viewModel as HomeViewModel)
-                case .portraitMode:
-                    MetadataResultsView(
-                        title: "Portrait Mode",
-                        subtitle: "Depth-effect portraits",
-                        icon: "person.crop.rectangle",
-                        accent: Color(red: 0.72, green: 0.45, blue: 1),
-                        assets: viewModel.portraitModeAssets
-                    )
-                    .environmentObject(purchaseManager)
-                    .environmentObject(viewModel as HomeViewModel)
-                case .livePhotos:
-                    MetadataResultsView(
-                        title: "Live Photos",
-                        subtitle: "Motion + sound photos",
-                        icon: "livephoto",
-                        accent: Color(red: 0.98, green: 0.57, blue: 0.24),
-                        assets: viewModel.livePhotoAssets
-                    )
-                    .environmentObject(purchaseManager)
-                    .environmentObject(viewModel as HomeViewModel)
-                case .semantic(let groupId):
-                    if let group = viewModel.semanticGroups.first(where: { $0.id == groupId }) {
-                        SemanticResultsView(group: group)
-                            .environmentObject(purchaseManager)
-                    }
-                case .eventRolls:
-                    EventRollResultsView(rolls: viewModel.eventRolls)
-                        .environmentObject(purchaseManager)
-                        .environmentObject(viewModel as HomeViewModel)
-                case .videoDuplicates:
-                    VideoGroupResultsView(groups: viewModel.videoGroups)
-                        .environmentObject(purchaseManager)
-                        .environmentObject(viewModel as HomeViewModel)
-                case .smartPicks:
-                    SmartPicksResultsView(assets: viewModel.smartPicks)
-                        .environmentObject(purchaseManager)
-                case .contacts:
-                    ContactResultsView(matches: viewModel.contactMatches)
-                        .environmentObject(purchaseManager)
-                        .environmentObject(viewModel as HomeViewModel)
-                }
+                destinationView(for: dest)
             }
         }
         .sheet(isPresented: $showPaywall) { PaywallView().environmentObject(purchaseManager) }
@@ -138,7 +95,6 @@ struct HomeView: View {
         .onReceive(ticker) { date in
             if viewModel.isAnyScanning { now = date }
         }
-        // Navigate as soon as first results arrive (count-based — fires mid-scan)
         .onChange(of: viewModel.photoGroups.count) { _ in
             guard let pending = pendingNav else { return }
             if pending == .duplicates {
@@ -165,7 +121,6 @@ struct HomeView: View {
             guard pendingNav == .largePhotos, count > 0 else { return }
             pendingNav = nil; navPath.append(NavDest.largePhotos)
         }
-        // Clean up pendingNav when scan finishes with 0 results
         .onChange(of: viewModel.photoScanState) { state in
             guard case .done = state else { return }
             if pendingNav == .duplicates || pendingNav == .similar { pendingNav = nil }
@@ -186,40 +141,96 @@ struct HomeView: View {
             guard case .done = state, pendingNav == .largePhotos else { return }
             pendingNav = nil
         }
-        .onChange(of: viewModel.eventRolls.count) { count in
-            guard pendingNav == .eventRolls, count > 0 else { return }
-            pendingNav = nil; navPath.append(NavDest.eventRolls)
-        }
-        .onChange(of: viewModel.eventRollScanState) { state in
-            guard case .done = state, pendingNav == .eventRolls else { return }
-            pendingNav = nil
-        }
-        .onChange(of: viewModel.videoGroups.count) { count in
-            guard pendingNav == .videoDuplicates, count > 0 else { return }
-            pendingNav = nil; navPath.append(NavDest.videoDuplicates)
-        }
-        .onChange(of: viewModel.videoDuplicateScanState) { state in
-            guard case .done = state, pendingNav == .videoDuplicates else { return }
-            pendingNav = nil
-        }
-        .onChange(of: viewModel.smartPicks.count) { count in
-            guard pendingNav == .smartPicks, count > 0 else { return }
-            pendingNav = nil; navPath.append(NavDest.smartPicks)
-        }
-        .onChange(of: viewModel.smartPicksScanState) { state in
-            guard case .done = state, pendingNav == .smartPicks else { return }
-            pendingNav = nil
-        }
-        .onChange(of: viewModel.contactMatches.count) { count in
-            guard pendingNav == .contacts, count > 0 else { return }
-            pendingNav = nil; navPath.append(NavDest.contacts)
-        }
-        .onChange(of: viewModel.contactScanState) { state in
-            guard case .done = state, pendingNav == .contacts else { return }
-            pendingNav = nil
-        }
         .onAppear {
             Task { await viewModel.fetchMetadataAssets() }
+        }
+    }
+
+    // MARK: - Navigation destinations
+
+    @ViewBuilder
+    private func destinationView(for dest: NavDest) -> some View {
+        switch dest {
+        case .duplicates:
+            PhotoResultsView(
+                title: "Duplicates",
+                groups: viewModel.photoGroups.filter { $0.reason != .visuallySimilar }
+            )
+            .environmentObject(purchaseManager)
+            .environmentObject(viewModel as HomeViewModel)
+        case .similar:
+            PhotoResultsView(
+                title: "Similar Photos",
+                groups: viewModel.photoGroups.filter { $0.reason == .visuallySimilar }
+            )
+            .environmentObject(purchaseManager)
+            .environmentObject(viewModel as HomeViewModel)
+        case .largeVideos:
+            FileResultsView()
+                .environmentObject(purchaseManager)
+                .environmentObject(viewModel as HomeViewModel)
+        case .blurry:
+            BlurResultsView()
+                .environmentObject(purchaseManager)
+                .environmentObject(viewModel as HomeViewModel)
+        case .screenshots:
+            ScreenshotsResultsView()
+                .environmentObject(purchaseManager)
+                .environmentObject(viewModel as HomeViewModel)
+        case .largePhotos:
+            LargePhotosResultsView()
+                .environmentObject(purchaseManager)
+                .environmentObject(viewModel as HomeViewModel)
+        case .panoramas:
+            MetadataResultsView(
+                title: "Panoramas",
+                subtitle: "Wide-angle panorama shots",
+                icon: "photo.on.rectangle.angled",
+                accent: Color(red: 0.18, green: 0.82, blue: 0.82),
+                assets: viewModel.panoramaAssets
+            )
+            .environmentObject(purchaseManager)
+            .environmentObject(viewModel as HomeViewModel)
+        case .portraitMode:
+            MetadataResultsView(
+                title: "Portrait Mode",
+                subtitle: "Depth-effect portraits",
+                icon: "person.crop.rectangle",
+                accent: Color(red: 0.72, green: 0.45, blue: 1),
+                assets: viewModel.portraitModeAssets
+            )
+            .environmentObject(purchaseManager)
+            .environmentObject(viewModel as HomeViewModel)
+        case .livePhotos:
+            MetadataResultsView(
+                title: "Live Photos",
+                subtitle: "Motion + sound photos",
+                icon: "livephoto",
+                accent: Color(red: 0.98, green: 0.57, blue: 0.24),
+                assets: viewModel.livePhotoAssets
+            )
+            .environmentObject(purchaseManager)
+            .environmentObject(viewModel as HomeViewModel)
+        case .semantic(let groupId):
+            if let group = viewModel.semanticGroups.first(where: { $0.id == groupId }) {
+                SemanticResultsView(group: group)
+                    .environmentObject(purchaseManager)
+            }
+        case .eventRolls:
+            EventRollResultsView(rolls: viewModel.eventRolls)
+                .environmentObject(purchaseManager)
+                .environmentObject(viewModel as HomeViewModel)
+        case .videoDuplicates:
+            VideoGroupResultsView(groups: viewModel.videoGroups)
+                .environmentObject(purchaseManager)
+                .environmentObject(viewModel as HomeViewModel)
+        case .smartPicks:
+            SmartPicksResultsView(assets: viewModel.smartPicks)
+                .environmentObject(purchaseManager)
+        case .contacts:
+            ContactResultsView(matches: viewModel.contactMatches)
+                .environmentObject(purchaseManager)
+                .environmentObject(viewModel as HomeViewModel)
         }
     }
 

@@ -3,9 +3,6 @@ import Photos
 import SwiftUI
 @preconcurrency import Vision
 
-// VNFeaturePrintObservation is not Sendable in the SDK headers; suppress the warning.
-extension VNFeaturePrintObservation: @retroactive @unchecked Sendable {}
-
 @MainActor
 final class GroupReviewViewModel: ObservableObject {
 

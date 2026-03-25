@@ -171,7 +171,6 @@ actor EventRollScanEngine {
         // Sort ascending — greedy clustering relies on chronological order.
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
         // All image types including screenshots, bursts, etc.
-        options.includeAllBursts = true
         let result = PHAsset.fetchAssets(with: .image, options: options)
         var assets: [PHAsset] = []
         result.enumerateObjects { asset, _, _ in assets.append(asset) }
