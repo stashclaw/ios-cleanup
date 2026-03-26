@@ -94,6 +94,12 @@ actor BackgroundScanCacheWriter {
 
         // Merge new results into existing cache (preserving large files, screenshots, etc.)
         await mergeAndSave(duplicateGroups: duplicateGroups, blurPhotoIds: blurIds)
+
+        guard !Task.isCancelled else { return }
+
+        // Step 2: Fine-tune the on-device quality model on accumulated user decisions.
+        // Runs only when ≥ 50 labelled decisions exist; no-ops otherwise.
+        await MLModelUpdater.shared.updateIfReady()
     }
 
     // MARK: - Duplicate scan

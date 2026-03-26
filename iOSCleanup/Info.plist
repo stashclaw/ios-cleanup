@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.yourname.iOSCleanup.prescore</string>
+	</array>
 	<key>CFBundleDisplayName</key>
 	<string>iOSCleanup</string>
 	<key>CFBundleExecutable</key>
@@ -20,10 +24,6 @@
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<key>BGTaskSchedulerPermittedIdentifiers</key>
-	<array>
-		<string>com.yourname.iOSCleanup.prescore</string>
-	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>iOSCleanup needs photo access to find similar and duplicate images on your device.</string>
 	<key>UIAppFonts</key>
@@ -32,6 +32,10 @@
 		<string>Nunito-Regular.ttf</string>
 		<string>Nunito-SemiBold.ttf</string>
 		<string>Nunito-Bold.ttf</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>processing</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>

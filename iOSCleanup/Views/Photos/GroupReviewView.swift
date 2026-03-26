@@ -158,7 +158,7 @@ struct GroupReviewView: View {
             Spacer()
 
             // Hint label
-            Text("Tap to change best  ·  ✕ to unqueue")
+            Text("Tap to change best  ·  Keep to unqueue")
                 .font(.system(size: 10))
                 .foregroundStyle(Color.white.opacity(0.2))
         }
@@ -420,6 +420,18 @@ private struct ReviewPhotoCell: View {
                         .background(Color(red: 0.18, green: 0.78, blue: 0.54), in: Capsule())
                         .padding(8)
                 }
+
+                // QUEUED label — bottom-left, only when marked
+                if isMarked {
+                    Label("QUEUED", systemImage: "clock.badge.xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.red.opacity(0.75), in: Capsule())
+                        .padding(8)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
+                }
             }
             // Tap cell: set as best (non-best photos), or toggle mark (best photo when already marked)
             .contentShape(Rectangle())
@@ -427,16 +439,17 @@ private struct ReviewPhotoCell: View {
                 if !isBest { onSetBest() } else if isMarked { onToggleMark() }
             }
 
-            // ✕ Unqueue button — top-right, only when marked
-            // Placed as overlay so its hit area doesn't conflict with cell tap
+            // ↩ Keep button — top-right, only when marked
+            // Green "Keep" pill clearly signals rescue/undo, not another delete action
             .overlay(alignment: .topTrailing) {
                 if isMarked {
                     Button(action: onToggleMark) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .bold))
+                        Label("Keep", systemImage: "arrow.uturn.left")
+                            .font(.system(size: 9, weight: .bold))
                             .foregroundStyle(.white)
-                            .frame(width: 22, height: 22)
-                            .background(Color.red, in: Circle())
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
+                            .background(Color(red: 0.18, green: 0.78, blue: 0.54), in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .padding(8)

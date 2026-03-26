@@ -49,6 +49,7 @@
 		AB01SMRT000000000000001A /* SmartPicksResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB01SMRT000000000000001B /* SmartPicksResultsView.swift */; };
 		AC0100000000000000001A /* BackgroundScanScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0100000000000000001B /* BackgroundScanScheduler.swift */; };
 		AC0200000000000000001A /* BackgroundScanCacheWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0200000000000000001B /* BackgroundScanCacheWriter.swift */; };
+		MLUPD000000000000001A /* MLModelUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = MLUPD000000000000001B /* MLModelUpdater.swift */; };
 		BBCONFIG00000000000000001A /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBCONFIG00000000000000001B /* AppConfig.swift */; };
 		BBSCREEN000000000000001A /* ScreenshotScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBSCREEN000000000000001B /* ScreenshotScanEngine.swift */; };
 		BBSCREEN000000000000002A /* ScreenshotsResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBSCREEN000000000000002B /* ScreenshotsResultsView.swift */; };
@@ -135,6 +136,7 @@
 		AB01SMRT000000000000001B /* SmartPicksResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartPicksResultsView.swift; sourceTree = "<group>"; };
 		AC0100000000000000001B /* BackgroundScanScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundScanScheduler.swift; sourceTree = "<group>"; };
 		AC0200000000000000001B /* BackgroundScanCacheWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundScanCacheWriter.swift; sourceTree = "<group>"; };
+		MLUPD000000000000001B /* MLModelUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLModelUpdater.swift; sourceTree = "<group>"; };
 		BBCONFIG00000000000000001B /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		BBSCREEN000000000000001B /* ScreenshotScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotScanEngine.swift; sourceTree = "<group>"; };
 		BBSCREEN000000000000002B /* ScreenshotsResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotsResultsView.swift; sourceTree = "<group>"; };
@@ -239,6 +241,7 @@
 				EVENG0000000000000001B /* EventRollScanEngine.swift */,
 				AC0100000000000000001B /* BackgroundScanScheduler.swift */,
 				AC0200000000000000001B /* BackgroundScanCacheWriter.swift */,
+				MLUPD000000000000001B /* MLModelUpdater.swift */,
 				CTENG0000000000000001B /* ContactScanEngine.swift */,
 			);
 			path = Engines;
@@ -530,6 +533,7 @@
 				AB01SMRT000000000000001A /* SmartPicksResultsView.swift in Sources */,
 				AC0100000000000000001A /* BackgroundScanScheduler.swift in Sources */,
 				AC0200000000000000001A /* BackgroundScanCacheWriter.swift in Sources */,
+				MLUPD000000000000001A /* MLModelUpdater.swift in Sources */,
 				EVENG0000000000000001A /* EventRollScanEngine.swift in Sources */,
 				EVROLL000000000000001A /* EventRoll.swift in Sources */,
 				EVRSV0000000000000001A /* EventRollResultsView.swift in Sources */,

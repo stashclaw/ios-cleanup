@@ -25,7 +25,8 @@ enum BackgroundScanScheduler {
     static func scheduleIfNeeded() {
         let request = BGProcessingTaskRequest(identifier: taskID)
         request.requiresNetworkConnectivity = false
-        request.requiresExternalPower = false
+        // MLUpdateTask fine-tuning runs overnight on charger to avoid draining battery.
+        request.requiresExternalPower = true
 
         // Earliest fire: next 2 AM
         var components = Calendar.current.dateComponents([.hour, .minute], from: Date())

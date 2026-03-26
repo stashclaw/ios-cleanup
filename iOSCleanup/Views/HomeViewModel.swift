@@ -207,38 +207,40 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status == .authorized || status == .limited else { return }
 
-        let opts = PHFetchOptions()
-        opts.includeAssetSourceTypes = [.typeUserLibrary, .typeCloudShared, .typeiTunesSynced]
+        let (pano, portrait, live) = await Task.detached(priority: .utility) {
+            // Panoramas
+            let panoOpts = PHFetchOptions()
+            panoOpts.predicate = NSPredicate(format: "(mediaSubtype & %d) != 0",
+                                             PHAssetMediaSubtype.photoPanorama.rawValue)
+            var panoAssets: [PHAsset] = []
+            PHAsset.fetchAssets(with: .image, options: panoOpts)
+                .enumerateObjects { asset, _, _ in panoAssets.append(asset) }
 
-        // Panoramas
-        let panoOpts = PHFetchOptions()
-        panoOpts.predicate = NSPredicate(format: "(mediaSubtype & %d) != 0",
-                                         PHAssetMediaSubtype.photoPanorama.rawValue)
-        var panoAssets: [PHAsset] = []
-        PHAsset.fetchAssets(with: .image, options: panoOpts)
-            .enumerateObjects { asset, _, _ in panoAssets.append(asset) }
-        panoramaAssets = panoAssets
-        panoramaCount  = panoAssets.count
+            // Portrait Mode (depth effect)
+            let portraitOpts = PHFetchOptions()
+            portraitOpts.predicate = NSPredicate(format: "(mediaSubtype & %d) != 0",
+                                                  PHAssetMediaSubtype.photoDepthEffect.rawValue)
+            var portraitAssets: [PHAsset] = []
+            PHAsset.fetchAssets(with: .image, options: portraitOpts)
+                .enumerateObjects { asset, _, _ in portraitAssets.append(asset) }
 
-        // Portrait Mode (depth effect)
-        let portraitOpts = PHFetchOptions()
-        portraitOpts.predicate = NSPredicate(format: "(mediaSubtype & %d) != 0",
-                                              PHAssetMediaSubtype.photoDepthEffect.rawValue)
-        var portraitAssets: [PHAsset] = []
-        PHAsset.fetchAssets(with: .image, options: portraitOpts)
-            .enumerateObjects { asset, _, _ in portraitAssets.append(asset) }
-        portraitModeAssets = portraitAssets
-        portraitModeCount  = portraitAssets.count
+            // Live Photos
+            let liveOpts = PHFetchOptions()
+            liveOpts.predicate = NSPredicate(format: "(mediaSubtype & %d) != 0",
+                                              PHAssetMediaSubtype.photoLive.rawValue)
+            var liveAssets: [PHAsset] = []
+            PHAsset.fetchAssets(with: .image, options: liveOpts)
+                .enumerateObjects { asset, _, _ in liveAssets.append(asset) }
 
-        // Live Photos
-        let liveOpts = PHFetchOptions()
-        liveOpts.predicate = NSPredicate(format: "(mediaSubtype & %d) != 0",
-                                          PHAssetMediaSubtype.photoLive.rawValue)
-        var liveAssets: [PHAsset] = []
-        PHAsset.fetchAssets(with: .image, options: liveOpts)
-            .enumerateObjects { asset, _, _ in liveAssets.append(asset) }
-        livePhotoAssets = liveAssets
-        livePhotoCount  = liveAssets.count
+            return (panoAssets, portraitAssets, liveAssets)
+        }.value
+
+        panoramaAssets     = pano
+        panoramaCount      = pano.count
+        portraitModeAssets = portrait
+        portraitModeCount  = portrait.count
+        livePhotoAssets    = live
+        livePhotoCount     = live.count
     }
 
     init() {
@@ -258,55 +260,59 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
 
     /// Scans PHAssetResource file sizes for all images and videos to populate
     /// `photoLibraryBytes` and `videoLibraryBytes` used by the segmented donut chart.
-    /// Sequential — no image decoding, so this is fast (KVC file size read only).
+    /// Enumeration runs off the main thread to avoid blocking UI on large libraries.
     func fetchStorageBreakdown() async {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status == .authorized || status == .limited else { return }
 
-        var photos: Int64 = 0
-        var videos: Int64 = 0
+        let (photos, videos) = await Task.detached(priority: .utility) {
+            var photos: Int64 = 0
+            var videos: Int64 = 0
 
-        // Images
-        let imageResult = PHAsset.fetchAssets(with: .image, options: nil)
-        imageResult.enumerateObjects { asset, _, _ in
-            let resources = PHAssetResource.assetResources(for: asset)
-            for resource in resources {
-                if resource.type == .photo || resource.type == .fullSizePhoto {
-                    if let size = resource.value(forKey: "fileSize") as? Int64 {
-                        photos += size
-                        break
+            // Images
+            let imageResult = PHAsset.fetchAssets(with: .image, options: nil)
+            imageResult.enumerateObjects { asset, _, _ in
+                let resources = PHAssetResource.assetResources(for: asset)
+                for resource in resources {
+                    if resource.type == .photo || resource.type == .fullSizePhoto {
+                        if let size = resource.value(forKey: "fileSize") as? Int64 {
+                            photos += size
+                            break
+                        }
                     }
                 }
             }
-        }
 
-        // Videos
-        let videoResult = PHAsset.fetchAssets(with: .video, options: nil)
-        videoResult.enumerateObjects { asset, _, _ in
-            let resources = PHAssetResource.assetResources(for: asset)
-            for resource in resources {
-                if resource.type == .video || resource.type == .fullSizeVideo {
-                    if let size = resource.value(forKey: "fileSize") as? Int64 {
-                        videos += size
-                        break
+            // Videos
+            let videoResult = PHAsset.fetchAssets(with: .video, options: nil)
+            videoResult.enumerateObjects { asset, _, _ in
+                let resources = PHAssetResource.assetResources(for: asset)
+                for resource in resources {
+                    if resource.type == .video || resource.type == .fullSizeVideo {
+                        if let size = resource.value(forKey: "fileSize") as? Int64 {
+                            videos += size
+                            break
+                        }
                     }
                 }
             }
-        }
 
-        await MainActor.run {
-            self.photoLibraryBytes = photos
-            self.videoLibraryBytes = videos
-        }
+            return (photos, videos)
+        }.value
+
+        self.photoLibraryBytes = photos
+        self.videoLibraryBytes = videos
     }
 
     /// Fetches the real library size across all media types (no filters).
     func refreshTotalLibraryCount() async {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status == .authorized || status == .limited else { return }
-        let imageCount = PHAsset.fetchAssets(with: .image, options: nil).count
-        let videoCount = PHAsset.fetchAssets(with: .video, options: nil).count
-        totalLibraryCount = imageCount + videoCount
+        let count = await Task.detached(priority: .utility) {
+            PHAsset.fetchAssets(with: .image, options: nil).count +
+            PHAsset.fetchAssets(with: .video, options: nil).count
+        }.value
+        totalLibraryCount = count
     }
 
     // MARK: - Computed

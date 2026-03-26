@@ -112,6 +112,10 @@ do {
         .exposure,
         .noise,
     ]
+    // isUpdatable = true compiles the model with an MLUpdateTask-compatible training graph,
+    // enabling on-device fine-tuning via MLModelUpdater without retraining from scratch.
+    // Required for PhotoDuck's personalisation flywheel (Phase 5).
+    params.isUpdatable = true
 
     let classifier = try MLImageClassifier(
         trainingData: .labeledDirectories(at: trainingURL),

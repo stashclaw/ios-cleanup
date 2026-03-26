@@ -35,18 +35,68 @@ actor PhotoQualityAnalyzer {
 
     // MARK: - Core ML model (optional — falls back to heuristics if absent)
 
-    /// Lazily loaded on first use. Looks for PhotoQualityClassifier.mlmodelc in the main bundle,
-    /// which Xcode compiles automatically from PhotoQualityClassifier.mlmodel when it is added
-    /// to the target. If the model is not bundled, this stays nil and all scoring uses the
-    /// existing heuristic pipeline — no behaviour change for users without the model.
-    private lazy var qualityVNModel: VNCoreMLModel? = {
-        guard let url = Bundle.main.url(
+    /// Lazily loaded on first use.
+    ///
+    /// Priority order:
+    ///   1. Personalized model — Application Support/PhotoQualityClassifier_personalized.mlmodelc
+    ///      Written by MLModelUpdater after fine-tuning on the user's own keep/delete decisions.
+    ///   2. Bundle model — PhotoQualityClassifier.mlmodelc compiled into the app bundle.
+    ///      Added to Xcode target from Resources/PhotoQualityClassifier.mlmodel.
+    ///   3. Heuristic pipeline — Laplacian blur + luminance + Vision face (always available).
+    ///
+    /// When MLModelUpdater posts "mlModelDidUpdate", the cached VNCoreMLModel is invalidated
+    /// so the next call to qualityScore(for:) picks up the newly written personalized model.
+    private var qualityVNModel: VNCoreMLModel? = nil
+    private var qualityVNModelLoaded = false
+
+    private func loadedQualityModel() -> VNCoreMLModel? {
+        if qualityVNModelLoaded { return qualityVNModel }
+        qualityVNModelLoaded = true
+        qualityVNModel = resolveQualityModel()
+
+        // Listen for personalized model updates — invalidate cache so the next
+        // call reloads from Application Support.
+        NotificationCenter.default.addObserver(
+            forName: Notification.Name("mlModelDidUpdate"),
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            // Actor-isolated mutation must be dispatched back to the actor.
+            Task { [weak self] in
+                await self?.invalidateModelCache()
+            }
+        }
+
+        return qualityVNModel
+    }
+
+    /// Invalidates the cached VNCoreMLModel so the personalized model is picked up
+    /// on the next call to qualityScore(for:).
+    func invalidateModelCache() {
+        qualityVNModelLoaded = false
+        qualityVNModel = nil
+    }
+
+    /// Resolves the best available Core ML model, preferring the personalized variant.
+    private func resolveQualityModel() -> VNCoreMLModel? {
+        // 1. Try personalized model in Application Support
+        if let personalizedURL = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("PhotoQualityClassifier_personalized.mlmodelc"),
+           FileManager.default.fileExists(atPath: personalizedURL.path),
+           let mlModel = try? MLModel(contentsOf: personalizedURL) {
+            return try? VNCoreMLModel(for: mlModel)
+        }
+
+        // 2. Fall back to bundle model
+        guard let bundleURL = Bundle.main.url(
             forResource: "PhotoQualityClassifier",
             withExtension: "mlmodelc"
         ) else { return nil }
-        guard let mlModel = try? MLModel(contentsOf: url) else { return nil }
+        guard let mlModel = try? MLModel(contentsOf: bundleURL) else { return nil }
         return try? VNCoreMLModel(for: mlModel)
-    }()
+    }
 
     func labels(for asset: PHAsset) async -> [PhotoQualityLabel] {
         if let hit = cache[asset.localIdentifier] { return hit }
@@ -67,7 +117,7 @@ actor PhotoQualityAnalyzer {
     func qualityScore(for asset: PHAsset) async -> Float {
         if let hit = scoreCache[asset.localIdentifier] { return hit }
         let score: Float
-        if let vnModel = qualityVNModel {
+        if let vnModel = loadedQualityModel() {
             score = await coreMLQualityScore(for: asset, vnModel: vnModel)
         } else {
             score = await heuristicQualityScore(for: asset)

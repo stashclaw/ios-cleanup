@@ -36,6 +36,12 @@ Three headless scan engines + unit tests.
 | `ScreenshotScanEngine` | `Engines/ScreenshotScanEngine.swift` | `AsyncThrowingStream<ScreenshotScanEvent, Error>` | `.screenshotsFound([PHAsset])` |
 | `LargePhotoScanEngine` | `Engines/LargePhotoScanEngine.swift` | `AsyncThrowingStream<LargePhotoScanEvent, Error>` | `.progress(completed:total:)`, `.photosFound([LargePhotoItem])` |
 | `ContactScanEngine` | `Engines/ContactScanEngine.swift` | (Phase 1) | — |
+| `EventRollScanEngine` | `Engines/EventRollScanEngine.swift` | `AsyncThrowingStream<EventRollScanEvent, Error>` | `.progress(completed:total:)`, `.rollsFound([EventRoll])` |
+| `VideoDuplicateEngine` | `Engines/VideoDuplicateEngine.swift` | `AsyncThrowingStream<VideoDuplicateEvent, Error>` | `.progress(completed:total:)`, `.groupsFound([VideoGroup])` |
+| `ScreenshotTagEngine` | `Engines/ScreenshotTagEngine.swift` | `AsyncThrowingStream<ScreenshotTagEvent, Error>` | `.progress(completed:total:)`, `.tagsFound([PHAsset: ScreenshotTag])` |
+| `BackgroundScanScheduler` | `Engines/BackgroundScanScheduler.swift` | BGProcessingTask scheduler (no stream) | — |
+| `BackgroundScanCacheWriter` | `Engines/BackgroundScanCacheWriter.swift` | Background scan + cache writer actor (no stream) | — |
+| `MLModelUpdater` | `Engines/MLModelUpdater.swift` | `actor MLModelUpdater` with `.shared` singleton. Runs `MLUpdateTask` to fine-tune `PhotoQualityClassifier` on the user's kept-asset images. Requires 50+ decisions with `featureVector`. Writes `PhotoQualityClassifier_personalized.mlmodelc` to Application Support. Posts `"mlModelDidUpdate"` notification on success. No stream — direct `async` call. | — |
 
 ⚠️ `PhotoScanEngine` uniquely uses `AsyncStream<Result<…>>` not `AsyncThrowingStream`. All new engines use `AsyncThrowingStream`.
 
@@ -101,6 +107,54 @@ struct LargePhotoItem: Identifiable, @unchecked Sendable {
 enum ScanError: Error { case permissionDenied }
 ```
 
+**`EventRoll`** (`Models/EventRoll.swift`):
+```swift
+struct EventRoll: Identifiable, Sendable {
+    let id: UUID
+    let assets: [PHAsset]          // sorted by creationDate ascending
+    let startDate: Date
+    let endDate: Date
+    let locationName: String?      // reverse-geocoded display name, nil if no GPS
+    let approximateLocation: CLLocationCoordinate2D?
+    var duration: TimeInterval { endDate.timeIntervalSince(startDate) }
+    var photoCount: Int { assets.count }
+}
+```
+
+**`VideoGroup`** (`Models/VideoGroup.swift`):
+```swift
+struct VideoGroup: Identifiable, @unchecked Sendable {
+    let id: UUID
+    let assets: [PHAsset]    // assets[0] = largest/best quality, rest are duplicates
+    let totalBytes: Int64    // sum of all assets' file sizes
+    let reason: VideoGroupReason
+}
+enum VideoGroupReason: Sendable {
+    case nearDuplicate   // similar keyframes, likely same video recorded twice
+    case exactDuplicate  // identical first-frame hash
+}
+```
+
+**`UserDecision`** (`Store/UserDecisionStore.swift`):
+```swift
+struct UserDecision: Codable, Sendable {
+    let id: UUID
+    let recordedAt: Date
+    let keptAssetID: String
+    let deletedAssetIDs: [String]         // pairwise signal
+    let groupID: UUID
+    let similarityReason: String          // stable string key matching SimilarityReason.cacheKey
+    let keptLabels: [String]
+    let deletedLabels: [[String]]
+    let keptQualityScore: Float
+    let deletedQualityScores: [Float]
+    let featureVector: [Float]?           // kept asset's VNFeaturePrintObservation flattened (nil = old record)
+    let deletedFeatureVectors: [[Float]]? // parallel to deletedAssetIDs
+}
+// actor UserDecisionStore with .shared singleton, ring buffer (max 500),
+// stored at Application Support/userDecisions.json
+```
+
 ### Views
 
 | View | File | Role |
@@ -112,22 +166,40 @@ enum ScanError: Error { case permissionDenied }
 | `SettingsView` | `Views/SettingsView.swift` | Sheet, dark theme. Premium status card, Restore Purchase, Privacy Policy. Dev section (only visible when `AppConfig.unlockPremium == true`): shows "Premium Override ON" badge + Reset Onboarding button. App version + name info. |
 | `PhotoResultsView` | `Views/Photos/PhotoResultsView.swift` | 2-col `LazyVGrid`, filter pills (dynamic), bulk select (paid). Takes `title: String` + pre-filtered `groups`. "Review All" button launches `GroupReviewView`. Floating delete bar shows queued count; "Delete All" is paid gate. Passes `$reviewVM.markedIDs` binding to `PhotoGroupDetailView`. |
 | `PhotoGroupDetailView` | `Views/Photos/PhotoGroupDetailView.swift` | Side-by-side compare, "Keep Best, Queue Others" marks all except best (free), "Mark Selected" writes to `@Binding markedIDs` (paid), fullscreen preview. No longer calls `PHPhotoLibrary.performChanges` directly. |
-| `GroupReviewView` | `Views/Photos/GroupReviewView.swift` | Full-screen dark bulk review flow. Horizontal photo strip per group; auto-marks all non-best photos red on load. Tap cell → change best; ✕ button → unqueue individual photo. "Queue N for Delete" advances to next group and commits pending marks. "Skip" advances without queuing. Running tally bar shows total queued across reviewed groups. Cache banner on relaunch (continue / start fresh). Summary screen with single bulk delete (paid). ML quality labels shown on each photo cell. |
-| `GroupReviewViewModel` | `Views/Photos/GroupReviewViewModel.swift` | `@MainActor ObservableObject`. `queue: [PhotoGroup]`, `currentIndex`, `markedIDs` (persisted to UserDefaults via `didSet`). `bestIDForCurrentGroup`, `pendingMarked` per-group state. `selectBest(_:)` → re-auto-marks others. `togglePendingMark(_:)` → cannot unmark the best. `queueAndAdvance()` commits pending + steps. `skipGroup()` steps without queuing. `commitDeletes()` → single `PHPhotoLibrary.performChanges`. `hasCachedSession` for crash recovery. `startFresh()` clears cache. |
+| `GroupReviewView` | `Views/Photos/GroupReviewView.swift` | Full-screen dark bulk review flow. Horizontal photo strip per group; auto-marks all non-best photos red on load. Tap cell → change best; green **"↩ Keep"** Capsule pill (top-right) → unqueue individual photo (replaces old red ✕ circle — less scary). Red **"QUEUED"** Capsule badge (bottom-left, `clock.badge.xmark` icon) labels marked photos. Hint text updated: "Tap to change best · Keep to unqueue". "Queue N for Delete" advances to next group and commits pending marks. "Skip" advances without queuing. Running tally bar shows total queued across reviewed groups. Cache banner on relaunch (continue / start fresh). Summary screen with single bulk delete (paid). ML quality labels shown on each photo cell. |
+| `GroupReviewViewModel` | `Views/Photos/GroupReviewViewModel.swift` | `@MainActor ObservableObject`. `queue: [PhotoGroup]`, `currentIndex`, `markedIDs` (persisted to UserDefaults via `didSet`). `bestIDForCurrentGroup`, `pendingMarked` per-group state. `selectBest(_:)` → re-auto-marks others. `togglePendingMark(_:)` → cannot unmark the best. `queueAndAdvance()` commits pending + steps. `skipGroup()` steps without queuing. `commitDeletes()` → single `PHPhotoLibrary.performChanges`. `hasCachedSession` for crash recovery. `startFresh()` clears cache. `buildDecisions()` extracts `VNFeaturePrintObservation` vectors + quality scores before deletion and records `UserDecision` entries in `UserDecisionStore.shared`. |
 | `BlurResultsView` | `Views/Photos/BlurResultsView.swift` | 3-col grid, progressive loading (60/page), self-loading cells, bulk delete (paid) |
-| `ScreenshotsResultsView` | `Views/Photos/ScreenshotsResultsView.swift` | 3-col grid, 9:19.5 aspect ratio, progressive loading, bulk delete (paid). Fixed blurry rendering (use `.zero` deliveryMode, exact pixel-size requests). Fixed overlapping photo rendering — cells sized correctly with no z-index conflicts. |
+| `ScreenshotsResultsView` | `Views/Photos/ScreenshotsResultsView.swift` | 3-col grid, 9:19.5 aspect ratio, progressive loading, bulk delete (paid). Fixed blurry rendering (use `.zero` deliveryMode, exact pixel-size requests). Fixed overlapping photo rendering — cells sized correctly with no z-index conflicts. **Updated**: `ScreenshotTagEngine` filter pills + tag badge overlay per cell (CaseIterable `ScreenshotTag` enum, icon-only `.ultraThinMaterial` Capsule bottom-left). Age-bucketed sections ("Safe to Delete" / "Recent"). |
 | `RecentlyDeletedView` | `Views/Photos/RecentlyDeletedView.swift` | 3-col grid showing photos in the iOS Recently Deleted album (`PHAssetCollectionSubtype.smartAlbumDeletedAssets`). Hero card with item count + bytes to free. "Empty Trash" (bulk, free) with confirmation dialog. Long-press context menu → "Delete Permanently" (individual, free). Self-loading `RDCell` with video duration badge. |
 | `LargePhotosResultsView` | `Views/Photos/LargePhotosResultsView.swift` | List of large photos sorted by size, individual delete (free), shows file size per asset |
 | `ContactResultsView` | `Views/Contacts/ContactResultsView.swift` | List grouped by MatchConfidence |
 | `ContactMergePreviewView` | `Views/Contacts/ContactMergePreviewView.swift` | Two-column diff, green/red fields, merge (paid) |
 | `FileResultsView` | `Views/Files/FileResultsView.swift` | List, tap-to-expand row, Delete (free) + Compress (paid). Dark theme. `deletedIDs` optimistic local deletion. |
 | `VideoCompressionView` | `Views/Files/VideoCompressionView.swift` | Preset picker, estimated sizes, progress bar, success banner |
+| `SmartPicksResultsView` | `Views/Photos/SmartPicksResultsView.swift` | 3-col grid of low-quality photos sorted by quality score (ascending). Color-coded quality score badge per cell: red (<0.2), orange (<0.35), gold otherwise. Individual delete free; bulk delete paid. Yellow/gold accent theme. `PhotoQualityAnalyzer.shared.qualityScore(for:)` loaded per cell after thumbnail. |
+| `EventRollResultsView` | `Views/Photos/EventRollResultsView.swift` | List of event rolls with 3-photo thumbnail strip, location name, same-day vs multi-day date range text. `optional-binding navigationDestination` pushes `RollDetailView`. Cross-level `@Binding deletedAssetIDs` propagated parent → detail for optimistic deletion. Bulk delete in detail paid. |
+| `VideoGroupResultsView` | `Views/Photos/VideoGroupResultsView.swift` | Accordion expandable group rows (`expandedGroupID: UUID?`). `VideoThumbnailCell` with m:ss duration badge and per-size cache key. "Keep Largest, Delete Rest" action (`assets.dropFirst()`). Two-level optimistic deletion (`deletedAssetIDs` + `deletedGroupIDs`; hide group when < 2 remain). `Keep`/`Delete` conditional Capsule badge (idx == 0 = keep candidate). |
+| `TrashSummarySheet` | `Views/Components/TrashSummarySheet.swift` | Post-delete "You freed X MB" sheet. Presented via `.onReceive(.didFreeBytes)` from HomeView. Dark theme, green checkmark, ByteCountFormatter. Presented with `presentationDetents([.medium])`. |
 
 ### HomeViewModel — key scan wiring
 
 `scanPhotos()` runs **PhotoScanEngine + DuplicateHashEngine + SimilarityEngine in parallel** via `withTaskGroup(of: Void.self)`. Results deduplicated by `PhotoGroupCollector` (private actor, keyed by `Set<String>` of asset identifiers). Post-processes to strip `exactDuplicate` asset IDs from `visuallySimilar` groups.
 
 `scanBlur()`, `scanFiles()`, `scanScreenshots()` each run their engine independently. All use a per-scan `UUID` stale-write guard.
+
+`scanEventRolls()` runs `EventRollScanEngine` independently; results stored in `eventRolls: [EventRoll]`.
+
+`scanVideoDuplicates()` runs `VideoDuplicateEngine` independently; results stored in `videoGroups: [VideoGroup]`. Not included in `fullRescan()` — triggered standalone (video processing is too slow for the default scan bundle).
+
+`scanContacts()` runs `ContactScanEngine`; results stored in `contactMatches`. Wired into HomeView's contact card.
+
+`computeSmartPicks()` post-processes `blurPhotos` + non-best assets from `photoGroups` — deduplicates by localIdentifier, sorts ascending by `PhotoQualityAnalyzer` score, keeps top 200. Stored in `smartPicks: [PHAsset]`.
+
+`fetchStorageBreakdown()` — called in `init()` — populates `photoLibraryBytes`, `videoLibraryBytes`, and drives the segmented storage donut in HomeView. Uses `PHAsset.fetchAssets` with media-type predicates + `PHAssetResource` KVC `fileSize` for locally-stored bytes. **Enumeration runs in `Task.detached(priority: .utility)`** to avoid blocking the main thread on large libraries. `fetchMetadataCategories()` and `refreshTotalLibraryCount()` similarly moved off main thread.
+
+**NavDest enum** has expanded to 13+ cases including `.smartPicks`, `.contacts`, `.eventRolls`, `.videoDuplicates`, `.semantic(UUID)`. HomeView uses a `@ViewBuilder destinationView(for:)` extension split for type-checker performance.
+
+**Bounded-concurrency sliding-window TaskGroup cap=4** is the standard pattern for all compute-heavy scans.
 
 HomeView passes **pre-filtered** groups to each card:
 ```swift
@@ -170,9 +242,11 @@ let similarGroups   = viewModel.photoGroups.filter { $0.reason == .visuallySimil
 | `Utilities/ImageLoader.swift` | `ImageLoader` protocol + `PHImageLoader` with shared `PHCachingImageManager` singleton |
 | `Utilities/ProgressThrottle.swift` | Thread-safe interval guard: `ProgressThrottle(every: 40).shouldReport(completed:)` |
 | `Utilities/ThreadSafeCounter.swift` | `NSLock`-based atomic counter: `.increment() -> Int` |
-| `Utilities/PhotoQualityAnalyzer.swift` | `actor PhotoQualityAnalyzer` with `.shared` singleton. `labels(for: PHAsset) async -> [PhotoQualityLabel]` — runs Laplacian blur check, mean luminance (under/overexposed), Vision face landmarks (eyes closed, EAR < 0.15), `VNDetectFaceCaptureQualityRequest` (quality < 0.25). Results cached by asset localIdentifier. Labels: `.blurry`, `.eyesClosed`, `.underexposed`, `.overexposed`, `.lowFaceQuality`. Shown as capsule badges on `ReviewPhotoCell` in `GroupReviewView`. |
+| `Utilities/PhotoQualityAnalyzer.swift` | `actor PhotoQualityAnalyzer` with `.shared` singleton. `labels(for: PHAsset) async -> [PhotoQualityLabel]` — Laplacian blur, luminance, Vision face landmarks + capture quality. `qualityScore(for: PHAsset) async -> Float` — **priority order**: (1) personalized model (`Application Support/PhotoQualityClassifier_personalized.mlmodelc`, written by `MLModelUpdater`), (2) bundle model (`PhotoQualityClassifier.mlmodelc`), (3) heuristic composite. Model loading via `loadedQualityModel()` / `resolveQualityModel()` (replaces old `lazy var`). `invalidateModelCache()` called when `"mlModelDidUpdate"` notification arrives so next call picks up fresh personalized model. Results cached by asset localIdentifier. Labels: `.blurry`, `.eyesClosed`, `.underexposed`, `.overexposed`, `.lowFaceQuality`. |
+| `Store/UserDecisionStore.swift` | `actor UserDecisionStore` with `.shared` singleton. Persists keep/delete decisions as `[UserDecision]` to `Application Support/userDecisions.json`. Ring buffer (max 500). Stores pairwise signal (keptID vs deletedIDs) + quality labels + quality scores + feature vectors captured before deletion. |
 | `Configuration/AppConfig.swift` | `AppConfig.unlockPremium: Bool` — dev paywall bypass (currently `true`) |
 | `Store/PurchaseManager.swift` | `@MainActor ObservableObject`, StoreKit 2. `isPurchased = AppConfig.unlockPremium || _isPurchased` |
+| `CreateML/TrainPhotoQualityClassifier.swift` | macOS-only Create ML script. Trains `PhotoQualityClassifier.mlmodel` (updatable `MLImageClassifier`). Ship the compiled `.mlmodelc` in the app bundle. `PhotoQualityAnalyzer` lazy-loads it; falls back to heuristics if absent. |
 
 ### Paywall gating
 
@@ -186,6 +260,9 @@ let similarGroups   = viewModel.photoGroups.filter { $0.reason == .visuallySimil
 | Video compression | **paid** |
 | Bulk blur delete | **paid** |
 | Bulk screenshot delete | **paid** |
+| Bulk Smart Picks delete | **paid** |
+| Bulk event roll photo delete | **paid** |
+| Video duplicate "Delete All" | **paid** |
 | "Keep Best, Queue Others" (group detail) | **free** |
 | "Review All" launch + all group review navigation | **free** |
 | Individual file delete | **free** |
@@ -198,22 +275,25 @@ let similarGroups   = viewModel.photoGroups.filter { $0.reason == .visuallySimil
 ```
 ContentView (@AppStorage hasOnboarded)
 ├── OnboardingView  (first launch)
-└── HomeView  (NavigationStack root, dark theme, 6 category cards + Total Cleaned stat)
+└── HomeView  (NavigationStack root, dark theme, category cards + storage donut + Total Cleaned stat)
     │   ↳ gear icon → SettingsView (sheet)
+    │   ↳ didFreeBytes notification → TrashSummarySheet (sheet, .medium detent)
     ├── PhotoResultsView(title:"Duplicates", groups: non-similar)
     │   ├── PhotoGroupDetailView (marks → reviewVM.markedIDs binding)
     │   └── GroupReviewView (fullScreenCover, shares reviewVM ObservedObject)
     ├── PhotoResultsView(title:"Similar Photos", groups: similar)
     │   ├── PhotoGroupDetailView (marks → reviewVM.markedIDs binding)
     │   └── GroupReviewView (fullScreenCover, shares reviewVM ObservedObject)
+    ├── SmartPicksResultsView (AI-ranked low-quality photos)
     ├── FileResultsView → VideoCompressionView (sheet)
     ├── BlurResultsView
     ├── ScreenshotsResultsView
     ├── LargePhotosResultsView
-    └── RecentlyDeletedView  (on-demand scan, tap card triggers scan then navigates)
+    ├── RecentlyDeletedView  (on-demand scan, tap card triggers scan then navigates)
+    ├── EventRollResultsView → RollDetailView (optional-binding navigationDestination)
+    ├── VideoGroupResultsView (accordion rows)
+    └── ContactResultsView → ContactMergePreviewView
 ```
-
-ContactResultsView and ContactMergePreviewView exist but are not wired into HomeView's 6-card grid yet.
 
 ### Hooks / automation
 
@@ -225,30 +305,24 @@ ContactResultsView and ContactMergePreviewView exist but are not wired into Home
 ## NOT yet built
 
 ### UI / polish
-- Old Screenshots auto-suggest — age-bucketed sections inside `ScreenshotsResultsView`
 - Swipe mode for Screenshots — flat `[PHAsset]` swipe UX (separate from GroupReviewView which is for photo groups)
-- Storage breakdown donut chart — break current blanket % ring into Photos / Videos / Other segments (SwiftUI `Canvas`)
-- iCloud-aware badge — `PHAsset.sourceType` check before delete; warn user if asset is iCloud-only
-- Trash summary sheet — "You freed X MB" modal after delete
+- iCloud-aware badge in SmartPicksResultsView / VideoGroupResultsView — `PHAsset.sourceType` check before delete; warn user if asset is iCloud-only
 - Video thumbnail preview in FileResultsView
 - Privacy Policy URL wired in SettingsView (placeholder only)
+- SemanticScanEngine HomeView cards — Food & Drink, Pets & Animals, Nature & Outdoors, Documents & Receipts (VNClassifyImageRequest categories beyond ScreenshotTagEngine)
 
-### Semantic category cards (Phase 3 — pending SemanticScanEngine)
-New HomeView cards unlocked by `VNClassifyImageRequest` + metadata — no new model files:
+### Semantic category cards (partial — see what is done below)
 - **Food & Drink** — `VNClassifyImageRequest` "food_and_drink" bucket
 - **Pets & Animals** — `VNClassifyImageRequest` "animal" bucket
 - **Nature & Outdoors** — `VNClassifyImageRequest` "outdoor" + "nature" + "sky" + "water"
-- **Documents & Receipts** — `VNClassifyImageRequest` "text_and_graphics" + `VNRecognizeTextRequest` confirm
-- **Panoramas** — `PHAsset.mediaSubtype.contains(.photoPanorama)` — instant, no scan
-- **Portrait Mode** — `PHAsset.mediaSubtype.contains(.photoDepthEffect)` — instant, no scan
-- **Event Rolls** — GPS + time clustering (~1km / ~30 min windows)
+- **Architecture / Vehicles** — separate semantic buckets
+
+(Panoramas, Portrait Mode, Live Photos, Event Rolls, Screenshot detection, and Documents/Receipts via OCR are already built.)
 
 ### Infrastructure
-- Scheduled background scan — `BGAppRefreshTask`
 - Re-scan on library change — `PHPhotoLibraryChangeObserver`
-- Contact scanning wired into HomeView
 - `ContentClassifier`, `OrganizeView`, `DailyStreakManager`
-- `UserDecisionStore` — feature vector + label persistence before deletion (Phase 5 prerequisite)
+- On-device model personalization via `MLUpdateTask` (in progress — see Phase 5)
 
 ---
 
@@ -256,35 +330,36 @@ New HomeView cards unlocked by `VNClassifyImageRequest` + metadata — no new mo
 
 ### Phase 3 — Quick wins on existing engines (zero new training data)
 
-| Feature | Approach | Touches | Priority |
-|---------|----------|---------|----------|
-| Screenshot & receipt detection | Add `VNClassifyImageRequest` alongside feature prints to surface a real reason label (screenshot, receipt, meme) — currently everything is `.visuallySimilar` | `PhotoGroup.reason`, `ScreenshotScanEngine` | high |
-| Face-aware Keep Best | `PhotoQualityAnalyzer` already runs `VNDetectFaceCaptureQualityRequest` + eyes-closed EAR. Wire its score into `PhotoGroupDetailView` so `assets[0]` is ranked by analyzer quality, not just resolution | `PhotoGroupDetailView`, `PhotoQualityAnalyzer` | high |
-| **SemanticScanEngine** | New engine. Runs `VNClassifyImageRequest` (Apple's built-in ~1000-category classifier, ships on-device, ~5ms/photo) across full library. Buckets results into: Food & Drink, Pets & Animals, Nature & Outdoors, Documents & Receipts, Architecture, Vehicles. Emits `AsyncThrowingStream<SemanticScanEvent, Error>` with `.progress` + `.resultsFound([SemanticGroup])`. Powers new HomeView category cards. Zero model files to ship — classifier is part of Vision framework. | new `Engines/SemanticScanEngine.swift`, new `Models/SemanticGroup.swift`, `HomeView`, `HomeViewModel` | high |
-| Metadata category cards | Surface `PHAsset.mediaSubtype` flags as free HomeView cards — no scan required, instant from fetch: Panoramas (`.photoPanorama`, often 20–40MB), Portrait Mode (`.photoDepthEffect`), Live Photos (`.photoLive`). Predicate-only, no engine needed. | `HomeViewModel`, `HomeView` | high |
-| Saliency-based "no subject" label | Add `VNGenerateAttentionBasedSaliencyImageRequest` to `PhotoQualityAnalyzer`. If `salientObjects` is empty, emit `.noSubject` label. Combined with moderate blur score = strong throwaway signal. Shown as badge in `GroupReviewView` cells alongside existing `.blurry`, `.eyesClosed` etc. | `PhotoQualityAnalyzer`, `GroupReviewView` | med |
-| Event Roll clustering | Group photos by GPS location (~1km radius) + time window (~30 min) using `PHAsset.creationDate` + `PHAsset.location`. No Vision required — pure algorithm. Surfaces "Event Rolls" card on HomeView for batch review of trip/event bursts. | `HomeViewModel`, new `EventRollScanEngine`, `HomeView` | med |
-| Adaptive blur threshold | Fixed threshold causes false positives on low-light shots. Normalize Laplacian variance by mean pixel brightness so dark scenes aren't flagged blurry | `BlurScanEngine` | med |
+| Feature | Approach | Status |
+|---------|----------|--------|
+| Screenshot & receipt detection | `ScreenshotTagEngine` — `VNRecognizeTextRequest` + keyword buckets → `ScreenshotTag` enum. Tags surfaced as filter pills in `ScreenshotsResultsView`. | ✅ complete |
+| Face-aware Keep Best | `PhotoQualityAnalyzer` `qualityScore(for:)` wired into `GroupReviewViewModel` reranking so `assets[0]` is best by ML/heuristic quality score, not just resolution | ✅ complete |
+| **SemanticScanEngine** | Partial — screenshot/receipt detection via `ScreenshotTagEngine` is done. Full semantic buckets (Food, Pets, Nature, etc.) not yet built as a standalone engine. | pending |
+| Metadata category cards | Panoramas (`.photoPanorama`), Portrait Mode (`.photoDepthEffect`), Live Photos (`.photoLive`) — instant from `PHFetchOptions` predicate, no engine. Wired in `HomeViewModel`. | ✅ complete |
+| Saliency-based "no subject" label | `VNGenerateAttentionBasedSaliencyImageRequest` → `.noSubject` badge in `GroupReviewView` | pending |
+| Event Roll clustering | `EventRollScanEngine` — GPS + time clustering (~1km / ~30 min), `haversineKm`, `CLGeocoder` rate-limited reverse-geocoding, `EventRollResultsView` wired into HomeView | ✅ complete |
+| Adaptive blur threshold | Normalize Laplacian variance by mean pixel brightness | pending |
 
 ### Phase 4 — New on-device ML engines (no external packages)
 
-| Feature | Approach | Touches | Priority |
-|---------|----------|---------|----------|
-| Photo quality scorer | Train a small `MLImageClassifier` (sharp/blurry/overexposed/underexposed) with Create ML on a labeled dataset. Replace all heuristic scoring in `PhotoQualityAnalyzer` with a single model inference call per photo. ~15MB model, ships in app bundle | Create ML, Core ML | high |
-| **Video similarity engine** | Sample keyframes with `AVAssetReader`, generate `VNFeaturePrintObservation` per frame, cluster videos with similar frame fingerprints. **Biggest gap in current coverage — videos are the largest files** | `AVAssetReader`, `VNFeaturePrintObservation`, new `VideoDuplicateEngine` | high |
-| OCR-based screenshot tagger | Run `VNRecognizeTextRequest` on photos classified as screenshots to surface tags: "receipt", "boarding pass", "meme" — helps users decide what to keep | `VNRecognizeTextRequest`, `PhotoGroup` tags | med |
-| Semantic contact matching | Use `NLEmbedding` (ships with iOS 17) to compare organization names — "Apple Inc" vs "Apple Computers" won't be caught by edit distance alone | `NLEmbedding`, iOS 17+, `ContactScanEngine` | med |
+| Feature | Approach | Status |
+|---------|----------|--------|
+| Photo quality scorer | `PhotoQualityAnalyzer` lazy-loads `PhotoQualityClassifier.mlmodelc` from app bundle (trained via `CreateML/TrainPhotoQualityClassifier.swift`); falls back to heuristics if model absent | ✅ complete |
+| **Video similarity engine** | `VideoDuplicateEngine` — `AVAssetImageGenerator` keyframes (1 or 3 per video), `VNFeaturePrintObservation` per frame, union-find clustering, dHash exact-dupe detection. `VideoGroupResultsView` with accordion rows. | ✅ complete |
+| OCR-based screenshot tagger | `ScreenshotTagEngine` — `VNRecognizeTextRequest` sliding-window TaskGroup, keyword buckets for receipt/boarding pass/meme/code/map tags | ✅ complete |
+| Background scan scheduling | `BackgroundScanScheduler` (BGProcessingTask) + `BackgroundScanCacheWriter` actor — schedules nightly 2 AM scan, merges results into existing cache | ✅ complete |
+| Semantic contact matching | `NLEmbedding` org-name comparison — not yet built | pending |
 
 ### Phase 5 — Training & personalization
 
-| Feature | Approach | Touches | Priority |
-|---------|----------|---------|----------|
-| Persist keep/delete decisions | Every keep or delete in `GroupReviewView` is a labeled training example (photo localIdentifier → .kept / .deleted). Persist to a `UserDecision` store (UserDefaults or SQLite). This is the unsexy load-bearing piece the flywheel depends on | `GroupReviewViewModel`, new `UserDecisionStore` | high |
-| **Feature capture before deletion** | ⚠️ Critical: extract quality score + `VNFeaturePrintObservation` vector from each photo *before* `PHPhotoLibrary.performChanges` deletes it. Store `(featureVector, qualityLabels, label)` in `UserDecisionStore`. Without this, `MLUpdateTask` has nothing to train on — deleted assets are gone from PHImageManager. | `GroupReviewViewModel`, `UserDecisionStore`, `PhotoQualityAnalyzer` | high |
-| **Pairwise ranking signal** | In GroupReviewView the user picks one photo over another in a group — store the pair `(keptAssetID, deletedAssetID)` not just binary labels. Pairwise ranking is a stronger training signal than binary keep/delete for the quality model. | `GroupReviewViewModel`, `UserDecisionStore` | high |
-| On-device model personalization | `MLUpdateTask` fine-tunes the base quality model on the user's accumulated swipe history. Runs at 03:00 on charger. No server | `MLUpdateTask`, Core ML | high |
-| LLM-powered contact merge | iOS 18 exposes on-device foundation model APIs. Use them to pick which fields to keep when merging contacts (prefer more complete email, newer phone number) | iOS 18 LLM APIs, `ContactMergePreviewView` | med |
-| Predictive scan scheduling | Log when scans find the most duplicates (after trips, weekends). Build a simple time-series model to predict the best nudge time | `BGAppRefreshTask`, push notifications, Create ML tabular | low |
+| Feature | Approach | Status |
+|---------|----------|--------|
+| Persist keep/delete decisions | `UserDecisionStore` actor with ring buffer (max 500), stored to `Application Support/userDecisions.json` | ✅ complete |
+| **Feature capture before deletion** | `GroupReviewViewModel.buildDecisions()` extracts `VNFeaturePrintObservation` + quality scores before `PHPhotoLibrary.performChanges` — stored in `UserDecision.featureVector` / `deletedFeatureVectors` | ✅ complete |
+| **Pairwise ranking signal** | `UserDecision.keptAssetID` + `deletedAssetIDs` pairwise — stronger training signal than binary labels | ✅ complete |
+| On-device model personalization | `MLModelUpdater` actor — `MLUpdateTask` fine-tunes `PhotoQualityClassifier` on kept-asset images. Requires 50+ decisions. Output: `Application Support/PhotoQualityClassifier_personalized.mlmodelc`. `PhotoQualityAnalyzer` loads it via `resolveQualityModel()` priority-1 path. | ✅ complete |
+| LLM-powered contact merge | iOS 18 on-device foundation model APIs for field-level merge decisions | pending |
+| Predictive scan scheduling | Time-series model to predict best nudge time based on scan history | pending |
 
 ### Training data strategy — all on-device, no server
 
