@@ -51,14 +51,7 @@ struct HomeView: View {
                 guard case .done = state, pendingNav == .contacts else { return }
                 pendingNav = nil
             }
-            .onChange(of: viewModel.recentlyDeletedPhotos.count) { count in
-                guard pendingNav == .recentlyDeleted, count > 0 else { return }
-                pendingNav = nil; navPath.append(NavDest.recentlyDeleted)
-            }
-            .onChange(of: viewModel.recentlyDeletedScanState) { state in
-                guard case .done = state, pendingNav == .recentlyDeleted else { return }
-                pendingNav = nil; navPath.append(NavDest.recentlyDeleted)
-            }
+            // Recently Deleted navigation handled directly in the card tap (no pendingNav needed)
     }
 
     // Split body to avoid Swift type-checker timeout on long modifier chains.
@@ -812,10 +805,13 @@ struct HomeView: View {
                     }
                 }
                 RecentlyDeletedCard(viewModel: viewModel) {
-                    if viewModel.recentlyDeletedPhotos.isEmpty {
-                        pendingNav = .recentlyDeleted
-                        Task { await viewModel.scanRecentlyDeleted() }
-                    } else {
+                    // scanRecentlyDeleted has no await points so it completes synchronously —
+                    // the pendingNav/onChange pattern has a timing gap.
+                    // Await directly then navigate: guaranteed to open every time.
+                    Task { @MainActor in
+                        if case .idle = viewModel.recentlyDeletedScanState {
+                            await viewModel.scanRecentlyDeleted()
+                        }
                         navPath.append(NavDest.recentlyDeleted)
                     }
                 }
