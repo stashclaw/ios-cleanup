@@ -381,10 +381,14 @@ private struct SwipeCard: View {
             image = cached
             return
         }
+
+        // Phase 1: show locally-cached thumbnail immediately (fast, possibly degraded)
+        // Phase 2: full-quality version loads from iCloud if needed
+        // Both phases update `image`; only the final non-degraded version is cached.
         let px = _swipeCardPx
         let opts = PHImageRequestOptions()
-        opts.deliveryMode = .highQualityFormat   // no degraded first pass — sharp on first show
-        opts.isNetworkAccessAllowed = false
+        opts.deliveryMode = .opportunistic       // deliver local draft first, then full quality
+        opts.isNetworkAccessAllowed = true       // allow iCloud download for full quality
         opts.resizeMode = .exact
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -395,12 +399,14 @@ private struct SwipeCard: View {
                 contentMode: .aspectFill,
                 options: opts
             ) { img, info in
-                let isDone = !((info?[PHImageResultIsDegradedKey] as? Bool) ?? false)
+                let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+                let isDone = !isDegraded
                 if let img {
                     if isDone {
                         _swipeCellCache.setObject(img, forKey: key,
                                                   cost: Int(img.size.width * img.size.height * 4))
                     }
+                    // Always update image (both passes) so user sees something immediately
                     DispatchQueue.main.async { self.image = img }
                 }
                 if isDone, !resumed {
