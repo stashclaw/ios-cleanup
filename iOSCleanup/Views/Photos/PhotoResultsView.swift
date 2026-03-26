@@ -21,6 +21,10 @@ struct PhotoResultsView: View {
     @State private var deletionError: String?
     @State private var activeFilter: FilterPill = .all
     @State private var visibleCount = 10
+    /// Tracks skipped keys locally so un-skipping refreshes the UI without reloading UserDefaults.
+    @State private var skippedKeys: Set<String> = {
+        Set(UserDefaults.standard.stringArray(forKey: GroupReviewViewModel.skippedKey) ?? [])
+    }()
 
     // Card dimensions derived from screen width — GeometryReader-free per CLAUDE.md
     // 16+16 outer padding + 12 gap between columns = 44pt total
@@ -58,13 +62,20 @@ struct PhotoResultsView: View {
     }
 
     private var filteredGroups: [PhotoGroup] {
+        let base: [PhotoGroup]
         switch activeFilter {
-        case .all:            return liveGroups
-        case .exactDuplicate: return liveGroups.filter { $0.reason == .exactDuplicate }
-        case .nearDuplicate:  return liveGroups.filter { $0.reason == .nearDuplicate }
-        case .similar:        return liveGroups.filter { $0.reason == .visuallySimilar }
-        case .burst:          return liveGroups.filter { $0.reason == .burstShot }
+        case .all:            base = liveGroups
+        case .exactDuplicate: base = liveGroups.filter { $0.reason == .exactDuplicate }
+        case .nearDuplicate:  base = liveGroups.filter { $0.reason == .nearDuplicate }
+        case .similar:        base = liveGroups.filter { $0.reason == .visuallySimilar }
+        case .burst:          base = liveGroups.filter { $0.reason == .burstShot }
         }
+        // Strip skipped groups — they appear in the separate Skipped section below.
+        return base.filter { !skippedKeys.contains(GroupReviewViewModel.groupKey(for: $0)) }
+    }
+
+    private var skippedGroups: [PhotoGroup] {
+        liveGroups.filter { skippedKeys.contains(GroupReviewViewModel.groupKey(for: $0)) }
     }
 
     var body: some View {
@@ -84,6 +95,9 @@ struct PhotoResultsView: View {
                             Text(error).font(.duckCaption).foregroundStyle(.red).padding(.horizontal)
                         }
                         groupGrid
+                        if !skippedGroups.isEmpty {
+                            skippedSection
+                        }
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 14)
@@ -267,6 +281,74 @@ struct PhotoResultsView: View {
                     .padding(.vertical, 24)
                     .gridCellColumns(2)
                     .onAppear { visibleCount += 10 }
+            }
+        }
+    }
+
+    // MARK: - Skipped section
+
+    private var skippedSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Header
+            HStack(spacing: 8) {
+                Image(systemName: "archivebox.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.35))
+                Text("SKIPPED")
+                    .font(.system(size: 11, weight: .heavy))
+                    .foregroundStyle(Color.white.opacity(0.35))
+                    .kerning(1.2)
+                Text("(\(skippedGroups.count))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.white.opacity(0.2))
+                Spacer()
+                Text("Tap to restore")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.white.opacity(0.25))
+            }
+            .padding(.top, 8)
+
+            // Same 2-column grid, but with a gray overlay + "SKIPPED" badge
+            let gap: CGFloat = 12
+            let columns = [GridItem(.fixed(cardPt), spacing: gap),
+                           GridItem(.fixed(cardPt), spacing: gap)]
+            LazyVGrid(columns: columns, spacing: gap) {
+                ForEach(skippedGroups, id: \.id) { group in
+                    GroupCard(
+                        group: group,
+                        cardPt: cardPt, tilePt: tilePt, tilePx: tilePx,
+                        isSelected: false,
+                        isSelectMode: false,
+                        onSelect: { },
+                        destination: { Color.clear }   // no navigation from skipped card
+                    )
+                    .overlay(
+                        ZStack {
+                            Color.black.opacity(0.45)
+                                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            VStack {
+                                Spacer()
+                                HStack {
+                                    Spacer()
+                                    Button {
+                                        GroupReviewViewModel.unskipGroup(group)
+                                        skippedKeys.remove(GroupReviewViewModel.groupKey(for: group))
+                                    } label: {
+                                        Label("Restore", systemImage: "arrow.uturn.backward")
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundStyle(.white)
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 6)
+                                            .background(Color(white: 1, opacity: 0.15), in: Capsule())
+                                    }
+                                    .buttonStyle(.plain)
+                                    Spacer()
+                                }
+                                .padding(.bottom, 12)
+                            }
+                        }
+                    )
+                }
             }
         }
     }

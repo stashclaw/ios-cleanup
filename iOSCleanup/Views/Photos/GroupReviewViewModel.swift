@@ -6,8 +6,8 @@ import SwiftUI
 @MainActor
 final class GroupReviewViewModel: ObservableObject {
 
-    private static let cacheKey   = "GroupReview_markedIDs"
-    private static let skippedKey = "GroupReview_skippedGroups"
+    private static let cacheKey = "GroupReview_markedIDs"
+    static let skippedKey       = "GroupReview_skippedGroups"   // internal — read by PhotoResultsView
 
     // MARK: - Published state
 
@@ -63,8 +63,15 @@ final class GroupReviewViewModel: ObservableObject {
     }
 
     /// Stable key for a group: sorted asset IDs joined by comma.
-    private static func groupKey(for group: PhotoGroup) -> String {
+    static func groupKey(for group: PhotoGroup) -> String {
         group.assets.map(\.localIdentifier).sorted().joined(separator: ",")
+    }
+
+    /// Removes a group from the skipped list so it reappears in the review queue.
+    static func unskipGroup(_ group: PhotoGroup) {
+        var skipped = Set(UserDefaults.standard.stringArray(forKey: skippedKey) ?? [])
+        skipped.remove(groupKey(for: group))
+        UserDefaults.standard.set(Array(skipped), forKey: skippedKey)
     }
 
     // MARK: - Group setup

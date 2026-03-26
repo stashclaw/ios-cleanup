@@ -123,14 +123,15 @@ struct MetadataResultsView: View {
     // MARK: - 3-column photo grid
 
     private var photoGrid: some View {
-        let gap: CGFloat = 10
-        let columns = Array(repeating: GridItem(.flexible(), spacing: gap), count: 3)
-        let cardPt  = (UIScreen.main.bounds.width - 52) / 3   // 16+16 padding + 10+10 gaps
+        let gap: CGFloat = 4
+        let cardPt = (UIScreen.main.bounds.width - 32 - gap * 2) / 3   // 16+16 padding + 2 gaps
+        let columns = Array(repeating: GridItem(.fixed(cardPt), spacing: gap), count: 3)
 
         return LazyVGrid(columns: columns, spacing: gap) {
             ForEach(visibleAssets.prefix(visibleCount), id: \.localIdentifier) { asset in
                 MetadataCell(
                     asset: asset,
+                    cellSize: cardPt,
                     isSelected: selectedIDs.contains(asset.localIdentifier),
                     accent: accent,
                     onTap: {
@@ -142,8 +143,6 @@ struct MetadataResultsView: View {
                     },
                     onDelete: { Task { await deleteSingle(asset) } }
                 )
-                .frame(height: cardPt)
-                .clipped()
             }
             if visibleCount < visibleAssets.count {
                 Color.clear.frame(height: 1).gridCellColumns(3)
@@ -212,70 +211,87 @@ private let _metadataCellCache: NSCache<NSString, UIImage> = {
     return c
 }()
 
-@MainActor
-private let _metadataCellPx: CGFloat = {
-    let scale = UIScreen.main.scale
-    return ((UIScreen.main.bounds.width - 32 - 20) / 3) * scale
-}()
-
 private struct MetadataCell: View {
-    let asset:    PHAsset
+    let asset:      PHAsset
+    let cellSize:   CGFloat   // explicit square side-length from grid
     let isSelected: Bool
-    let accent:   Color
-    let onTap:    () -> Void
-    let onDelete: () -> Void
+    let accent:     Color
+    let onTap:      () -> Void
+    let onDelete:   () -> Void
 
-    @State private var thumbnail: UIImage?
-    @State private var requestID: PHImageRequestID?
+    @State private var thumbnail:  UIImage?
+    @State private var requestID:  PHImageRequestID?
+    @State private var fileSizeLabel: String? = nil
 
     var body: some View {
-        Button(action: onTap) {
-            ZStack(alignment: .topTrailing) {
-                Group {
-                    if let img = thumbnail {
-                        Image(uiImage: img).resizable().scaledToFill()
-                    } else {
-                        Color.gray.opacity(0.12)
-                            .overlay(ProgressView().scaleEffect(0.6))
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .overlay(isSelected ? accent.opacity(0.35) : Color.clear)
-
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 20))
-                        .foregroundStyle(.white)
-                        .background(Circle().fill(accent).padding(2))
-                        .padding(5)
-                }
-
-                // Individual delete button — bottom trailing, free (no paywall)
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        Button(action: onDelete) {
-                            Image(systemName: "trash.fill")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .padding(6)
-                                .background(Color.black.opacity(0.6), in: Circle())
-                        }
-                        .padding(6)
-                    }
+        ZStack(alignment: .topTrailing) {
+            // ── Thumbnail ───────────────────────────────────────────────────
+            Group {
+                if let img = thumbnail {
+                    Image(uiImage: img).resizable().scaledToFill()
+                } else {
+                    Color.gray.opacity(0.12)
+                        .overlay(ProgressView().scaleEffect(0.6))
                 }
             }
+            .frame(width: cellSize, height: cellSize)
+            .clipped()
+            .overlay(isSelected ? accent.opacity(0.35) : Color.clear)
+            .contentShape(Rectangle())
+            .onTapGesture { onTap() }
+
+            // ── Selection badge (top-trailing) ──────────────────────────────
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 20))
+                    .foregroundStyle(.white)
+                    .background(Circle().fill(accent).padding(2))
+                    .padding(6)
+            }
+
+            // ── Bottom row: size badge (left) + trash (right) ──────────────
+            // Placed OUTSIDE the clipped image so neither badge gets rounded off.
+            VStack(spacing: 0) {
+                Spacer()
+                HStack(alignment: .bottom) {
+                    // File size label
+                    if let label = fileSizeLabel {
+                        Text(label)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 3)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .padding(.leading, 5)
+                            .padding(.bottom, 6)
+                    }
+                    Spacer()
+                    // Trash — individual delete, free
+                    Button(action: onDelete) {
+                        Image(systemName: "trash.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(7)
+                            .background(Color.black.opacity(0.55), in: Circle())
+                    }
+                    .padding(.trailing, 6)
+                    .padding(.bottom, 6)
+                }
+            }
+            .frame(width: cellSize, height: cellSize)
         }
-        .buttonStyle(.plain)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(isSelected ? accent : accent.opacity(0.2),
-                          lineWidth: isSelected ? 2 : 1))
-        .onAppear  { load() }
+        .frame(width: cellSize, height: cellSize)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(isSelected ? accent : accent.opacity(0.2),
+                              lineWidth: isSelected ? 2 : 1)
+        )
+        .onAppear  { load(); loadFileSize() }
         .onDisappear { cancel() }
     }
+
+    // MARK: - Thumbnail
 
     private func load() {
         let key = "\(asset.localIdentifier)_meta" as NSString
@@ -284,7 +300,8 @@ private struct MetadataCell: View {
         opts.deliveryMode = .opportunistic
         opts.isNetworkAccessAllowed = false
         opts.resizeMode = .fast
-        let px = _metadataCellPx
+        let scale = UIScreen.main.scale
+        let px    = cellSize * scale
         requestID = PHImageManager.default().requestImage(
             for: asset,
             targetSize: CGSize(width: px, height: px),
@@ -299,6 +316,19 @@ private struct MetadataCell: View {
             }
             Task { @MainActor in thumbnail = image }
         }
+    }
+
+    // MARK: - File size (synchronous KVC, runs once on appear)
+
+    private func loadFileSize() {
+        let resources = PHAssetResource.assetResources(for: asset)
+        let resource  = resources.first(where: { $0.type == .photo || $0.type == .video
+                                               || $0.type == .fullSizePhoto || $0.type == .fullSizeVideo })
+                        ?? resources.first
+        guard let resource,
+              let bytes = resource.value(forKey: "fileSize") as? Int64, bytes > 0
+        else { return }
+        fileSizeLabel = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
     private func cancel() {
