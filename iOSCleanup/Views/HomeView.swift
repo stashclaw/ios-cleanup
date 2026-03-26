@@ -236,6 +236,9 @@ struct HomeView: View {
                 .environmentObject(viewModel as HomeViewModel)
         case .recentlyDeleted:
             RecentlyDeletedView(viewModel: viewModel)
+        case .skippedPhotos:
+            SkippedGroupsView()
+                .environmentObject(viewModel as HomeViewModel)
         }
     }
 
@@ -893,6 +896,41 @@ struct HomeView: View {
                         if case .idle = viewModel.contactScanState { Task { await viewModel.scanContacts() } }
                     }
                 }
+
+                // Skipped groups — full-width row, only shown when user has skipped groups.
+                if !viewModel.skippedPhotoGroups.isEmpty {
+                    Button { navPath.append(NavDest.skippedPhotos) } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "archivebox.fill")
+                                .font(.system(size: 18))
+                                .foregroundStyle(Color.white.opacity(0.45))
+                                .frame(width: 38, height: 38)
+                                .background(Color.white.opacity(0.08),
+                                            in: RoundedRectangle(cornerRadius: 10))
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Skipped Groups")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                Text("\(viewModel.skippedPhotoGroups.count) groups set aside · tap to restore")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(Color.white.opacity(0.45))
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color.white.opacity(0.25))
+                        }
+                        .padding(14)
+                        .background(Color.white.opacity(0.05),
+                                    in: RoundedRectangle(cornerRadius: 14))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14)
+                                .strokeBorder(Color.white.opacity(0.08))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .gridCellColumns(2)
+                }
             }
             .padding(.horizontal, 20)
         }
@@ -1033,6 +1071,7 @@ private enum NavDest: Hashable {
     case smartPicks
     case contacts
     case recentlyDeleted
+    case skippedPhotos
 }
 
 // MARK: - Category Card (2-column grid tile)

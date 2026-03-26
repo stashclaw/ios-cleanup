@@ -103,8 +103,6 @@ struct SmartPicksResultsView: View {
         [.all] + presentReasons.map { .wasted($0) }
     }
 
-    private let columns = [GridItem(.fixed(0)), GridItem(.fixed(0)), GridItem(.fixed(0))]  // overridden below
-
     var body: some View {
         ZStack {
             bg.ignoresSafeArea()
@@ -225,9 +223,10 @@ struct SmartPicksResultsView: View {
     }
 
     private var heroSubtitle: String {
-        let wastedCount = reasons.count
+        // Count only reasons still visible (deleted assets removed from visibleAssets).
+        let wastedCount = presentReasons.count
         if wastedCount > 0 {
-            return "low-quality photos · \(wastedCount) wasted shots"
+            return "low-quality photos · \(wastedCount) wasted shot type\(wastedCount == 1 ? "" : "s")"
         }
         return "low-quality photos flagged"
     }

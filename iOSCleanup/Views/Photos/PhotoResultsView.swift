@@ -66,17 +66,20 @@ struct PhotoResultsView: View {
         case .similar:        base = liveGroups.filter { $0.reason == .visuallySimilar }
         case .burst:          base = liveGroups.filter { $0.reason == .burstShot }
         }
-        // Strip groups that have been acted on: skipped, queued for delete, or already committed.
+        // Use homeViewModel.reviewedAssetIDs for O(1) lookups — no groupKey sort+join per render.
+        // reviewedAssetIDs covers completed, skipped, and currently-marked groups.
         return base.filter { group in
-            let key = GroupReviewViewModel.groupKey(for: group)
-            guard !reviewVM.skippedGroupKeys.contains(key) else { return false }
-            guard !reviewVM.completedGroupKeys.contains(key) else { return false }
-            return !group.assets.contains(where: { reviewVM.markedIDs.contains($0.localIdentifier) })
+            !group.assets.contains(where: { homeViewModel.reviewedAssetIDs.contains($0.localIdentifier) })
         }
     }
 
     private var skippedGroups: [PhotoGroup] {
-        liveGroups.filter { reviewVM.skippedGroupKeys.contains(GroupReviewViewModel.groupKey(for: $0)) }
+        // homeViewModel.skippedPhotoGroups is pre-computed and category-agnostic;
+        // filter to this view's category so each results view only shows its own skipped groups.
+        if title == "Duplicates" {
+            return homeViewModel.skippedPhotoGroups.filter { $0.reason != .visuallySimilar }
+        }
+        return homeViewModel.skippedPhotoGroups.filter { $0.reason == .visuallySimilar }
     }
 
     var body: some View {
@@ -160,10 +163,11 @@ struct PhotoResultsView: View {
             showPaywall = false
         }
         .onChange(of: activeFilter) { _ in visibleCount = 10 }
-        // Keep home chip counts in sync as the user processes groups.
+        // Keep homeViewModel.reviewedAssetIDs + skippedPhotoGroups in sync as user processes groups.
         .onChange(of: reviewVM.completedGroupKeys.count) { _ in homeViewModel.refreshReviewedGroupKeys() }
         .onChange(of: reviewVM.skippedGroupKeys.count)   { _ in homeViewModel.refreshReviewedGroupKeys() }
         .onChange(of: reviewVM.markedIDs.count)          { _ in homeViewModel.refreshReviewedGroupKeys() }
+        .onAppear { homeViewModel.refreshReviewedGroupKeys() }
         .overlay(alignment: .bottom) {
             if reviewVM.markedIDs.count > 0 { floatingDeleteBar }
         }
@@ -559,5 +563,100 @@ private struct MosaicTile: View {
 
     private func cancel() {
         if let id = requestID { PHImageManager.default().cancelImageRequest(id); requestID = nil }
+    }
+}
+
+// MARK: - Skipped Groups View (navigated from HomeView's Skipped card)
+
+struct SkippedGroupsView: View {
+    @EnvironmentObject private var homeViewModel: HomeViewModel
+
+    // Groups that have been restored this session (optimistic hide before HomeViewModel refreshes).
+    @State private var restoredIDs = Set<UUID>()
+
+    private let cardPt: CGFloat = (UIScreen.main.bounds.width - 44) / 2
+    private var tilePt: CGFloat { (cardPt - 2) / 2 }
+    private var tilePx: CGFloat { tilePt * UIScreen.main.scale }
+
+    private var visibleGroups: [PhotoGroup] {
+        homeViewModel.skippedPhotoGroups.filter { !restoredIDs.contains($0.id) }
+    }
+
+    var body: some View {
+        Group {
+            if visibleGroups.isEmpty {
+                EmptyStateView(title: "Nothing Skipped",
+                               icon: "archivebox",
+                               message: "Groups you skip during review will appear here.")
+            } else {
+                ScrollView {
+                    VStack(spacing: 14) {
+                        DuckCard {
+                            HStack(spacing: 16) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("\(visibleGroups.count)")
+                                        .font(Font.custom("FredokaOne-Regular", size: 32))
+                                        .foregroundStyle(Color.white.opacity(0.6))
+                                    Text("skipped groups")
+                                        .font(.duckCaption)
+                                        .foregroundStyle(Color.white.opacity(0.45))
+                                }
+                                Spacer()
+                                Image(systemName: "archivebox.fill")
+                                    .font(.largeTitle)
+                                    .foregroundStyle(Color.white.opacity(0.25))
+                            }
+                            .padding(16)
+                        }
+                        skippedGrid
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                }
+            }
+        }
+        .navigationTitle("Skipped")
+        .navigationBarTitleDisplayMode(.inline)
+        .background(Color.duckBlush.ignoresSafeArea())
+    }
+
+    private var skippedGrid: some View {
+        let gap: CGFloat = 12
+        let cols = [GridItem(.fixed(cardPt), spacing: gap), GridItem(.fixed(cardPt), spacing: gap)]
+        return LazyVGrid(columns: cols, spacing: gap) {
+            ForEach(visibleGroups, id: \.id) { group in
+                GroupCard(
+                    group: group,
+                    cardPt: cardPt, tilePt: tilePt, tilePx: tilePx,
+                    isSelected: false,
+                    isSelectMode: false,
+                    onSelect: { },
+                    destination: { Color.clear }
+                )
+                .overlay(
+                    ZStack {
+                        Color.black.opacity(0.45)
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        VStack {
+                            Spacer()
+                            Button {
+                                GroupReviewViewModel.unskipGroup(group)
+                                restoredIDs.insert(group.id)
+                                homeViewModel.refreshReviewedGroupKeys()
+                            } label: {
+                                Label("Restore", systemImage: "arrow.uturn.backward")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(Color(white: 1, opacity: 0.15), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.bottom, 12)
+                        }
+                    }
+                )
+            }
+        }
     }
 }

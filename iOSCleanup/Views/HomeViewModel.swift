@@ -194,25 +194,34 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     private let totalPhotosDeletedKey = "photoduck.totalPhotosDeleted"
 
     /// Flat set of asset localIdentifiers belonging to reviewed (completed, skipped, or queued)
-    /// groups. Used for O(1) per-asset lookups in HomeView chip counts — avoids expensive
-    /// sort+join per render that would freeze the UI during a live scan.
+    /// groups. Used for O(1) per-asset lookups in HomeView chip counts and PhotoResultsView
+    /// filteredGroups — avoids expensive sort+join per render that would freeze during a live scan.
     @Published private(set) var reviewedAssetIDs: Set<String> = []
 
-    func refreshReviewedGroupKeys() {
-        let completedKeys   = Set(UserDefaults.standard.stringArray(forKey: "GroupReview_completedGroups") ?? [])
-        let skippedGroupKeys = Set(UserDefaults.standard.stringArray(forKey: GroupReviewViewModel.skippedKey) ?? [])
-        let markedIDs       = Set(UserDefaults.standard.stringArray(forKey: "GroupReview_markedIDs") ?? [])
+    /// All currently-skipped photo groups (union of Duplicates + Similar).
+    /// Populated by refreshReviewedGroupKeys() and used by both HomeView's Skipped card
+    /// and PhotoResultsView's skipped section.
+    @Published private(set) var skippedPhotoGroups: [PhotoGroup] = []
 
-        // Start with directly-marked asset IDs, then add all assets from completed/skipped groups.
-        // groupKey computation happens here once — not on every HomeView render.
-        var assetIDs = markedIDs
+    func refreshReviewedGroupKeys() {
+        let completedKeys    = Set(UserDefaults.standard.stringArray(forKey: GroupReviewViewModel.completedKey) ?? [])
+        let skippedGroupKeys = Set(UserDefaults.standard.stringArray(forKey: GroupReviewViewModel.skippedKey)   ?? [])
+        let markedAssetIDs   = Set(UserDefaults.standard.stringArray(forKey: GroupReviewViewModel.cacheKey)     ?? [])
+
+        // Seed with directly-marked asset IDs, then expand with all assets from acted-on groups.
+        var assetIDs = markedAssetIDs
+        var skipped: [PhotoGroup] = []
         for group in photoGroups {
             let key = GroupReviewViewModel.groupKey(for: group)
-            if completedKeys.contains(key) || skippedGroupKeys.contains(key) {
+            if completedKeys.contains(key) {
                 group.assets.forEach { assetIDs.insert($0.localIdentifier) }
+            } else if skippedGroupKeys.contains(key) {
+                group.assets.forEach { assetIDs.insert($0.localIdentifier) }
+                skipped.append(group)
             }
         }
         reviewedAssetIDs = assetIDs
+        skippedPhotoGroups = skipped
     }
 
     /// Rotated at the start of each scan. Callbacks that carry a stale ID are dropped,

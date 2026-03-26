@@ -37,7 +37,7 @@ actor WastedReasonAffinityStore {
 
     /// True when any category has been deleted enough to trigger expanded scanning.
     func hasHighAffinityCategory(threshold: Int = 5) -> Bool {
-        loadCounts().values.contains { $0 >= threshold }
+        allCounts().values.contains { $0 >= threshold }
     }
 
     // MARK: - Persistence

@@ -6,14 +6,16 @@ import SwiftUI
 @MainActor
 final class GroupReviewViewModel: ObservableObject {
 
-    private static let cacheKey    = "GroupReview_markedIDs"
-    private static let completedKey = "GroupReview_completedGroups"
-    static let skippedKey           = "GroupReview_skippedGroups"   // internal — read by PhotoResultsView
+    static let cacheKey     = "GroupReview_markedIDs"
+    static let completedKey = "GroupReview_completedGroups"
+    static let skippedKey   = "GroupReview_skippedGroups"
 
     // MARK: - Published state
 
     @Published var queue: [PhotoGroup]
     @Published var currentIndex: Int = 0
+    /// All non-skipped groups passed at init time — used by startFresh() to restore the full queue.
+    private let allGroups: [PhotoGroup]
 
     /// Group keys that have been finalized (queued for delete). Survives clearCache() so groups
     /// stay hidden after commitDeletes() clears markedIDs but before the library updates.
@@ -66,22 +68,22 @@ final class GroupReviewViewModel: ObservableObject {
     // MARK: - Init
 
     init(groups: [PhotoGroup]) {
-        let skipped    = Set(UserDefaults.standard.stringArray(forKey: Self.skippedKey)    ?? [])
-        let completed  = Set(UserDefaults.standard.stringArray(forKey: Self.completedKey)  ?? [])
-        let cached     = Set(UserDefaults.standard.stringArray(forKey: Self.cacheKey)      ?? [])
+        let skipped   = Set(UserDefaults.standard.stringArray(forKey: Self.skippedKey)   ?? [])
+        let completed = Set(UserDefaults.standard.stringArray(forKey: Self.completedKey) ?? [])
+        let cached    = Set(UserDefaults.standard.stringArray(forKey: Self.cacheKey)     ?? [])
 
-        self.queue = groups.filter { !skipped.contains(Self.groupKey(for: $0)) }
+        // All non-skipped groups — kept for startFresh() so completed groups can be shown again.
+        let nonSkipped = groups.filter { !skipped.contains(Self.groupKey(for: $0)) }
+        self.allGroups = nonSkipped
+
+        // Active queue: exclude completed groups too (they are permanently done).
+        self.queue = nonSkipped.filter { !completed.contains(Self.groupKey(for: $0)) }
         self._markedIDs = Published(initialValue: cached)
 
-        // Advance past groups already processed (queued or fully completed) so the user
-        // resumes at the first group they haven't touched yet.
+        // Advance past any groups whose assets are already queued (crash-recovery resume).
         var startIndex = 0
         while startIndex < self.queue.count {
-            let group = self.queue[startIndex]
-            let key   = Self.groupKey(for: group)
-            let isQueued    = group.assets.contains(where: { cached.contains($0.localIdentifier) })
-            let isCompleted = completed.contains(key)
-            guard isQueued || isCompleted else { break }
+            guard self.queue[startIndex].assets.contains(where: { cached.contains($0.localIdentifier) }) else { break }
             startIndex += 1
         }
         self.currentIndex = startIndex
@@ -446,6 +448,7 @@ final class GroupReviewViewModel: ObservableObject {
         clearCache()
         completedGroupKeys = []
         UserDefaults.standard.removeObject(forKey: Self.completedKey)
+        queue = allGroups   // restore completed groups so user sees everything again
         currentIndex = 0
         pendingMarked = []
         bestIDForCurrentGroup = nil
