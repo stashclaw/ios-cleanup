@@ -315,13 +315,14 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
             await self?.loadCacheOffMain()
         }.value
 
-        // ── Step 2: refresh metadata counts in parallel ────────────────────
-        initialScanPhase    = "Checking library…"
-        initialScanProgress = 0.10
-        async let cnt:   Void = refreshTotalLibraryCount()
-        async let meta:  Void = fetchMetadataAssets()
-        async let store: Void = fetchStorageBreakdown()
-        _ = await (cnt, meta, store)
+        // ── Step 2: kick off metadata/storage in the background (non-blocking) ──
+        // These only feed the donut chart and metadata cards — they must NOT gate
+        // the loading screen. fetchStorageBreakdown() enumerates every asset's KVC
+        // fileSize and can take 30 s+ on large libraries; running it in parallel
+        // with the engine tiers is fine.
+        Task(priority: .utility)    { await self.refreshTotalLibraryCount() }
+        Task(priority: .utility)    { await self.fetchMetadataAssets() }
+        Task(priority: .background) { await self.fetchStorageBreakdown() }
 
         // ── Step 3: cache still valid? hide loading screen and bail ────────
         let hasCachedData = !photoGroups.isEmpty || !blurPhotos.isEmpty || !screenshotAssets.isEmpty
