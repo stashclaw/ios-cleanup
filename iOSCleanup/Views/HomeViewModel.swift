@@ -266,7 +266,8 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     init() {
         totalBytesFreed    = Int64(UserDefaults.standard.integer(forKey: totalBytesFreedKey))
         totalPhotosDeleted = UserDefaults.standard.integer(forKey: totalPhotosDeletedKey)
-        loadCache()
+        // loadCache() runs off-main so JSON decode + PHAsset fetch don't block first frame.
+        // autoScanOnLaunch waits for it to finish before deciding whether to scan.
         NotificationCenter.default.addObserver(
             forName: .didFreeBytes, object: nil, queue: .main
         ) { [weak self] note in
@@ -277,38 +278,62 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
                 Task { @MainActor [weak self] in self?.addPhotosDeleted(count) }
             }
         }
-        Task { await refreshTotalLibraryCount() }
-        Task { await fetchMetadataAssets() }
-        Task { await fetchStorageBreakdown() }
         libraryObserver.viewModel = self
         PHPhotoLibrary.shared().register(libraryObserver)
-        Task { await autoScanOnLaunch() }
+        // Single coordinator — handles cache load, metadata refresh, and tiered engine scan.
+        Task(priority: .utility) { await autoScanOnLaunch() }
     }
 
-    /// Starts scans automatically on launch so results are ready before the user taps.
-    /// - If no cache: runs the full scan bundle in background (streaming results as cards fill in).
-    /// - If cache exists: just refreshes metadata counts (fast), full scan only if library changed.
+    /// Single launch coordinator. Runs entirely on a utility task (never blocks the main thread).
+    ///
+    /// Flow:
+    ///  1. Load cache off-main → UI shows cached results immediately
+    ///  2. Refresh metadata counts in parallel (library count, donut, metadata cards)
+    ///  3. If cache is fresh → done (no scan needed)
+    ///  4. Otherwise run engines in 3 tiers so fast results appear first:
+    ///     Tier 1 (PHFetch only, ~200 ms) → Tier 2 (blur/dHash, 1–3 s) → Tier 3 (Vision/ML, background)
     private func autoScanOnLaunch() async {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status == .authorized || status == .limited else { return }
 
-        // Always refresh quick metadata (counts, donut) — cheap and fast.
-        await refreshTotalLibraryCount()
-        await fetchMetadataAssets()
-        await fetchStorageBreakdown()
+        // ── Step 1: load cache off the main thread ─────────────────────────
+        await Task.detached(priority: .userInitiated) { [weak self] in
+            await self?.loadCacheOffMain()
+        }.value
 
+        // ── Step 2: refresh metadata counts in parallel (no sequential await) ─
+        async let cnt:   Void = refreshTotalLibraryCount()
+        async let meta:  Void = fetchMetadataAssets()
+        async let store: Void = fetchStorageBreakdown()
+        _ = await (cnt, meta, store)
+
+        // ── Step 3: cache still valid? nothing more to do ─────────────────
         let hasCachedData = !photoGroups.isEmpty || !blurPhotos.isEmpty || !screenshotAssets.isEmpty
         if hasCachedData && !libraryChangedSinceLastScan { return }
 
-        // No cache (first launch) or library changed: run all engines in background.
+        // ── Step 4: tiered engine scan — fast cards appear first ───────────
+
+        // Tier 1: pure PHFetch / FileManager (~200 ms) — populates cards almost instantly
         await withTaskGroup(of: Void.self) { group in
-            group.addTask { await self.scanPhotos() }
-            group.addTask { await self.scanBlur() }
             group.addTask { await self.scanScreenshots() }
             group.addTask { await self.scanFiles() }
             group.addTask { await self.scanLargePhotos() }
-            group.addTask { await self.scanSemantic() }
         }
+
+        // Tier 2: Laplacian blur + dHash duplicates (1–3 s)
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await self.scanBlur() }
+            group.addTask { await self.scanPhotos() }
+        }
+
+        // Tier 3: heavy Vision / ML / geocoder — run at background priority so
+        // the UI stays fluid while these stream in.
+        await Task(priority: .background) {
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { await self.scanSemantic() }
+                group.addTask { await self.scanEventRolls() }
+            }
+        }.value
     }
 
     deinit {
@@ -1024,6 +1049,100 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
             lastScanDate = now
         } catch {
             // Non-fatal: next scan will overwrite.
+        }
+    }
+
+    /// Non-blocking version of loadCache — runs the disk I/O and PHAsset reconstruction
+    /// on whatever thread calls it (intended: Task.detached), then hops to MainActor to publish.
+    private func loadCacheOffMain() async {
+        // Migrate old cache path first (one-time, fast).
+        migrateOldCache()
+
+        guard let data  = try? Data(contentsOf: cacheURL),
+              let cache = try? JSONDecoder().decode(ScanResultsCache.self, from: data)
+        else { return }
+
+        let savedAt = cache.savedAt
+
+        // ── Reconstruct all PHAssets off main thread ───────────────────────
+        // Photo groups
+        let allIds = cache.photoGroups.flatMap(\.localIdentifiers)
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: allIds, options: nil)
+        var assetMap: [String: PHAsset] = [:]
+        fetchResult.enumerateObjects { asset, _, _ in assetMap[asset.localIdentifier] = asset }
+
+        let rebuiltGroups: [PhotoGroup] = cache.photoGroups.compactMap { cached in
+            guard let reason = PhotoGroup.SimilarityReason(cacheKey: cached.reasonKey) else { return nil }
+            let assets = cached.localIdentifiers.compactMap { assetMap[$0] }
+            guard assets.count >= 2 else { return nil }
+            return PhotoGroup(id: cached.id, assets: assets, similarity: cached.similarity, reason: reason)
+        }
+
+        // Large files
+        let fileIds = cache.largeFiles.compactMap(\.localIdentifier)
+        let fileFetch = PHAsset.fetchAssets(withLocalIdentifiers: fileIds, options: nil)
+        var fileAssetMap: [String: PHAsset] = [:]
+        fileFetch.enumerateObjects { asset, _, _ in fileAssetMap[asset.localIdentifier] = asset }
+
+        let rebuiltFiles: [LargeFile] = cache.largeFiles.compactMap { cached in
+            switch cached.sourceType {
+            case "photoLibrary":
+                guard let id = cached.localIdentifier, let asset = fileAssetMap[id] else { return nil }
+                return LargeFile(id: cached.id, source: .photoLibrary(asset: asset),
+                                 displayName: cached.displayName, byteSize: cached.byteSize,
+                                 creationDate: cached.creationDate)
+            case "filesystem":
+                guard let urlString = cached.urlString, let url = URL(string: urlString),
+                      FileManager.default.fileExists(atPath: url.path) else { return nil }
+                return LargeFile(id: cached.id, source: .filesystem(url: url),
+                                 displayName: cached.displayName, byteSize: cached.byteSize,
+                                 creationDate: cached.creationDate)
+            default: return nil
+            }
+        }
+
+        // Blur
+        var rebuiltBlur: [PHAsset] = []
+        if !cache.blurPhotoIds.isEmpty {
+            let f = PHAsset.fetchAssets(withLocalIdentifiers: cache.blurPhotoIds, options: nil)
+            f.enumerateObjects { a, _, _ in rebuiltBlur.append(a) }
+        }
+
+        // Screenshots
+        var rebuiltShots: [PHAsset] = []
+        if !cache.screenshotPhotoIds.isEmpty {
+            let f = PHAsset.fetchAssets(withLocalIdentifiers: cache.screenshotPhotoIds, options: nil)
+            f.enumerateObjects { a, _, _ in rebuiltShots.append(a) }
+        }
+
+        // Large photos
+        let lpIds   = cache.largePhotoIds
+        let lpSizes = cache.largePhotoSizes
+        var rebuiltLargePhotos: [LargePhotoItem] = []
+        if !lpIds.isEmpty && lpIds.count == lpSizes.count {
+            let f = PHAsset.fetchAssets(withLocalIdentifiers: lpIds, options: nil)
+            var lpMap: [String: PHAsset] = [:]
+            f.enumerateObjects { a, _, _ in lpMap[a.localIdentifier] = a }
+            rebuiltLargePhotos = zip(lpIds, lpSizes).compactMap { id, size in
+                guard let asset = lpMap[id] else { return nil }
+                return LargePhotoItem(id: UUID(), asset: asset, byteSize: size)
+            }
+        }
+
+        // ── Publish on MainActor ───────────────────────────────────────────
+        await MainActor.run {
+            lastScanDate = savedAt
+            photoGroups  = rebuiltGroups
+            largeFiles   = rebuiltFiles
+            blurPhotos   = rebuiltBlur
+            screenshotAssets = rebuiltShots
+            largePhotos  = rebuiltLargePhotos
+
+            if !photoGroups.isEmpty      { photoScanState      = .done }
+            if !largeFiles.isEmpty       { fileScanState       = .done }
+            if !blurPhotos.isEmpty       { blurScanState       = .done }
+            if !screenshotAssets.isEmpty { screenshotScanState = .done }
+            if !largePhotos.isEmpty      { largePhotoScanState = .done }
         }
     }
 
