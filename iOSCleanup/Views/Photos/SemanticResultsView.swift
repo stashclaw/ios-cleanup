@@ -177,24 +177,38 @@ struct SemanticResultsView: View {
         let toDelete = visibleAssets.filter { selectedIDs.contains($0.localIdentifier) }
         guard !toDelete.isEmpty else { return }
 
+        let bytes = toDelete.reduce(Int64(0)) { sum, asset in
+            let size = PHAssetResource.assetResources(for: asset)
+                .first.flatMap { $0.value(forKey: "fileSize") as? Int64 } ?? 0
+            return sum + size
+        }
+
         do {
             try await PHPhotoLibrary.shared().performChanges {
                 PHAssetChangeRequest.deleteAssets(toDelete as NSArray)
             }
             toDelete.forEach { deletedIDs.insert($0.localIdentifier) }
             selectedIDs.removeAll()
+            NotificationCenter.default.post(name: .didFreeBytes, object: nil,
+                                            userInfo: ["bytes": bytes, "count": toDelete.count])
         } catch {
             deleteError = error.localizedDescription
         }
     }
 
     private func deleteOne(asset: PHAsset) async {
+        let bytes = PHAssetResource.assetResources(for: asset)
+            .first.flatMap { $0.value(forKey: "fileSize") as? Int64 } ?? 0
         do {
             try await PHPhotoLibrary.shared().performChanges {
                 PHAssetChangeRequest.deleteAssets([asset] as NSArray)
             }
             deletedIDs.insert(asset.localIdentifier)
             selectedIDs.remove(asset.localIdentifier)
+            if bytes > 0 {
+                NotificationCenter.default.post(name: .didFreeBytes, object: nil,
+                                                userInfo: ["bytes": bytes, "count": 1])
+            }
         } catch {
             deleteError = error.localizedDescription
         }

@@ -19,6 +19,12 @@ private let _smartPicksCellPx: CGFloat = {
 @MainActor
 private let _smartPicksCardPt: CGFloat = (UIScreen.main.bounds.width - 32 - 4) / 3
 
+private func spIsStoredLocally(_ asset: PHAsset) -> Bool {
+    let resources = PHAssetResource.assetResources(for: asset)
+    guard let resource = resources.first(where: { $0.type == .photo || $0.type == .fullSizePhoto }) else { return true }
+    return (resource.value(forKey: "locallyAvailable") as? Bool) ?? true
+}
+
 // MARK: - Main view
 
 struct SmartPicksResultsView: View {
@@ -31,6 +37,7 @@ struct SmartPicksResultsView: View {
     @State private var deletedIDs = Set<String>()
     @State private var showPaywall = false
     @State private var visibleCount = 60
+    @State private var showICloudDeleteAlert = false
 
     private let bg = Color(red: 0.05, green: 0.05, blue: 0.08)
 
@@ -80,7 +87,12 @@ struct SmartPicksResultsView: View {
                 } else {
                     Button("Delete (\(selectedAssets.count))") {
                         guard purchaseManager.isPurchased else { showPaywall = true; return }
-                        Task { await deleteSelected() }
+                        let toDelete = visibleAssets.filter { selectedAssets.contains($0.localIdentifier) }
+                        if toDelete.contains(where: { !spIsStoredLocally($0) }) {
+                            showICloudDeleteAlert = true
+                        } else {
+                            Task { await deleteSelected() }
+                        }
                     }
                     .disabled(isDeleting)
                     .foregroundStyle(Color(red: 1, green: 0.35, blue: 0.35))
@@ -92,6 +104,18 @@ struct SmartPicksResultsView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .purchaseDidSucceed)) { _ in
             showPaywall = false
+        }
+        .confirmationDialog(
+            "Some Photos Are in iCloud",
+            isPresented: $showICloudDeleteAlert,
+            titleVisibility: .visible
+        ) {
+            Button("Delete from iCloud Too", role: .destructive) {
+                Task { await deleteSelected() }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Some selected photos are stored only in iCloud. Deleting will remove them from iCloud and all your devices, but won't free local storage on this device.")
         }
     }
 
@@ -182,12 +206,10 @@ struct SmartPicksResultsView: View {
                 }
                 deletedIDs.insert(asset.localIdentifier)
                 selectedAssets.remove(asset.localIdentifier)
-                if bytes > 0 {
-                    NotificationCenter.default.post(
-                        name: .didFreeBytes, object: nil,
-                        userInfo: ["bytes": bytes]
-                    )
-                }
+                NotificationCenter.default.post(
+                    name: .didFreeBytes, object: nil,
+                    userInfo: ["bytes": bytes, "count": 1]
+                )
             } catch {
                 deleteError = error.localizedDescription
             }
@@ -211,12 +233,10 @@ struct SmartPicksResultsView: View {
             }
             toDelete.forEach { deletedIDs.insert($0.localIdentifier) }
             selectedAssets.removeAll()
-            if bytes > 0 {
-                NotificationCenter.default.post(
-                    name: .didFreeBytes, object: nil,
-                    userInfo: ["bytes": bytes]
-                )
-            }
+            NotificationCenter.default.post(
+                name: .didFreeBytes, object: nil,
+                userInfo: ["bytes": bytes, "count": toDelete.count]
+            )
         } catch {
             deleteError = error.localizedDescription
         }
@@ -234,6 +254,7 @@ private struct SmartPickCell: View {
     @State private var thumbnail: UIImage?
     @State private var requestID: PHImageRequestID?
     @State private var qualityScore: Float? = nil
+    @State private var isICloud = false
 
     /// Score → badge color: red (<0.2), orange (<0.35), yellow otherwise
     private var badgeColor: Color {
@@ -282,6 +303,22 @@ private struct SmartPickCell: View {
                     .padding(5)
                 }
 
+                // iCloud badge — top-left, shown when asset is not stored locally
+                if isICloud {
+                    VStack {
+                        HStack {
+                            Image(systemName: "icloud")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .padding(4)
+                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 5))
+                                .padding(5)
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                }
+
                 // Selection checkmark (top-right)
                 if isSelected {
                     VStack {
@@ -321,6 +358,7 @@ private struct SmartPickCell: View {
         .task {
             await loadThumbnail()
             qualityScore = await PhotoQualityAnalyzer.shared.qualityScore(for: asset)
+            isICloud = !spIsStoredLocally(asset)
         }
         .onDisappear { cancelLoad() }
     }

@@ -6,7 +6,8 @@ import SwiftUI
 @MainActor
 final class GroupReviewViewModel: ObservableObject {
 
-    private static let cacheKey = "GroupReview_markedIDs"
+    private static let cacheKey   = "GroupReview_markedIDs"
+    private static let skippedKey = "GroupReview_skippedGroups"
 
     // MARK: - Published state
 
@@ -53,11 +54,17 @@ final class GroupReviewViewModel: ObservableObject {
     // MARK: - Init
 
     init(groups: [PhotoGroup]) {
-        self.queue = groups
+        let skipped = Set(UserDefaults.standard.stringArray(forKey: Self.skippedKey) ?? [])
+        self.queue = groups.filter { !skipped.contains(Self.groupKey(for: $0)) }
         let cached = UserDefaults.standard.stringArray(forKey: Self.cacheKey) ?? []
         self._markedIDs = Published(initialValue: Set(cached))
-        if let first = groups.first { setup(group: first) }
+        if let first = self.queue.first { setup(group: first) }
         Task { await rerankCurrentGroup() }
+    }
+
+    /// Stable key for a group: sorted asset IDs joined by comma.
+    private static func groupKey(for group: PhotoGroup) -> String {
+        group.assets.map(\.localIdentifier).sorted().joined(separator: ",")
     }
 
     // MARK: - Group setup
@@ -140,10 +147,18 @@ final class GroupReviewViewModel: ObservableObject {
         Task { await rerankCurrentGroup() }
     }
 
-    /// Skips current group without queuing anything.
+    /// Skips current group without queuing anything, and persists the skip so it won't reappear.
     func skipGroup() {
+        if let group = currentGroup { persistSkip(group) }
         step()
         Task { await rerankCurrentGroup() }
+    }
+
+    private func persistSkip(_ group: PhotoGroup) {
+        let key = Self.groupKey(for: group)
+        var skipped = Set(UserDefaults.standard.stringArray(forKey: Self.skippedKey) ?? [])
+        skipped.insert(key)
+        UserDefaults.standard.set(Array(skipped), forKey: Self.skippedKey)
     }
 
     private func step() {
@@ -345,11 +360,10 @@ final class GroupReviewViewModel: ObservableObject {
             PHAssetChangeRequest.deleteAssets(assets as NSFastEnumeration)
         }
 
-        if bytes > 0 {
-            NotificationCenter.default.post(
-                name: .didFreeBytes, object: nil, userInfo: ["bytes": bytes]
-            )
-        }
+        NotificationCenter.default.post(
+            name: .didFreeBytes, object: nil,
+            userInfo: ["bytes": bytes, "count": assets.count]
+        )
         clearCache()
     }
 
@@ -358,6 +372,14 @@ final class GroupReviewViewModel: ObservableObject {
     func clearCache() {
         UserDefaults.standard.removeObject(forKey: Self.cacheKey)
         markedIDs = []
+    }
+
+    static func clearSkippedGroups() {
+        UserDefaults.standard.removeObject(forKey: skippedKey)
+    }
+
+    static var skippedGroupCount: Int {
+        (UserDefaults.standard.stringArray(forKey: skippedKey) ?? []).count
     }
 
     func startFresh() {

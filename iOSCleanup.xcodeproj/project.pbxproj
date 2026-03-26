@@ -53,6 +53,7 @@
 		BBCONFIG00000000000000001A /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBCONFIG00000000000000001B /* AppConfig.swift */; };
 		BBSCREEN000000000000001A /* ScreenshotScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBSCREEN000000000000001B /* ScreenshotScanEngine.swift */; };
 		BBSCREEN000000000000002A /* ScreenshotsResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBSCREEN000000000000002B /* ScreenshotsResultsView.swift */; };
+		BBSWIPE000000000000001A /* ScreenshotSwipeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBSWIPE000000000000001B /* ScreenshotSwipeView.swift */; };
 		CC00001000000000000000AA /* RecentlyDeletedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC00001000000000000000AB /* RecentlyDeletedView.swift */; };
 		CCLPE0000000000000001A /* LargePhotoScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCLPE0000000000000001B /* LargePhotoScanEngine.swift */; };
 		CCLPI0000000000000001A /* LargePhotoItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCLPI0000000000000001B /* LargePhotoItem.swift */; };
@@ -140,6 +141,7 @@
 		BBCONFIG00000000000000001B /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		BBSCREEN000000000000001B /* ScreenshotScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotScanEngine.swift; sourceTree = "<group>"; };
 		BBSCREEN000000000000002B /* ScreenshotsResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotsResultsView.swift; sourceTree = "<group>"; };
+		BBSWIPE000000000000001B /* ScreenshotSwipeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotSwipeView.swift; sourceTree = "<group>"; };
 		CC00001000000000000000AB /* RecentlyDeletedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentlyDeletedView.swift; sourceTree = "<group>"; };
 		CCLPE0000000000000001B /* LargePhotoScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LargePhotoScanEngine.swift; sourceTree = "<group>"; };
 		CCLPI0000000000000001B /* LargePhotoItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LargePhotoItem.swift; sourceTree = "<group>"; };
@@ -345,6 +347,7 @@
 				VIDGRV000000000000001B /* VideoGroupResultsView.swift */,
 				EVRSV0000000000000001B /* EventRollResultsView.swift */,
 				AB01SMRT000000000000001B /* SmartPicksResultsView.swift */,
+				BBSWIPE000000000000001B /* ScreenshotSwipeView.swift */,
 			);
 			path = Photos;
 			sourceTree = "<group>";
@@ -510,6 +513,7 @@
 				AA01TAG0000000000000001A /* ScreenshotTagEngine.swift in Sources */,
 				BBSCREEN000000000000001A /* ScreenshotScanEngine.swift in Sources */,
 				BBSCREEN000000000000002A /* ScreenshotsResultsView.swift in Sources */,
+				BBSWIPE000000000000001A /* ScreenshotSwipeView.swift in Sources */,
 				CCLPI0000000000000001A /* LargePhotoItem.swift in Sources */,
 				CCLPE0000000000000001A /* LargePhotoScanEngine.swift in Sources */,
 				CCLPV0000000000000001A /* LargePhotosResultsView.swift in Sources */,

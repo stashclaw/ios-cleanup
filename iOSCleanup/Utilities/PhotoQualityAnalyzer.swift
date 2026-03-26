@@ -21,7 +21,7 @@ enum PhotoQualityLabel: String, Sendable {
         case .underexposed:   return "moon.fill"
         case .overexposed:    return "sun.max.fill"
         case .lowFaceQuality: return "face.dashed"
-        case .noSubject:      return "eye.slash"
+        case .noSubject:      return "scope"
         }
     }
 }
@@ -199,6 +199,7 @@ actor PhotoQualityAnalyzer {
         if qualityLabels.contains(.underexposed)   { score -= 0.15 }
         if qualityLabels.contains(.overexposed)    { score -= 0.15 }
         if qualityLabels.contains(.lowFaceQuality) { score -= 0.2  }
+        if qualityLabels.contains(.noSubject)      { score -= 0.15 }
         return min(1.0, max(0.0, score))
     }
 

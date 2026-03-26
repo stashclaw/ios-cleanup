@@ -125,6 +125,17 @@ private actor PhotoGroupCollector {
 
 // MARK: - ViewModel
 
+// MARK: - Library change observer trampoline
+
+private final class LibraryChangeObserver: NSObject, PHPhotoLibraryChangeObserver {
+    weak var viewModel: HomeViewModel?
+    func photoLibraryDidChange(_ changeInstance: PHChange) {
+        Task { @MainActor [weak viewModel] in
+            viewModel?.handleLibraryChange(changeInstance)
+        }
+    }
+}
+
 @MainActor
 final class HomeViewModel: ObservableObject, @unchecked Sendable {
 
@@ -172,6 +183,10 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     @Published var totalBytesFreed: Int64 = 0
     private let totalBytesFreedKey = "photoduck.totalBytesFreed"
 
+    /// Persistent cumulative count of photos/videos deleted across all sessions.
+    @Published var totalPhotosDeleted: Int = 0
+    private let totalPhotosDeletedKey = "photoduck.totalPhotosDeleted"
+
     /// Rotated at the start of each scan. Callbacks that carry a stale ID are dropped,
     /// preventing results from an old scan from polluting a new one.
     private var photoScanId      = UUID()
@@ -186,6 +201,11 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
 
     @Published var lastScanDate: Date? = nil
     @Published var scanRanThisSession: Bool = false
+    /// Set to true when the photo library adds new assets after the last scan.
+    /// HomeView uses this to show a "New photos detected" nudge.
+    @Published var libraryChangedSinceLastScan: Bool = false
+
+    private let libraryObserver = LibraryChangeObserver()
 
     /// Total count of ALL assets in the photo library (photos + videos + screenshots).
     @Published var totalLibraryCount: Int = 0
@@ -244,7 +264,8 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     }
 
     init() {
-        totalBytesFreed = Int64(UserDefaults.standard.integer(forKey: totalBytesFreedKey))
+        totalBytesFreed    = Int64(UserDefaults.standard.integer(forKey: totalBytesFreedKey))
+        totalPhotosDeleted = UserDefaults.standard.integer(forKey: totalPhotosDeletedKey)
         loadCache()
         NotificationCenter.default.addObserver(
             forName: .didFreeBytes, object: nil, queue: .main
@@ -252,10 +273,64 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
             if let bytes = note.userInfo?["bytes"] as? Int64, bytes > 0 {
                 Task { @MainActor [weak self] in self?.addBytesFreed(bytes) }
             }
+            if let count = note.userInfo?["count"] as? Int, count > 0 {
+                Task { @MainActor [weak self] in self?.addPhotosDeleted(count) }
+            }
         }
         Task { await refreshTotalLibraryCount() }
         Task { await fetchMetadataAssets() }
         Task { await fetchStorageBreakdown() }
+        libraryObserver.viewModel = self
+        PHPhotoLibrary.shared().register(libraryObserver)
+        Task { await autoScanOnLaunch() }
+    }
+
+    /// Starts scans automatically on launch so results are ready before the user taps.
+    /// - If no cache: runs the full scan bundle in background (streaming results as cards fill in).
+    /// - If cache exists: just refreshes metadata counts (fast), full scan only if library changed.
+    private func autoScanOnLaunch() async {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited else { return }
+
+        // Always refresh quick metadata (counts, donut) — cheap and fast.
+        await refreshTotalLibraryCount()
+        await fetchMetadataAssets()
+        await fetchStorageBreakdown()
+
+        let hasCachedData = !photoGroups.isEmpty || !blurPhotos.isEmpty || !screenshotAssets.isEmpty
+        if hasCachedData && !libraryChangedSinceLastScan { return }
+
+        // No cache (first launch) or library changed: run all engines in background.
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await self.scanPhotos() }
+            group.addTask { await self.scanBlur() }
+            group.addTask { await self.scanScreenshots() }
+            group.addTask { await self.scanFiles() }
+            group.addTask { await self.scanLargePhotos() }
+            group.addTask { await self.scanSemantic() }
+        }
+    }
+
+    deinit {
+        PHPhotoLibrary.shared().unregisterChangeObserver(libraryObserver)
+    }
+
+    // MARK: - PHPhotoLibraryChangeObserver
+
+    func handleLibraryChange(_ changeInstance: PHChange) {
+        // Only care about inserted assets — our own deletes are tracked locally.
+        let imageResult = PHAsset.fetchAssets(with: .image, options: nil)
+        let videoResult = PHAsset.fetchAssets(with: .video, options: nil)
+        let hasInserts = changeInstance.changeDetails(for: imageResult)?.insertedObjects.isEmpty == false
+            || changeInstance.changeDetails(for: videoResult)?.insertedObjects.isEmpty == false
+        guard hasInserts else { return }
+        guard lastScanDate != nil else { return }  // no scan yet — nothing to invalidate
+        libraryChangedSinceLastScan = true
+        // Invalidate the scan cache so the next manual scan starts fresh.
+        try? FileManager.default.removeItem(at: cacheURL)
+        // Refresh cheap metadata (counts, donut).
+        Task { await refreshTotalLibraryCount() }
+        Task { await fetchMetadataAssets() }
     }
 
     /// Scans PHAssetResource file sizes for all images and videos to populate
@@ -357,6 +432,10 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         totalBytesFreed += bytes
         UserDefaults.standard.set(Int(min(totalBytesFreed, Int64(Int.max))), forKey: totalBytesFreedKey)
     }
+    func addPhotosDeleted(_ count: Int) {
+        totalPhotosDeleted += count
+        UserDefaults.standard.set(totalPhotosDeleted, forKey: totalPhotosDeletedKey)
+    }
     var hasAnyResult: Bool {
         !photoGroups.isEmpty || !largeFiles.isEmpty || !blurPhotos.isEmpty
             || !screenshotAssets.isEmpty || !largePhotos.isEmpty
@@ -442,6 +521,7 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         similarProgress   = (0, 0)
         scanStartTime     = Date()
         scanRanThisSession = true
+        libraryChangedSinceLastScan = false
         if addedAfter == nil { photoGroups = [] }  // full scan: clear; incremental: keep & merge
 
         // Seed the collector with any already-cached groups so incremental merges correctly.
@@ -868,7 +948,9 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         try await PHPhotoLibrary.shared().performChanges {
             PHAssetChangeRequest.deleteAssets(nsArray)
         }
+        let count = toDelete.count
         addBytesFreed(recentlyDeletedBytes)
+        addPhotosDeleted(count)
         recentlyDeletedPhotos    = []
         recentlyDeletedBytes     = 0
         recentlyDeletedScanState = .idle

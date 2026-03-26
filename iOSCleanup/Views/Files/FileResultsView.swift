@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 import Photos
 
@@ -150,18 +151,34 @@ struct FileResultsView: View {
 
     private func loadThumbnail(for file: LargeFile) {
         guard thumbnails[file.id] == nil else { return }
-        guard case .photoLibrary(let asset) = file.source else { return }
-        let opts = PHImageRequestOptions()
-        opts.deliveryMode = .opportunistic
-        opts.isNetworkAccessAllowed = false
-        PHImageManager.default().requestImage(
-            for: asset,
-            targetSize: CGSize(width: 160, height: 160),
-            contentMode: .aspectFill,
-            options: opts
-        ) { img, _ in
-            guard let img else { return }
-            Task { @MainActor in self.thumbnails[file.id] = img }
+        switch file.source {
+        case .photoLibrary(let asset):
+            let opts = PHImageRequestOptions()
+            opts.deliveryMode = .opportunistic
+            opts.isNetworkAccessAllowed = false
+            PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: CGSize(width: 160, height: 160),
+                contentMode: .aspectFill,
+                options: opts
+            ) { img, _ in
+                guard let img else { return }
+                Task { @MainActor in self.thumbnails[file.id] = img }
+            }
+        case .filesystem(let url):
+            let ext = url.pathExtension.lowercased()
+            guard ["mp4", "mov", "m4v", "avi", "mkv"].contains(ext) else { return }
+            let fileID = file.id
+            Task.detached(priority: .utility) {
+                let asset = AVURLAsset(url: url)
+                let gen = AVAssetImageGenerator(asset: asset)
+                gen.appliesPreferredTrackTransform = true
+                gen.maximumSize = CGSize(width: 320, height: 320)
+                let time = CMTime(seconds: 1, preferredTimescale: 600)
+                guard let cgImage = try? gen.copyCGImage(at: time, actualTime: nil) else { return }
+                let img = UIImage(cgImage: cgImage)
+                await MainActor.run { self.thumbnails[fileID] = img }
+            }
         }
     }
 }

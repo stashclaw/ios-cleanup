@@ -51,6 +51,14 @@ struct HomeView: View {
                 guard case .done = state, pendingNav == .contacts else { return }
                 pendingNav = nil
             }
+            .onChange(of: viewModel.recentlyDeletedPhotos.count) { count in
+                guard pendingNav == .recentlyDeleted, count > 0 else { return }
+                pendingNav = nil; navPath.append(NavDest.recentlyDeleted)
+            }
+            .onChange(of: viewModel.recentlyDeletedScanState) { state in
+                guard case .done = state, pendingNav == .recentlyDeleted else { return }
+                pendingNav = nil; navPath.append(NavDest.recentlyDeleted)
+            }
     }
 
     // Split body to avoid Swift type-checker timeout on long modifier chains.
@@ -231,6 +239,8 @@ struct HomeView: View {
             ContactResultsView(matches: viewModel.contactMatches)
                 .environmentObject(purchaseManager)
                 .environmentObject(viewModel as HomeViewModel)
+        case .recentlyDeleted:
+            RecentlyDeletedView(viewModel: viewModel)
         }
     }
 
@@ -496,7 +506,7 @@ struct HomeView: View {
                 Divider().overlay(Color.white.opacity(0.07))
                 donutLegend
             }
-            if viewModel.totalBytesFreed > 0 {
+            if viewModel.totalBytesFreed > 0 || viewModel.totalPhotosDeleted > 0 {
                 Divider().overlay(Color.white.opacity(0.07))
                 HStack(spacing: 6) {
                     Image(systemName: "sparkles")
@@ -506,9 +516,18 @@ struct HomeView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(Color.white.opacity(0.5))
                     Spacer()
-                    Text(viewModel.totalBytesFreedFormatted)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.98, green: 0.57, blue: 0.24))
+                    VStack(alignment: .trailing, spacing: 1) {
+                        if viewModel.totalBytesFreed > 0 {
+                            Text(viewModel.totalBytesFreedFormatted)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Color(red: 0.98, green: 0.57, blue: 0.24))
+                        }
+                        if viewModel.totalPhotosDeleted > 0 {
+                            Text("\(viewModel.totalPhotosDeleted) photo\(viewModel.totalPhotosDeleted == 1 ? "" : "s")")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color(red: 0.98, green: 0.57, blue: 0.24).opacity(0.7))
+                        }
+                    }
                 }
             }
         }
@@ -792,7 +811,14 @@ struct HomeView: View {
                         navPath.append(NavDest.livePhotos)
                     }
                 }
-                RecentlyDeletedCard(viewModel: viewModel)
+                RecentlyDeletedCard(viewModel: viewModel) {
+                    if viewModel.recentlyDeletedPhotos.isEmpty {
+                        pendingNav = .recentlyDeleted
+                        Task { await viewModel.scanRecentlyDeleted() }
+                    } else {
+                        navPath.append(NavDest.recentlyDeleted)
+                    }
+                }
                 CategoryCard(
                     icon: "photo.stack",
                     iconColor: Color(red: 0.4, green: 0.6, blue: 1.0),
@@ -1002,6 +1028,7 @@ private enum NavDest: Hashable {
     case videoDuplicates
     case smartPicks
     case contacts
+    case recentlyDeleted
 }
 
 // MARK: - Category Card (2-column grid tile)
@@ -1189,30 +1216,23 @@ private struct StatCell: View {
 
 private struct RecentlyDeletedCard: View {
     @ObservedObject var viewModel: HomeViewModel
+    let onTap: () -> Void
 
     private let iconColor = Color(red: 1, green: 0.6, blue: 0.2)
 
     var body: some View {
-        Group {
-            if case .done = viewModel.recentlyDeletedScanState,
-               viewModel.recentlyDeletedPhotos.count > 0 {
-                NavigationLink {
-                    RecentlyDeletedView(viewModel: viewModel)
-                } label: {
-                    cardContent
-                }
-            } else {
-                Button {
-                    Task { await viewModel.scanRecentlyDeleted() }
-                } label: {
-                    cardContent
-                }
-                .disabled({
-                    if case .scanning = viewModel.recentlyDeletedScanState { return true }
-                    return false
-                }())
+        Button {
+            guard case .scanning = viewModel.recentlyDeletedScanState else {
+                onTap()
+                return
             }
+        } label: {
+            cardContent
         }
+        .disabled({
+            if case .scanning = viewModel.recentlyDeletedScanState { return true }
+            return false
+        }())
         .background(Color(white: 1, opacity: 0.05), in: RoundedRectangle(cornerRadius: 20))
         .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color(white: 1, opacity: 0.07)))
     }

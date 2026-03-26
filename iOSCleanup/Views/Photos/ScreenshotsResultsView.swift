@@ -13,6 +13,8 @@ struct ScreenshotsResultsView: View {
     @State private var showPaywall = false
     @State private var visibleCount = 60          // progressive loading cap across all sections
 
+    @State private var showSwipeReview = false
+
     // OCR tagging
     @State private var assetTags: [String: ScreenshotTag] = [:]
     @State private var isTagging = false
@@ -123,6 +125,15 @@ struct ScreenshotsResultsView: View {
             isTagging = false
         }
         .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                if !assets.isEmpty {
+                    NavigationLink(destination: ScreenshotSwipeView(assets: filteredAssets)) {
+                        Label("Review", systemImage: "hand.draw")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Color(red: 0.18, green: 0.72, blue: 0.95))
+                    }
+                }
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 if selectedAssets.isEmpty {
                     Button(purchaseManager.isPurchased ? "Select All" : "Select 🔒") {
@@ -319,10 +330,8 @@ struct ScreenshotsResultsView: View {
             try await PHPhotoLibrary.shared().performChanges {
                 PHAssetChangeRequest.deleteAssets(toDelete as NSFastEnumeration)
             }
-            if bytes > 0 {
-                NotificationCenter.default.post(name: .didFreeBytes, object: nil,
-                                                userInfo: ["bytes": bytes])
-            }
+            NotificationCenter.default.post(name: .didFreeBytes, object: nil,
+                                            userInfo: ["bytes": bytes, "count": toDelete.count])
             selectedAssets.removeAll()
         } catch {
             deleteError = error.localizedDescription

@@ -11,12 +11,23 @@ private let _videoThumbnailCache: NSCache<NSString, UIImage> = {
     return c
 }()
 
+private func vgIsStoredLocally(_ asset: PHAsset) -> Bool {
+    let resources = PHAssetResource.assetResources(for: asset)
+    guard let resource = resources.first(where: { $0.type == .video || $0.type == .fullSizeVideo }) else { return true }
+    return (resource.value(forKey: "locallyAvailable") as? Bool) ?? true
+}
+
 // MARK: - Main View
 
 struct VideoGroupResultsView: View {
     let groups: [VideoGroup]
 
     @EnvironmentObject private var purchaseManager: PurchaseManager
+
+    private enum ICloudPendingWork {
+        case keepLargest(VideoGroup)
+        case deleteAll
+    }
 
     @State private var expandedGroupID: UUID?       // which group row is expanded
     @State private var deletedAssetIDs = Set<String>()
@@ -25,6 +36,8 @@ struct VideoGroupResultsView: View {
     @State private var showPaywall = false
     @State private var deleteError: String?
     @State private var showDeleteConfirm = false
+    @State private var showICloudDeleteAlert = false
+    @State private var iCloudPendingWork: ICloudPendingWork? = nil
 
     private let bg = Color(red: 0.05, green: 0.05, blue: 0.08)
     private let accent = Color(red: 1.0, green: 0.4, blue: 0.3)
@@ -83,6 +96,24 @@ struct VideoGroupResultsView: View {
         } message: {
             let savings = ByteCountFormatter.string(fromByteCount: totalReclaimableBytes, countStyle: .file)
             Text("This will delete all duplicate videos except the largest copy in each group. You'll free \(savings).")
+        }
+        .confirmationDialog(
+            "Some Videos Are in iCloud",
+            isPresented: $showICloudDeleteAlert,
+            titleVisibility: .visible
+        ) {
+            Button("Delete from iCloud Too", role: .destructive) {
+                let work = iCloudPendingWork
+                iCloudPendingWork = nil
+                switch work {
+                case .keepLargest(let group): Task { await performKeepLargestDeleteRest(in: group) }
+                case .deleteAll:             Task { await performDeleteAllDuplicates() }
+                case nil: break
+                }
+            }
+            Button("Cancel", role: .cancel) { iCloudPendingWork = nil }
+        } message: {
+            Text("Some videos are stored only in iCloud. Deleting will remove them from iCloud and all your devices, but won't free local storage on this device.")
         }
         if let err = deleteError {
             Text(err)
@@ -209,10 +240,20 @@ struct VideoGroupResultsView: View {
     }
 
     private func keepLargestDeleteRest(in group: VideoGroup) async {
+        let dupes = Array(group.assets.dropFirst())
+        if dupes.contains(where: { !vgIsStoredLocally($0) }) {
+            iCloudPendingWork = .keepLargest(group)
+            showICloudDeleteAlert = true
+            return
+        }
+        await performKeepLargestDeleteRest(in: group)
+    }
+
+    private func performKeepLargestDeleteRest(in group: VideoGroup) async {
         isDeleting = true
         defer { isDeleting = false }
 
-        let toDelete = group.assets.dropFirst()  // assets[0] = largest/keep candidate
+        let toDelete = group.assets.dropFirst()
         guard !toDelete.isEmpty else { return }
 
         var bytes: Int64 = 0
@@ -240,6 +281,16 @@ struct VideoGroupResultsView: View {
     }
 
     private func deleteAllDuplicates() async {
+        let allDupes = visibleGroups.flatMap { Array($0.assets.dropFirst()) }
+        if allDupes.contains(where: { !vgIsStoredLocally($0) }) {
+            iCloudPendingWork = .deleteAll
+            showICloudDeleteAlert = true
+            return
+        }
+        await performDeleteAllDuplicates()
+    }
+
+    private func performDeleteAllDuplicates() async {
         isDeleting = true
         defer { isDeleting = false }
 
@@ -381,6 +432,10 @@ private struct VideoAssetRow: View {
         return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
+    private var isICloud: Bool {
+        !vgIsStoredLocally(asset)
+    }
+
     private var durationText: String {
         let d = asset.duration
         let m = Int(d) / 60, s = Int(d) % 60
@@ -392,9 +447,16 @@ private struct VideoAssetRow: View {
             VideoThumbnailCell(asset: asset, size: 80)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(fileSize)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
+                HStack(spacing: 6) {
+                    Text(fileSize)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                    if isICloud {
+                        Image(systemName: "icloud")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.white.opacity(0.5))
+                    }
+                }
                 Text(durationText)
                     .font(.system(size: 12))
                     .foregroundStyle(Color.white.opacity(0.5))

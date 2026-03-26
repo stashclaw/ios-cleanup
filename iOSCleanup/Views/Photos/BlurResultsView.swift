@@ -153,10 +153,8 @@ struct BlurResultsView: View {
             try await PHPhotoLibrary.shared().performChanges {
                 PHAssetChangeRequest.deleteAssets(toDelete as NSFastEnumeration)
             }
-            if bytes > 0 {
-                NotificationCenter.default.post(name: .didFreeBytes, object: nil,
-                                                userInfo: ["bytes": bytes])
-            }
+            NotificationCenter.default.post(name: .didFreeBytes, object: nil,
+                                            userInfo: ["bytes": bytes, "count": toDelete.count])
             selectedAssets.removeAll()
         } catch {
             deleteError = error.localizedDescription

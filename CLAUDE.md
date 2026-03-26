@@ -42,6 +42,7 @@ Three headless scan engines + unit tests.
 | `BackgroundScanScheduler` | `Engines/BackgroundScanScheduler.swift` | BGProcessingTask scheduler (no stream) | — |
 | `BackgroundScanCacheWriter` | `Engines/BackgroundScanCacheWriter.swift` | Background scan + cache writer actor (no stream) | — |
 | `MLModelUpdater` | `Engines/MLModelUpdater.swift` | `actor MLModelUpdater` with `.shared` singleton. Runs `MLUpdateTask` to fine-tune `PhotoQualityClassifier` on the user's kept-asset images. Requires 50+ decisions with `featureVector`. Writes `PhotoQualityClassifier_personalized.mlmodelc` to Application Support. Posts `"mlModelDidUpdate"` notification on success. No stream — direct `async` call. | — |
+| `SemanticScanEngine` | `Engines/SemanticScanEngine.swift` | `AsyncThrowingStream<SemanticScanEvent, Error>` | `.progress(completed:total:)`, `.resultsFound([SemanticGroup])` |
 
 ⚠️ `PhotoScanEngine` uniquely uses `AsyncStream<Result<…>>` not `AsyncThrowingStream`. All new engines use `AsyncThrowingStream`.
 
@@ -135,6 +136,20 @@ enum VideoGroupReason: Sendable {
 }
 ```
 
+**`SemanticGroup`** (`Models/SemanticGroup.swift`):
+```swift
+struct SemanticGroup: Identifiable, Sendable {
+    let id: UUID
+    let category: SemanticCategory
+    let assets: [PHAsset]
+}
+enum SemanticCategory: String, CaseIterable, Sendable {
+    case foodAndDrink, petsAndAnimals, natureOutdoors, documentsReceipts, architecture, vehicles
+    var icon: String { ... }
+    var classifierIdentifiers: [String] { ... }  // VNClassifyImageRequest identifier prefixes
+}
+```
+
 **`UserDecision`** (`Store/UserDecisionStore.swift`):
 ```swift
 struct UserDecision: Codable, Sendable {
@@ -179,6 +194,7 @@ struct UserDecision: Codable, Sendable {
 | `SmartPicksResultsView` | `Views/Photos/SmartPicksResultsView.swift` | 3-col grid of low-quality photos sorted by quality score (ascending). Color-coded quality score badge per cell: red (<0.2), orange (<0.35), gold otherwise. Individual delete free; bulk delete paid. Yellow/gold accent theme. `PhotoQualityAnalyzer.shared.qualityScore(for:)` loaded per cell after thumbnail. |
 | `EventRollResultsView` | `Views/Photos/EventRollResultsView.swift` | List of event rolls with 3-photo thumbnail strip, location name, same-day vs multi-day date range text. `optional-binding navigationDestination` pushes `RollDetailView`. Cross-level `@Binding deletedAssetIDs` propagated parent → detail for optimistic deletion. Bulk delete in detail paid. |
 | `VideoGroupResultsView` | `Views/Photos/VideoGroupResultsView.swift` | Accordion expandable group rows (`expandedGroupID: UUID?`). `VideoThumbnailCell` with m:ss duration badge and per-size cache key. "Keep Largest, Delete Rest" action (`assets.dropFirst()`). Two-level optimistic deletion (`deletedAssetIDs` + `deletedGroupIDs`; hide group when < 2 remain). `Keep`/`Delete` conditional Capsule badge (idx == 0 = keep candidate). |
+| `SemanticResultsView` | `Views/Photos/SemanticResultsView.swift` | 3-col grid for a single `SemanticGroup`. Bulk delete paid (floating delete bar + Select All toolbar), individual delete free (context menu). `didFreeBytes` notification posted on all deletes. Optimistic local deletion via `deletedIDs`. `SemanticCell` self-loading with `_semanticCellCache` NSCache. Navigated to via `NavDest.semantic(UUID)` from `smartCategoriesSection`. |
 | `TrashSummarySheet` | `Views/Components/TrashSummarySheet.swift` | Post-delete "You freed X MB" sheet. Presented via `.onReceive(.didFreeBytes)` from HomeView. Dark theme, green checkmark, ByteCountFormatter. Presented with `presentationDetents([.medium])`. |
 
 ### HomeViewModel — key scan wiring
@@ -242,7 +258,7 @@ let similarGroups   = viewModel.photoGroups.filter { $0.reason == .visuallySimil
 | `Utilities/ImageLoader.swift` | `ImageLoader` protocol + `PHImageLoader` with shared `PHCachingImageManager` singleton |
 | `Utilities/ProgressThrottle.swift` | Thread-safe interval guard: `ProgressThrottle(every: 40).shouldReport(completed:)` |
 | `Utilities/ThreadSafeCounter.swift` | `NSLock`-based atomic counter: `.increment() -> Int` |
-| `Utilities/PhotoQualityAnalyzer.swift` | `actor PhotoQualityAnalyzer` with `.shared` singleton. `labels(for: PHAsset) async -> [PhotoQualityLabel]` — Laplacian blur, luminance, Vision face landmarks + capture quality. `qualityScore(for: PHAsset) async -> Float` — **priority order**: (1) personalized model (`Application Support/PhotoQualityClassifier_personalized.mlmodelc`, written by `MLModelUpdater`), (2) bundle model (`PhotoQualityClassifier.mlmodelc`), (3) heuristic composite. Model loading via `loadedQualityModel()` / `resolveQualityModel()` (replaces old `lazy var`). `invalidateModelCache()` called when `"mlModelDidUpdate"` notification arrives so next call picks up fresh personalized model. Results cached by asset localIdentifier. Labels: `.blurry`, `.eyesClosed`, `.underexposed`, `.overexposed`, `.lowFaceQuality`. |
+| `Utilities/PhotoQualityAnalyzer.swift` | `actor PhotoQualityAnalyzer` with `.shared` singleton. `labels(for: PHAsset) async -> [PhotoQualityLabel]` — Laplacian blur (adaptive threshold), luminance, Vision face landmarks + capture quality, saliency (`VNGenerateAttentionBasedSaliencyImageRequest` → empty `salientObjects` → `.noSubject`). `qualityScore(for: PHAsset) async -> Float` — **priority order**: (1) personalized model (`Application Support/PhotoQualityClassifier_personalized.mlmodelc`, written by `MLModelUpdater`), (2) bundle model (`PhotoQualityClassifier.mlmodelc`), (3) heuristic composite. Model loading via `loadedQualityModel()` / `resolveQualityModel()` (replaces old `lazy var`). `invalidateModelCache()` called when `"mlModelDidUpdate"` notification arrives so next call picks up fresh personalized model. Results cached by asset localIdentifier. Labels: `.blurry`, `.eyesClosed`, `.underexposed`, `.overexposed`, `.lowFaceQuality`, `.noSubject`. |
 | `Store/UserDecisionStore.swift` | `actor UserDecisionStore` with `.shared` singleton. Persists keep/delete decisions as `[UserDecision]` to `Application Support/userDecisions.json`. Ring buffer (max 500). Stores pairwise signal (keptID vs deletedIDs) + quality labels + quality scores + feature vectors captured before deletion. |
 | `Configuration/AppConfig.swift` | `AppConfig.unlockPremium: Bool` — dev paywall bypass (currently `true`) |
 | `Store/PurchaseManager.swift` | `@MainActor ObservableObject`, StoreKit 2. `isPurchased = AppConfig.unlockPremium || _isPurchased` |
@@ -306,23 +322,15 @@ ContentView (@AppStorage hasOnboarded)
 
 ### UI / polish
 - Swipe mode for Screenshots — flat `[PHAsset]` swipe UX (separate from GroupReviewView which is for photo groups)
-- iCloud-aware badge in SmartPicksResultsView / VideoGroupResultsView — `PHAsset.sourceType` check before delete; warn user if asset is iCloud-only
 - Video thumbnail preview in FileResultsView
-- Privacy Policy URL wired in SettingsView (placeholder only)
-- SemanticScanEngine HomeView cards — Food & Drink, Pets & Animals, Nature & Outdoors, Documents & Receipts (VNClassifyImageRequest categories beyond ScreenshotTagEngine)
-
-### Semantic category cards (partial — see what is done below)
-- **Food & Drink** — `VNClassifyImageRequest` "food_and_drink" bucket
-- **Pets & Animals** — `VNClassifyImageRequest` "animal" bucket
-- **Nature & Outdoors** — `VNClassifyImageRequest` "outdoor" + "nature" + "sky" + "water"
-- **Architecture / Vehicles** — separate semantic buckets
+- Privacy Policy URL: `https://photoduck.app/privacy` — update before App Store submission if URL changes
 
 (Panoramas, Portrait Mode, Live Photos, Event Rolls, Screenshot detection, and Documents/Receipts via OCR are already built.)
 
 ### Infrastructure
 - Re-scan on library change — `PHPhotoLibraryChangeObserver`
 - `ContentClassifier`, `OrganizeView`, `DailyStreakManager`
-- On-device model personalization via `MLUpdateTask` (in progress — see Phase 5)
+- On-device model personalization via `MLUpdateTask` — see Phase 5 (complete)
 
 ---
 
@@ -334,11 +342,11 @@ ContentView (@AppStorage hasOnboarded)
 |---------|----------|--------|
 | Screenshot & receipt detection | `ScreenshotTagEngine` — `VNRecognizeTextRequest` + keyword buckets → `ScreenshotTag` enum. Tags surfaced as filter pills in `ScreenshotsResultsView`. | ✅ complete |
 | Face-aware Keep Best | `PhotoQualityAnalyzer` `qualityScore(for:)` wired into `GroupReviewViewModel` reranking so `assets[0]` is best by ML/heuristic quality score, not just resolution | ✅ complete |
-| **SemanticScanEngine** | Partial — screenshot/receipt detection via `ScreenshotTagEngine` is done. Full semantic buckets (Food, Pets, Nature, etc.) not yet built as a standalone engine. | pending |
+| **SemanticScanEngine** | `SemanticScanEngine` actor — `VNClassifyImageRequest` per asset, sliding-window TaskGroup cap=4, identifier `.contains` matching against `SemanticCategory.classifierIdentifiers`. `SemanticGroup` model. `SemanticResultsView` (3-col grid, bulk delete paid, individual free, `didFreeBytes` notification). `smartCategoriesSection` in HomeView (full-width rows, only visible while scanning or when results non-empty). Wired into `fullRescan()`. | ✅ complete |
 | Metadata category cards | Panoramas (`.photoPanorama`), Portrait Mode (`.photoDepthEffect`), Live Photos (`.photoLive`) — instant from `PHFetchOptions` predicate, no engine. Wired in `HomeViewModel`. | ✅ complete |
-| Saliency-based "no subject" label | `VNGenerateAttentionBasedSaliencyImageRequest` → `.noSubject` badge in `GroupReviewView` | pending |
+| Saliency-based "no subject" label | `VNGenerateAttentionBasedSaliencyImageRequest` → `.noSubject` badge in `GroupReviewView`. Penalizes heuristic quality score by −0.15. | ✅ complete |
 | Event Roll clustering | `EventRollScanEngine` — GPS + time clustering (~1km / ~30 min), `haversineKm`, `CLGeocoder` rate-limited reverse-geocoding, `EventRollResultsView` wired into HomeView | ✅ complete |
-| Adaptive blur threshold | Normalize Laplacian variance by mean pixel brightness | pending |
+| Adaptive blur threshold | Normalize Laplacian variance by mean pixel brightness. `threshold = 80 * (0.33 + 0.67 * brightnessFactor)` — scales ~26 (dark) to 80 (bright). | ✅ complete |
 
 ### Phase 4 — New on-device ML engines (no external packages)
 
@@ -358,7 +366,6 @@ ContentView (@AppStorage hasOnboarded)
 | **Feature capture before deletion** | `GroupReviewViewModel.buildDecisions()` extracts `VNFeaturePrintObservation` + quality scores before `PHPhotoLibrary.performChanges` — stored in `UserDecision.featureVector` / `deletedFeatureVectors` | ✅ complete |
 | **Pairwise ranking signal** | `UserDecision.keptAssetID` + `deletedAssetIDs` pairwise — stronger training signal than binary labels | ✅ complete |
 | On-device model personalization | `MLModelUpdater` actor — `MLUpdateTask` fine-tunes `PhotoQualityClassifier` on kept-asset images. Requires 50+ decisions. Output: `Application Support/PhotoQualityClassifier_personalized.mlmodelc`. `PhotoQualityAnalyzer` loads it via `resolveQualityModel()` priority-1 path. | ✅ complete |
-| LLM-powered contact merge | iOS 18 on-device foundation model APIs for field-level merge decisions | pending |
 | Predictive scan scheduling | Time-series model to predict best nudge time based on scan history | pending |
 
 ### Training data strategy — all on-device, no server

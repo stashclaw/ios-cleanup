@@ -9,6 +9,7 @@ struct SettingsView: View {
 
     @State private var showRescanConfirm = false
     @State private var decisionCount: Int = 0
+    @State private var skippedGroupCount: Int = 0
 
     private let bg    = Color(red: 0.05, green: 0.05, blue: 0.08)
     private let card  = Color(white: 1, opacity: 0.05)
@@ -87,7 +88,9 @@ struct SettingsView: View {
                 }
                 Divider().overlay(stroke)
                 settingsRow(icon: "hand.raised.fill", iconColor: Color(red: 0.18, green: 0.72, blue: 0.95), title: "Privacy Policy") {
-                    // placeholder — wire to URL when available
+                    if let url = URL(string: "https://photoduck.app/privacy") {
+                        UIApplication.shared.open(url)
+                    }
                 }
                 Divider().overlay(stroke)
                 // Full rescan — bypasses incremental mode and scans entire library.
@@ -206,11 +209,40 @@ struct SettingsView: View {
                                 decisionCount = await UserDecisionStore.shared.decisionCount()
                             }
                         }
+                        Divider().overlay(stroke)
+                        HStack {
+                            Label {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Skipped Groups")
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(.white)
+                                    Text("\(skippedGroupCount) group\(skippedGroupCount == 1 ? "" : "s") hidden from review")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(Color.white.opacity(0.35))
+                                }
+                            } icon: {
+                                Image(systemName: "eye.slash")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(Color(red: 0.98, green: 0.57, blue: 0.24))
+                                    .frame(width: 28)
+                            }
+                            Spacer()
+                            if skippedGroupCount > 0 {
+                                Button("Clear") {
+                                    GroupReviewViewModel.clearSkippedGroups()
+                                    skippedGroupCount = 0
+                                }
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.red)
+                            }
+                        }
+                        .padding(16)
                     }
                 }
             }
             .task {
-                decisionCount = await UserDecisionStore.shared.decisionCount()
+                decisionCount     = await UserDecisionStore.shared.decisionCount()
+                skippedGroupCount = GroupReviewViewModel.skippedGroupCount
             }
         }
     }
