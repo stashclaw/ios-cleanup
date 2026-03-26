@@ -6,6 +6,21 @@ App name in UI: **PhotoDuck**. Bundle: `com.yourname.iOSCleanup`. iOS 16.0 minim
 
 ---
 
+## Customer obsession — non-negotiable
+
+Every feature shipped must put the customer first. Before writing any code, ask: **does this make the experience better for the person using it?**
+
+- **Never add friction.** Loading screens, confirmation dialogs, extra taps — all guilty until proven innocent. If it slows the user down, remove it.
+- **Open instantly.** The app must be usable on the first frame. Scans and heavy work run silently in the background. Cards stream results in as they arrive — never block the UI waiting for data.
+- **No surprises.** Deletes confirm. iCloud-only photos warn. But don't ask twice for the same thing.
+- **Speed is a feature.** Sluggish = broken from the customer's perspective. Background tasks use `.utility`/`.background` priority. Main thread stays free for touches.
+- **Show progress, not spinners.** When something takes time, show what's happening (scan banners, counts populating). Never show an empty state that turns into content — fade content in.
+- **Respect the photo library.** This is personal data. Be conservative: free-tier actions are always reversible (Recently Deleted recovers them). Paid bulk-delete is the power tool, not the default.
+
+When a feature feels slow, confusing, or adds a wall between the user and their goal — **change it**, regardless of how much code it took to build.
+
+---
+
 ## Phase 1 scope (complete)
 Three headless scan engines + unit tests.
 - `PhotoScanEngine`: Vision VNFeaturePrintObservation, union-find clustering
