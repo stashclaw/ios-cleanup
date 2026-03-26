@@ -6,13 +6,25 @@ import SwiftUI
 @MainActor
 final class GroupReviewViewModel: ObservableObject {
 
-    private static let cacheKey = "GroupReview_markedIDs"
-    static let skippedKey       = "GroupReview_skippedGroups"   // internal — read by PhotoResultsView
+    private static let cacheKey    = "GroupReview_markedIDs"
+    private static let completedKey = "GroupReview_completedGroups"
+    static let skippedKey           = "GroupReview_skippedGroups"   // internal — read by PhotoResultsView
 
     // MARK: - Published state
 
     @Published var queue: [PhotoGroup]
     @Published var currentIndex: Int = 0
+
+    /// Group keys that have been finalized (queued for delete). Survives clearCache() so groups
+    /// stay hidden after commitDeletes() clears markedIDs but before the library updates.
+    @Published private(set) var completedGroupKeys: Set<String> = {
+        Set(UserDefaults.standard.stringArray(forKey: completedKey) ?? [])
+    }()
+
+    /// Group keys the user explicitly skipped. Reactive so PhotoResultsView auto-updates.
+    @Published private(set) var skippedGroupKeys: Set<String> = {
+        Set(UserDefaults.standard.stringArray(forKey: skippedKey) ?? [])
+    }()
 
     /// Globally committed marks (persisted, cross-group).
     @Published var markedIDs: Set<String> {
@@ -54,11 +66,29 @@ final class GroupReviewViewModel: ObservableObject {
     // MARK: - Init
 
     init(groups: [PhotoGroup]) {
-        let skipped = Set(UserDefaults.standard.stringArray(forKey: Self.skippedKey) ?? [])
+        let skipped    = Set(UserDefaults.standard.stringArray(forKey: Self.skippedKey)    ?? [])
+        let completed  = Set(UserDefaults.standard.stringArray(forKey: Self.completedKey)  ?? [])
+        let cached     = Set(UserDefaults.standard.stringArray(forKey: Self.cacheKey)      ?? [])
+
         self.queue = groups.filter { !skipped.contains(Self.groupKey(for: $0)) }
-        let cached = UserDefaults.standard.stringArray(forKey: Self.cacheKey) ?? []
-        self._markedIDs = Published(initialValue: Set(cached))
-        if let first = self.queue.first { setup(group: first) }
+        self._markedIDs = Published(initialValue: cached)
+
+        // Advance past groups already processed (queued or fully completed) so the user
+        // resumes at the first group they haven't touched yet.
+        var startIndex = 0
+        while startIndex < self.queue.count {
+            let group = self.queue[startIndex]
+            let key   = Self.groupKey(for: group)
+            let isQueued    = group.assets.contains(where: { cached.contains($0.localIdentifier) })
+            let isCompleted = completed.contains(key)
+            guard isQueued || isCompleted else { break }
+            startIndex += 1
+        }
+        self.currentIndex = startIndex
+
+        if self.queue.indices.contains(startIndex) {
+            setup(group: self.queue[startIndex])
+        }
         Task { await rerankCurrentGroup() }
     }
 
@@ -149,6 +179,7 @@ final class GroupReviewViewModel: ObservableObject {
 
     /// Commits current group's pending marks and moves to next group.
     func queueAndAdvance() {
+        if let group = currentGroup { persistCompleted(group) }
         markedIDs.formUnion(pendingMarked)
         step()
         Task { await rerankCurrentGroup() }
@@ -163,9 +194,20 @@ final class GroupReviewViewModel: ObservableObject {
 
     private func persistSkip(_ group: PhotoGroup) {
         let key = Self.groupKey(for: group)
-        var skipped = Set(UserDefaults.standard.stringArray(forKey: Self.skippedKey) ?? [])
-        skipped.insert(key)
-        UserDefaults.standard.set(Array(skipped), forKey: Self.skippedKey)
+        skippedGroupKeys.insert(key)
+        UserDefaults.standard.set(Array(skippedGroupKeys), forKey: Self.skippedKey)
+    }
+
+    /// Removes a group from the skipped list so it reappears in the review queue.
+    func unskipGroup(_ group: PhotoGroup) {
+        let key = Self.groupKey(for: group)
+        skippedGroupKeys.remove(key)
+        UserDefaults.standard.set(Array(skippedGroupKeys), forKey: Self.skippedKey)
+    }
+
+    private func persistCompleted(_ group: PhotoGroup) {
+        completedGroupKeys.insert(Self.groupKey(for: group))
+        UserDefaults.standard.set(Array(completedGroupKeys), forKey: Self.completedKey)
     }
 
     private func step() {
@@ -363,6 +405,15 @@ final class GroupReviewViewModel: ObservableObject {
             return sum + size
         }
 
+        // Ensure every group that contributed queued assets is marked completed BEFORE
+        // clearCache() wipes markedIDs. This covers queueAll() and any other path that
+        // sets markedIDs without going through queueAndAdvance().
+        for group in queue {
+            if group.assets.contains(where: { markedIDs.contains($0.localIdentifier) }) {
+                persistCompleted(group)
+            }
+        }
+
         try await PHPhotoLibrary.shared().performChanges {
             PHAssetChangeRequest.deleteAssets(assets as NSFastEnumeration)
         }
@@ -379,6 +430,8 @@ final class GroupReviewViewModel: ObservableObject {
     func clearCache() {
         UserDefaults.standard.removeObject(forKey: Self.cacheKey)
         markedIDs = []
+        // completedGroupKeys intentionally NOT cleared — groups stay hidden until the library
+        // updates naturally, or until the user taps "Start Fresh".
     }
 
     static func clearSkippedGroups() {
@@ -391,6 +444,8 @@ final class GroupReviewViewModel: ObservableObject {
 
     func startFresh() {
         clearCache()
+        completedGroupKeys = []
+        UserDefaults.standard.removeObject(forKey: Self.completedKey)
         currentIndex = 0
         pendingMarked = []
         bestIDForCurrentGroup = nil

@@ -2,6 +2,9 @@ import Foundation
 import SwiftUI
 import Photos
 import Contacts
+import CoreImage
+import CoreImage.CIFilterBuiltins
+@preconcurrency import Vision
 
 // MARK: - Cache types (Codable surrogates for PHAsset-bearing models)
 
@@ -155,6 +158,9 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     @Published var smartPicksScanState:     ScanState = .idle
 
     @Published var smartPicks: [PHAsset] = []
+    /// Reason a photo was flagged as a wasted shot (keyed by localIdentifier).
+    /// Only set for photos added via wasted-shot detection, not quality-score candidates.
+    @Published var smartPicksReasons: [String: WastedReason] = [:]
 
     @Published var duplicateProgress:   (completed: Int, total: Int) = (0, 0)
     @Published var similarProgress:     (completed: Int, total: Int) = (0, 0)
@@ -186,6 +192,28 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     /// Persistent cumulative count of photos/videos deleted across all sessions.
     @Published var totalPhotosDeleted: Int = 0
     private let totalPhotosDeletedKey = "photoduck.totalPhotosDeleted"
+
+    /// Flat set of asset localIdentifiers belonging to reviewed (completed, skipped, or queued)
+    /// groups. Used for O(1) per-asset lookups in HomeView chip counts — avoids expensive
+    /// sort+join per render that would freeze the UI during a live scan.
+    @Published private(set) var reviewedAssetIDs: Set<String> = []
+
+    func refreshReviewedGroupKeys() {
+        let completedKeys   = Set(UserDefaults.standard.stringArray(forKey: "GroupReview_completedGroups") ?? [])
+        let skippedGroupKeys = Set(UserDefaults.standard.stringArray(forKey: GroupReviewViewModel.skippedKey) ?? [])
+        let markedIDs       = Set(UserDefaults.standard.stringArray(forKey: "GroupReview_markedIDs") ?? [])
+
+        // Start with directly-marked asset IDs, then add all assets from completed/skipped groups.
+        // groupKey computation happens here once — not on every HomeView render.
+        var assetIDs = markedIDs
+        for group in photoGroups {
+            let key = GroupReviewViewModel.groupKey(for: group)
+            if completedKeys.contains(key) || skippedGroupKeys.contains(key) {
+                group.assets.forEach { assetIDs.insert($0.localIdentifier) }
+            }
+        }
+        reviewedAssetIDs = assetIDs
+    }
 
     /// Rotated at the start of each scan. Callbacks that carry a stale ID are dropped,
     /// preventing results from an old scan from polluting a new one.
@@ -286,7 +314,9 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
             if let count = note.userInfo?["count"] as? Int, count > 0 {
                 Task { @MainActor [weak self] in self?.addPhotosDeleted(count) }
             }
+            Task { @MainActor [weak self] in self?.refreshReviewedGroupKeys() }
         }
+        refreshReviewedGroupKeys()
         libraryObserver.viewModel = self
         PHPhotoLibrary.shared().register(libraryObserver)
         // Single coordinator — handles cache load, metadata refresh, and tiered engine scan.
@@ -865,14 +895,12 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     func computeSmartPicks() async {
         smartPicksScanState = .scanning
         smartPicks = []
+        smartPicksReasons = [:]
 
+        // ── Phase 1: quality-score candidates ───────────────────────────────
         // Gather candidates: blur photos + non-best assets from photo groups
         var candidates: [PHAsset] = []
-
-        // From blur scan results (already scanned)
         candidates.append(contentsOf: blurPhotos)
-
-        // From photo groups: all assets EXCEPT assets[0] (best) in each group
         for group in photoGroups {
             candidates.append(contentsOf: group.assets.dropFirst())
         }
@@ -881,33 +909,28 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         var seen = Set<String>()
         candidates = candidates.filter { seen.insert($0.localIdentifier).inserted }
 
-        guard !candidates.isEmpty else {
-            smartPicksScanState = .done
-            return
-        }
-
         // Score all candidates concurrently (max 4 in-flight)
         var scored: [(asset: PHAsset, score: Float)] = []
-        await withTaskGroup(of: (PHAsset, Float).self) { group in
-            var nextIndex = 0
-            var inFlight = 0
-
-            while inFlight < 4, nextIndex < candidates.count {
-                let a = candidates[nextIndex]; nextIndex += 1
-                group.addTask {
-                    let score = await PhotoQualityAnalyzer.shared.qualityScore(for: a)
-                    return (a, score)
-                }
-                inFlight += 1
-            }
-
-            for await (asset, score) in group {
-                scored.append((asset, score))
-                if nextIndex < candidates.count {
+        if !candidates.isEmpty {
+            await withTaskGroup(of: (PHAsset, Float).self) { group in
+                var nextIndex = 0
+                var inFlight = 0
+                while inFlight < 4, nextIndex < candidates.count {
                     let a = candidates[nextIndex]; nextIndex += 1
                     group.addTask {
                         let score = await PhotoQualityAnalyzer.shared.qualityScore(for: a)
                         return (a, score)
+                    }
+                    inFlight += 1
+                }
+                for await (asset, score) in group {
+                    scored.append((asset, score))
+                    if nextIndex < candidates.count {
+                        let a = candidates[nextIndex]; nextIndex += 1
+                        group.addTask {
+                            let score = await PhotoQualityAnalyzer.shared.qualityScore(for: a)
+                            return (a, score)
+                        }
                     }
                 }
             }
@@ -915,10 +938,209 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
 
         // Sort ascending (lowest quality = most likely to delete)
         scored.sort { $0.score < $1.score }
+        let qualityPicks = Array(scored.prefix(200).map(\.asset))
 
-        // Take top 200 worst-quality photos
-        smartPicks = scored.prefix(200).map(\.asset)
+        // ── Phase 2: wasted-shot detection ──────────────────────────────────
+        // Read user affinity — categories deleted ≥5 times get 2× scan cap.
+        let affinityCounts = await WastedReasonAffinityStore.shared.allCounts()
+        let expandedScan = affinityCounts.values.contains { $0 >= 5 }
+        let effectiveCap = expandedScan ? 1000 : 500
+
+        let alreadyFlagged = Set(qualityPicks.map(\.localIdentifier)).union(seen)
+        let wastedAssets = await detectWastedShots(excluding: alreadyFlagged, cap: effectiveCap)
+
+        // Sort wasted shots by deletion affinity (most-deleted category first).
+        let sortedWasted = wastedAssets.sorted { a, b in
+            (affinityCounts[a.1] ?? 0) > (affinityCounts[b.1] ?? 0)
+        }
+
+        // Merge order:
+        //   1. High-affinity wasted shots (≥3 deletes) — user clearly wants these gone
+        //   2. Quality-score picks
+        //   3. Remaining wasted shots
+        var finalList: [PHAsset] = []
+        var reasons: [String: WastedReason] = [:]
+
+        for (asset, reason) in sortedWasted where (affinityCounts[reason] ?? 0) >= 3 {
+            let id = asset.localIdentifier
+            guard !alreadyFlagged.contains(id) else { continue }
+            finalList.append(asset)
+            reasons[id] = reason
+        }
+
+        let highAffinityIDs = Set(finalList.map(\.localIdentifier))
+        for asset in qualityPicks where !highAffinityIDs.contains(asset.localIdentifier) {
+            finalList.append(asset)
+        }
+
+        for (asset, reason) in sortedWasted {
+            let id = asset.localIdentifier
+            guard !alreadyFlagged.contains(id), reasons[id] == nil,
+                  !highAffinityIDs.contains(id) else { continue }
+            finalList.append(asset)
+            reasons[id] = reason
+        }
+
+        smartPicks = finalList
+        smartPicksReasons = reasons
         smartPicksScanState = .done
+    }
+
+    // MARK: - Wasted-shot detection helpers
+
+    /// Returns up to `cap` photos (from the whole library, excluding `excluding`) that are
+    /// flagged as dark shots, QR-code photos, or screen photos.
+    private func detectWastedShots(
+        excluding: Set<String>,
+        cap: Int
+    ) async -> [(PHAsset, WastedReason)] {
+        // Fetch recent photos, newest first, skip Live Photo burst sub-resources etc.
+        let opts = PHFetchOptions()
+        opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        opts.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+        let result = PHAsset.fetchAssets(with: opts)
+
+        // Build a candidate list (skip already-flagged assets)
+        var assets: [PHAsset] = []
+        result.enumerateObjects { asset, _, stop in
+            guard !excluding.contains(asset.localIdentifier) else { return }
+            assets.append(asset)
+            if assets.count >= cap { stop.pointee = true }
+        }
+
+        guard !assets.isEmpty else { return [] }
+
+        // Run detection concurrently — cap at 4 in-flight to limit memory
+        var detections: [(PHAsset, WastedReason)] = []
+        await withTaskGroup(of: (PHAsset, WastedReason)?.self) { group in
+            var nextIndex = 0
+            var inFlight = 0
+
+            while inFlight < 4, nextIndex < assets.count {
+                let a = assets[nextIndex]; nextIndex += 1
+                group.addTask { await Self.classifyWastedShot(a) }
+                inFlight += 1
+            }
+
+            for await result in group {
+                inFlight -= 1
+                if let (asset, reason) = result {
+                    detections.append((asset, reason))
+                }
+                if nextIndex < assets.count {
+                    let a = assets[nextIndex]; nextIndex += 1
+                    group.addTask { await Self.classifyWastedShot(a) }
+                    inFlight += 1
+                }
+            }
+        }
+
+        return detections
+    }
+
+    /// Classifies a single asset as a wasted shot, returning (asset, reason) or nil if not flagged.
+    private static func classifyWastedShot(_ asset: PHAsset) async -> (PHAsset, WastedReason)? {
+        // Request a small thumbnail for fast analysis
+        let image: UIImage? = await withCheckedContinuation { continuation in
+            var resumed = false
+            let opts = PHImageRequestOptions()
+            opts.deliveryMode = .fastFormat
+            opts.isNetworkAccessAllowed = false
+            opts.isSynchronous = false
+            PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: CGSize(width: 512, height: 512),
+                contentMode: .aspectFit,
+                options: opts
+            ) { img, info in
+                guard !resumed else { return }
+                if info?[PHImageResultIsDegradedKey] as? Bool == true { return }
+                resumed = true
+                continuation.resume(returning: img)
+            }
+        }
+
+        guard let image, let cgImage = image.cgImage else { return nil }
+
+        // ── Compute mean luminance once (reused across checks) ────────────────
+        var luminance: Float = 0.5  // conservative default
+        let ciImage = CIImage(cgImage: cgImage)
+        let context = CIContext(options: [.useSoftwareRenderer: false])
+        let extentVector = CIVector(x: ciImage.extent.origin.x,
+                                    y: ciImage.extent.origin.y,
+                                    z: ciImage.extent.size.width,
+                                    w: ciImage.extent.size.height)
+        if let areaAvgFilter = CIFilter(name: "CIAreaAverage",
+                                         parameters: [kCIInputImageKey: ciImage,
+                                                      kCIInputExtentKey: extentVector]),
+           let outputImage = areaAvgFilter.outputImage {
+            var bitmap = [UInt8](repeating: 0, count: 4)
+            context.render(outputImage,
+                           toBitmap: &bitmap,
+                           rowBytes: 4,
+                           bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                           format: .RGBA8,
+                           colorSpace: CGColorSpaceCreateDeviceRGB())
+            let r = Float(bitmap[0]) / 255
+            let g = Float(bitmap[1]) / 255
+            let b = Float(bitmap[2]) / 255
+            luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        }
+
+        // ── 1. Dark shot: mean luminance < 8% ────────────────────────────────
+        if luminance < 0.08 { return (asset, .darkShot) }
+
+        // ── 2. QR / Barcode ──────────────────────────────────────────────────
+        let barcodeRequest = VNDetectBarcodesRequest()
+        let barcodeHandler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        try? barcodeHandler.perform([barcodeRequest])
+        if let barcodeResults = barcodeRequest.results, !barcodeResults.isEmpty {
+            return (asset, .qrCode)
+        }
+
+        // ── 3. Screen photo ──────────────────────────────────────────────────
+        let classifyRequest = VNClassifyImageRequest()
+        let classifyHandler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        try? classifyHandler.perform([classifyRequest])
+        if let observations = classifyRequest.results {
+            let screenIdentifiers = ["television", "monitor", "screen",
+                                     "laptop", "computer", "cellular_telephone",
+                                     "desktop_computer", "notebook"]
+            for obs in observations where obs.confidence > 0.35 {
+                if screenIdentifiers.contains(where: { obs.identifier.contains($0) }) {
+                    return (asset, .screenPhoto)
+                }
+            }
+        }
+
+        // ── 4 & 5. Text-based checks (run recognition once, use for both) ────
+        let textRequest = VNRecognizeTextRequest()
+        textRequest.recognitionLevel = .fast
+        try? VNImageRequestHandler(cgImage: cgImage, options: [:]).perform([textRequest])
+        let textObservations = textRequest.results ?? []
+        let recognizedStrings = textObservations.compactMap { $0.topCandidates(1).first?.string }
+
+        // ── 4. Whiteboard / note capture: light bg + dense text + no face ─────
+        if luminance > 0.55, textObservations.count >= 6 {
+            let faceRequest = VNDetectFaceRectanglesRequest()
+            try? VNImageRequestHandler(cgImage: cgImage, options: [:]).perform([faceRequest])
+            if (faceRequest.results?.count ?? 0) == 0 {
+                return (asset, .whiteboard)
+            }
+        }
+
+        // ── 5. Meme / forwarded: watermark strings OR very dense text overlay ──
+        if !recognizedStrings.isEmpty {
+            let joined = recognizedStrings.joined(separator: " ").lowercased()
+            let watermarkKeywords = ["tiktok", "repost", "forwarded", "via @",
+                                     "share this", "follow me", "dm for credit"]
+            let hasWatermark = watermarkKeywords.contains { joined.contains($0) }
+            if hasWatermark || recognizedStrings.count >= 14 {
+                return (asset, .memeForwarded)
+            }
+        }
+
+        return nil
     }
 
     // MARK: - Video Duplicates
@@ -1269,6 +1491,7 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         eventRollScanState      = .idle
         videoDuplicateScanState = .idle
         smartPicks              = []
+        smartPicksReasons       = [:]
         smartPicksScanState     = .idle
         lastScanDate            = nil
     }

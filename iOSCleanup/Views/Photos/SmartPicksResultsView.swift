@@ -25,10 +25,41 @@ private func spIsStoredLocally(_ asset: PHAsset) -> Bool {
     return (resource.value(forKey: "locallyAvailable") as? Bool) ?? true
 }
 
+// MARK: - Filter tag
+
+private enum SmartPickFilter: Hashable {
+    case all
+    case wasted(WastedReason)
+
+    var label: String {
+        switch self {
+        case .all:               return "All"
+        case .wasted(let r):     return r.label
+        }
+    }
+
+    var icon: String? {
+        switch self {
+        case .all:               return nil
+        case .wasted(let r):     return r.icon
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .all:               return Color.white.opacity(0.7)
+        case .wasted(let r):     return r.color
+        }
+    }
+}
+
 // MARK: - Main view
 
 struct SmartPicksResultsView: View {
     let assets: [PHAsset]
+    /// Keyed by localIdentifier — only present for wasted-shot flagged photos.
+    let reasons: [String: WastedReason]
+
     @EnvironmentObject private var purchaseManager: PurchaseManager
 
     @State private var selectedAssets = Set<String>()
@@ -38,6 +69,7 @@ struct SmartPicksResultsView: View {
     @State private var showPaywall = false
     @State private var visibleCount = 60
     @State private var showICloudDeleteAlert = false
+    @State private var activeFilter: SmartPickFilter = .all
 
     private let bg = Color(red: 0.05, green: 0.05, blue: 0.08)
 
@@ -45,7 +77,33 @@ struct SmartPicksResultsView: View {
         assets.filter { !deletedIDs.contains($0.localIdentifier) }
     }
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: 3)
+    /// Assets that pass the active filter
+    private var filteredAssets: [PHAsset] {
+        switch activeFilter {
+        case .all:
+            return visibleAssets
+        case .wasted(let r):
+            return visibleAssets.filter { reasons[$0.localIdentifier] == r }
+        }
+    }
+
+    /// Which wasted reasons are present in the current visible set
+    private var presentReasons: [WastedReason] {
+        var seen = Set<WastedReason>()
+        var ordered: [WastedReason] = []
+        for asset in visibleAssets {
+            if let r = reasons[asset.localIdentifier], seen.insert(r).inserted {
+                ordered.append(r)
+            }
+        }
+        return ordered
+    }
+
+    private var availableFilters: [SmartPickFilter] {
+        [.all] + presentReasons.map { .wasted($0) }
+    }
+
+    private let columns = [GridItem(.fixed(0)), GridItem(.fixed(0)), GridItem(.fixed(0))]  // overridden below
 
     var body: some View {
         ZStack {
@@ -61,6 +119,10 @@ struct SmartPicksResultsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.red)
                                 .padding(.horizontal)
+                        }
+                        // Filter pills — only show when wasted shots are present
+                        if availableFilters.count > 1 {
+                            filterPills
                         }
                         photoGrid
                     }
@@ -78,7 +140,7 @@ struct SmartPicksResultsView: View {
                 if selectedAssets.isEmpty {
                     Button(purchaseManager.isPurchased ? "Select All" : "Select 🔒") {
                         guard purchaseManager.isPurchased else { showPaywall = true; return }
-                        visibleAssets.prefix(visibleCount).forEach {
+                        filteredAssets.prefix(visibleCount).forEach {
                             selectedAssets.insert($0.localIdentifier)
                         }
                     }
@@ -87,7 +149,7 @@ struct SmartPicksResultsView: View {
                 } else {
                     Button("Delete (\(selectedAssets.count))") {
                         guard purchaseManager.isPurchased else { showPaywall = true; return }
-                        let toDelete = visibleAssets.filter { selectedAssets.contains($0.localIdentifier) }
+                        let toDelete = filteredAssets.filter { selectedAssets.contains($0.localIdentifier) }
                         if toDelete.contains(where: { !spIsStoredLocally($0) }) {
                             showICloudDeleteAlert = true
                         } else {
@@ -117,6 +179,9 @@ struct SmartPicksResultsView: View {
         } message: {
             Text("Some selected photos are stored only in iCloud. Deleting will remove them from iCloud and all your devices, but won't free local storage on this device.")
         }
+        .onChange(of: activeFilter) { _ in
+            visibleCount = 60
+        }
     }
 
     // MARK: - Empty state
@@ -145,7 +210,7 @@ struct SmartPicksResultsView: View {
                 Text("\(visibleAssets.count)")
                     .font(.system(size: 32, weight: .bold))
                     .foregroundStyle(Color(red: 1, green: 0.8, blue: 0.2))
-                Text("low-quality photos flagged")
+                Text(heroSubtitle)
                     .font(.system(size: 13))
                     .foregroundStyle(Color.white.opacity(0.5))
             }
@@ -159,15 +224,67 @@ struct SmartPicksResultsView: View {
         .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color(white: 1, opacity: 0.08)))
     }
 
+    private var heroSubtitle: String {
+        let wastedCount = reasons.count
+        if wastedCount > 0 {
+            return "low-quality photos · \(wastedCount) wasted shots"
+        }
+        return "low-quality photos flagged"
+    }
+
+    // MARK: - Filter pills
+
+    private var filterPills: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(availableFilters, id: \.self) { filter in
+                    Button {
+                        activeFilter = filter
+                    } label: {
+                        HStack(spacing: 4) {
+                            if let icon = filter.icon {
+                                Image(systemName: icon)
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                            Text(filter.label)
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .foregroundStyle(activeFilter == filter ? .black : filter.color)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(
+                            activeFilter == filter
+                                ? filter.color
+                                : filter.color.opacity(0.12),
+                            in: Capsule()
+                        )
+                        .overlay(
+                            Capsule().strokeBorder(
+                                activeFilter == filter ? Color.clear : filter.color.opacity(0.3),
+                                lineWidth: 1
+                            )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 2)
+            .padding(.vertical, 2)
+        }
+    }
+
     // MARK: - Photo grid (3 columns)
 
     private var photoGrid: some View {
         let cardPt = _smartPicksCardPt
-        return LazyVGrid(columns: columns, spacing: 2) {
-            ForEach(visibleAssets.prefix(visibleCount), id: \.localIdentifier) { asset in
+        let fixedColumns = Array(repeating: GridItem(.fixed(cardPt), spacing: 2), count: 3)
+        return LazyVGrid(columns: fixedColumns, spacing: 2) {
+            ForEach(filteredAssets.prefix(visibleCount), id: \.localIdentifier) { asset in
                 SmartPickCell(
                     asset: asset,
+                    wastedReason: reasons[asset.localIdentifier],
                     isSelected: selectedAssets.contains(asset.localIdentifier),
+                    cellSize: cardPt,
                     onTap: {
                         if selectedAssets.contains(asset.localIdentifier) {
                             selectedAssets.remove(asset.localIdentifier)
@@ -183,12 +300,12 @@ struct SmartPicksResultsView: View {
                 .clipped()
             }
             // Progressive loading sentinel
-            if visibleCount < visibleAssets.count {
+            if visibleCount < filteredAssets.count {
                 Color.clear
                     .frame(height: 1)
                     .gridCellColumns(3)
                     .onAppear {
-                        visibleCount = min(visibleCount + 60, visibleAssets.count)
+                        visibleCount = min(visibleCount + 60, filteredAssets.count)
                     }
             }
         }
@@ -199,6 +316,7 @@ struct SmartPicksResultsView: View {
     private func deleteSingle(_ asset: PHAsset) {
         let bytes = PHAssetResource.assetResources(for: asset)
             .first.flatMap { $0.value(forKey: "fileSize") as? Int64 } ?? 0
+        let reason = reasons[asset.localIdentifier]
         Task {
             do {
                 try await PHPhotoLibrary.shared().performChanges {
@@ -206,6 +324,10 @@ struct SmartPicksResultsView: View {
                 }
                 deletedIDs.insert(asset.localIdentifier)
                 selectedAssets.remove(asset.localIdentifier)
+                // Record affinity signal so Smart Picks learns what to surface more
+                if let r = reason {
+                    await WastedReasonAffinityStore.shared.recordDeletion(reason: r)
+                }
                 NotificationCenter.default.post(
                     name: .didFreeBytes, object: nil,
                     userInfo: ["bytes": bytes, "count": 1]
@@ -221,7 +343,7 @@ struct SmartPicksResultsView: View {
     private func deleteSelected() async {
         isDeleting = true
         defer { isDeleting = false }
-        let toDelete = visibleAssets.filter { selectedAssets.contains($0.localIdentifier) }
+        let toDelete = filteredAssets.filter { selectedAssets.contains($0.localIdentifier) }
         let bytes = toDelete.reduce(Int64(0)) { sum, asset in
             let size = PHAssetResource.assetResources(for: asset)
                 .first.flatMap { $0.value(forKey: "fileSize") as? Int64 } ?? 0
@@ -233,6 +355,12 @@ struct SmartPicksResultsView: View {
             }
             toDelete.forEach { deletedIDs.insert($0.localIdentifier) }
             selectedAssets.removeAll()
+            // Record affinity signals for all wasted-reason deletions
+            for asset in toDelete {
+                if let r = reasons[asset.localIdentifier] {
+                    await WastedReasonAffinityStore.shared.recordDeletion(reason: r)
+                }
+            }
             NotificationCenter.default.post(
                 name: .didFreeBytes, object: nil,
                 userInfo: ["bytes": bytes, "count": toDelete.count]
@@ -243,11 +371,13 @@ struct SmartPicksResultsView: View {
     }
 }
 
-// MARK: - Cell (self-loading, with quality score badge)
+// MARK: - Cell (self-loading, with quality score + wasted-reason badges)
 
 private struct SmartPickCell: View {
     let asset: PHAsset
+    let wastedReason: WastedReason?
     let isSelected: Bool
+    let cellSize: CGFloat
     let onTap: () -> Void
     let onDelete: () -> Void
 
@@ -257,7 +387,7 @@ private struct SmartPickCell: View {
     @State private var isICloud = false
 
     /// Score → badge color: red (<0.2), orange (<0.35), yellow otherwise
-    private var badgeColor: Color {
+    private var scoreColor: Color {
         guard let s = qualityScore else { return Color.white.opacity(0.4) }
         if s < 0.2  { return Color(red: 1.0, green: 0.3, blue: 0.3) }
         if s < 0.35 { return Color(red: 1.0, green: 0.6, blue: 0.1) }
@@ -282,15 +412,15 @@ private struct SmartPickCell: View {
                             )
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(width: cellSize, height: cellSize)
                 .clipped()
                 .overlay(isSelected ? Color(red: 1, green: 0.8, blue: 0.2).opacity(0.3) : Color.clear)
 
-                // Quality score badge (bottom-right)
-                if let score = qualityScore {
+                // Quality score badge (bottom-right) — only shown when no wasted reason label
+                if let score = qualityScore, wastedReason == nil {
                     HStack(spacing: 3) {
                         Circle()
-                            .fill(badgeColor)
+                            .fill(scoreColor)
                             .frame(width: 6, height: 6)
                         Text(String(format: "%.1f", score))
                             .font(.system(size: 10, weight: .semibold))
@@ -303,17 +433,39 @@ private struct SmartPickCell: View {
                     .padding(5)
                 }
 
-                // iCloud badge — top-left, shown when asset is not stored locally
-                if isICloud {
+                // ── Bottom-left: wasted reason label ────────────────────────
+                if let reason = wastedReason {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            HStack(spacing: 3) {
+                                Image(systemName: reason.icon)
+                                    .font(.system(size: 9, weight: .bold))
+                                Text(reason.label)
+                                    .font(.system(size: 9, weight: .bold))
+                                    .lineLimit(1)
+                            }
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 3)
+                            .background(reason.color.opacity(0.85), in: Capsule())
+                            .padding(5)
+                            Spacer()
+                        }
+                    }
+                }
+
+                // iCloud badge — top-left when no selection; top-right when wasted label may be present
+                if isICloud && !isSelected {
                     VStack {
                         HStack {
+                            Spacer()
                             Image(systemName: "icloud")
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(.white)
                                 .padding(4)
                                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 5))
                                 .padding(5)
-                            Spacer()
                         }
                         Spacer()
                     }
@@ -340,14 +492,15 @@ private struct SmartPickCell: View {
             }
         }
         .buttonStyle(.plain)
+        .frame(width: cellSize, height: cellSize)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(
                     isSelected
                         ? Color(red: 1, green: 0.8, blue: 0.2)
-                        : Color.white.opacity(0.1),
-                    lineWidth: isSelected ? 2 : 0.5
+                        : (wastedReason != nil ? wastedReason!.color.opacity(0.4) : Color.white.opacity(0.1)),
+                    lineWidth: isSelected ? 2 : (wastedReason != nil ? 1 : 0.5)
                 )
         )
         .contextMenu {

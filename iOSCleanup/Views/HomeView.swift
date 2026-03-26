@@ -144,6 +144,7 @@ struct HomeView: View {
         }
         .onAppear {
             Task { await viewModel.fetchMetadataAssets() }
+            viewModel.refreshReviewedGroupKeys()
         }
     }
 
@@ -226,7 +227,8 @@ struct HomeView: View {
                 .environmentObject(purchaseManager)
                 .environmentObject(viewModel as HomeViewModel)
         case .smartPicks:
-            SmartPicksResultsView(assets: viewModel.smartPicks)
+            SmartPicksResultsView(assets: viewModel.smartPicks,
+                                  reasons: viewModel.smartPicksReasons)
                 .environmentObject(purchaseManager)
         case .contacts:
             ContactResultsView(matches: viewModel.contactMatches)
@@ -657,8 +659,14 @@ struct HomeView: View {
                 columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
                 spacing: 12
             ) {
-                let duplicateGroups = viewModel.photoGroups.filter { $0.reason != .visuallySimilar }
-                let similarGroups   = viewModel.photoGroups.filter { $0.reason == .visuallySimilar }
+                let duplicateGroups = viewModel.photoGroups.filter { group in
+                    group.reason != .visuallySimilar &&
+                    !group.assets.contains(where: { viewModel.reviewedAssetIDs.contains($0.localIdentifier) })
+                }
+                let similarGroups = viewModel.photoGroups.filter { group in
+                    group.reason == .visuallySimilar &&
+                    !group.assets.contains(where: { viewModel.reviewedAssetIDs.contains($0.localIdentifier) })
+                }
 
                 CategoryCard(
                     icon: "doc.on.doc",

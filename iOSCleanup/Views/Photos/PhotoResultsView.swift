@@ -21,10 +21,6 @@ struct PhotoResultsView: View {
     @State private var deletionError: String?
     @State private var activeFilter: FilterPill = .all
     @State private var visibleCount = 10
-    /// Tracks skipped keys locally so un-skipping refreshes the UI without reloading UserDefaults.
-    @State private var skippedKeys: Set<String> = {
-        Set(UserDefaults.standard.stringArray(forKey: GroupReviewViewModel.skippedKey) ?? [])
-    }()
 
     // Card dimensions derived from screen width — GeometryReader-free per CLAUDE.md
     // 16+16 outer padding + 12 gap between columns = 44pt total
@@ -70,12 +66,17 @@ struct PhotoResultsView: View {
         case .similar:        base = liveGroups.filter { $0.reason == .visuallySimilar }
         case .burst:          base = liveGroups.filter { $0.reason == .burstShot }
         }
-        // Strip skipped groups — they appear in the separate Skipped section below.
-        return base.filter { !skippedKeys.contains(GroupReviewViewModel.groupKey(for: $0)) }
+        // Strip groups that have been acted on: skipped, queued for delete, or already committed.
+        return base.filter { group in
+            let key = GroupReviewViewModel.groupKey(for: group)
+            guard !reviewVM.skippedGroupKeys.contains(key) else { return false }
+            guard !reviewVM.completedGroupKeys.contains(key) else { return false }
+            return !group.assets.contains(where: { reviewVM.markedIDs.contains($0.localIdentifier) })
+        }
     }
 
     private var skippedGroups: [PhotoGroup] {
-        liveGroups.filter { skippedKeys.contains(GroupReviewViewModel.groupKey(for: $0)) }
+        liveGroups.filter { reviewVM.skippedGroupKeys.contains(GroupReviewViewModel.groupKey(for: $0)) }
     }
 
     var body: some View {
@@ -159,6 +160,10 @@ struct PhotoResultsView: View {
             showPaywall = false
         }
         .onChange(of: activeFilter) { _ in visibleCount = 10 }
+        // Keep home chip counts in sync as the user processes groups.
+        .onChange(of: reviewVM.completedGroupKeys.count) { _ in homeViewModel.refreshReviewedGroupKeys() }
+        .onChange(of: reviewVM.skippedGroupKeys.count)   { _ in homeViewModel.refreshReviewedGroupKeys() }
+        .onChange(of: reviewVM.markedIDs.count)          { _ in homeViewModel.refreshReviewedGroupKeys() }
         .overlay(alignment: .bottom) {
             if reviewVM.markedIDs.count > 0 { floatingDeleteBar }
         }
@@ -331,8 +336,7 @@ struct PhotoResultsView: View {
                                 HStack {
                                     Spacer()
                                     Button {
-                                        GroupReviewViewModel.unskipGroup(group)
-                                        skippedKeys.remove(GroupReviewViewModel.groupKey(for: group))
+                                        reviewVM.unskipGroup(group)
                                     } label: {
                                         Label("Restore", systemImage: "arrow.uturn.backward")
                                             .font(.system(size: 11, weight: .semibold))

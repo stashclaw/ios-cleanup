@@ -74,12 +74,14 @@
 		SEMGRP000000000000001A /* SemanticGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = SEMGRP000000000000001B /* SemanticGroup.swift */; };
 		SEMRSV000000000000001A /* SemanticResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SEMRSV000000000000001B /* SemanticResultsView.swift */; };
 		USRDCS000000000000001A /* UserDecisionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = USRDCS000000000000001B /* UserDecisionStore.swift */; };
+		WRAFFY000000000000001A /* WastedReasonAffinityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = WRAFFY000000000000001B /* WastedReasonAffinityStore.swift */; };
 		VIDENG000000000000001A /* VideoDuplicateEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = VIDENG000000000000001B /* VideoDuplicateEngine.swift */; };
 		VIDGRP000000000000001A /* VideoGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = VIDGRP000000000000001B /* VideoGroup.swift */; };
 		VIDGRV000000000000001A /* VideoGroupResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = VIDGRV000000000000001B /* VideoGroupResultsView.swift */; };
 		EVENG0000000000000001A /* EventRollScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = EVENG0000000000000001B /* EventRollScanEngine.swift */; };
 		EVROLL000000000000001A /* EventRoll.swift in Sources */ = {isa = PBXBuildFile; fileRef = EVROLL000000000000001B /* EventRoll.swift */; };
 		EVRSV0000000000000001A /* EventRollResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EVRSV0000000000000001B /* EventRollResultsView.swift */; };
+		WSTRSN000000000000001A /* WastedReason.swift in Sources */ = {isa = PBXBuildFile; fileRef = WSTRSN000000000000001B /* WastedReason.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -166,9 +168,11 @@
 		SEMGRP000000000000001B /* SemanticGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SemanticGroup.swift; sourceTree = "<group>"; };
 		SEMRSV000000000000001B /* SemanticResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SemanticResultsView.swift; sourceTree = "<group>"; };
 		USRDCS000000000000001B /* UserDecisionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserDecisionStore.swift; sourceTree = "<group>"; };
+		WRAFFY000000000000001B /* WastedReasonAffinityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WastedReasonAffinityStore.swift; sourceTree = "<group>"; };
 		VIDENG000000000000001B /* VideoDuplicateEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDuplicateEngine.swift; sourceTree = "<group>"; };
 		VIDGRP000000000000001B /* VideoGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoGroup.swift; sourceTree = "<group>"; };
 		VIDGRV000000000000001B /* VideoGroupResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoGroupResultsView.swift; sourceTree = "<group>"; };
+		WSTRSN000000000000001B /* WastedReason.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WastedReason.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -261,6 +265,7 @@
 				VIDGRP000000000000001B /* VideoGroup.swift */,
 				EVROLL000000000000001B /* EventRoll.swift */,
 				CTMTC0000000000000001B /* ContactMatch.swift */,
+				WSTRSN000000000000001B /* WastedReason.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -303,6 +308,7 @@
 			children = (
 				AA000002000000000000001B /* PurchaseManager.swift */,
 				USRDCS000000000000001B /* UserDecisionStore.swift */,
+				WRAFFY000000000000001B /* WastedReasonAffinityStore.swift */,
 			);
 			path = Store;
 			sourceTree = "<group>";
@@ -497,6 +503,7 @@
 				AA00000100000000000000AA /* FileScanEngine.swift in Sources */,
 				AA000002000000000000001A /* PurchaseManager.swift in Sources */,
 				USRDCS000000000000001A /* UserDecisionStore.swift in Sources */,
+				WRAFFY000000000000001A /* WastedReasonAffinityStore.swift in Sources */,
 				BBCONFIG00000000000000001A /* AppConfig.swift in Sources */,
 				AA000003000000000000001A /* OnboardingView.swift in Sources */,
 				AA000004000000000000001A /* HomeView.swift in Sources */,
@@ -545,6 +552,7 @@
 				EVENG0000000000000001A /* EventRollScanEngine.swift in Sources */,
 				EVROLL000000000000001A /* EventRoll.swift in Sources */,
 				EVRSV0000000000000001A /* EventRollResultsView.swift in Sources */,
+				WSTRSN000000000000001A /* WastedReason.swift in Sources */,
 				CTENG0000000000000001A /* ContactScanEngine.swift in Sources */,
 				CTMTC0000000000000001A /* ContactMatch.swift in Sources */,
 				CTNMM0000000000000001A /* NameMatcher.swift in Sources */,
