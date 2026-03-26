@@ -284,14 +284,17 @@ struct ScreenshotsResultsView: View {
     // MARK: - Photo grid (3 columns, rounded square cells)
 
     private func screenshotGrid(for slice: [PHAsset], sentinel: Bool) -> some View {
-        let gap: CGFloat = 10
-        let cardW = (UIScreen.main.bounds.width - 52) / 3    // 16+16 padding + 10+10 gaps
+        let gap: CGFloat = 4
+        let cardW = (UIScreen.main.bounds.width - 32 - gap * 2) / 3   // 16+16 h-padding + 2 gaps
         let cardH = cardW * (19.5 / 9)
-        let columns = Array(repeating: GridItem(.flexible(), spacing: gap), count: 3)
+        // .fixed columns prevent scaledToFill from bleeding into adjacent cells
+        let columns = Array(repeating: GridItem(.fixed(cardW), spacing: gap), count: 3)
         return LazyVGrid(columns: columns, spacing: gap) {
             ForEach(slice, id: \.localIdentifier) { asset in
                 ScreenshotCell(
                     asset: asset,
+                    cellWidth: cardW,
+                    cellHeight: cardH,
                     isSelected: selectedAssets.contains(asset.localIdentifier),
                     tag: assetTags[asset.localIdentifier],
                     onTap: {
@@ -302,10 +305,7 @@ struct ScreenshotsResultsView: View {
                         }
                     }
                 )
-                .frame(width: cardW, height: cardH)
-                .clipped()
             }
-            // Sentinel loads the next page — only placed in the first (old) grid.
             if sentinel {
                 Color.clear
                     .frame(height: 1)
@@ -349,108 +349,91 @@ private let _screenshotCellCache: NSCache<NSString, UIImage> = {
     return c
 }()
 
-// Pixel size for a 3-column cell on any iPhone (covers 3× display).
-// @MainActor because UIScreen.main is main-actor-isolated.
-@MainActor
-private let _ssCellPixelSize: CGSize = {
-    let scale = UIScreen.main.scale
-    let cellPt: CGFloat = UIScreen.main.bounds.width / 3
-    let w = cellPt * scale
-    let h = w * (19.5 / 9)
-    return CGSize(width: w, height: h)
-}()
-
-@MainActor
-private let _ssCardWidth: CGFloat = (UIScreen.main.bounds.width - 52) / 3   // 16+16 padding + 10+10 gaps
-@MainActor
-private let _ssCardHeight: CGFloat = ((UIScreen.main.bounds.width - 52) / 3) * (19.5 / 9)
-
 private struct ScreenshotCell: View {
-    let asset: PHAsset
+    let asset:      PHAsset
+    let cellWidth:  CGFloat   // explicit pt width passed from grid
+    let cellHeight: CGFloat   // explicit pt height
     let isSelected: Bool
-    let tag: ScreenshotTag?
-    let onTap: () -> Void
+    let tag:        ScreenshotTag?
+    let onTap:      () -> Void
 
-    @State private var thumbnail: UIImage?
-    @State private var requestID: PHImageRequestID?
+    @State private var thumbnail:  UIImage?
+    @State private var requestID:  PHImageRequestID?
     @State private var isICloud = false
 
     var body: some View {
-        Button(action: onTap) {
-            ZStack(alignment: .topTrailing) {
-                Group {
-                    if let img = thumbnail {
-                        Image(uiImage: img).resizable().scaledToFill()
-                    } else {
-                        Color.duckSoftPink.opacity(0.3).overlay(ProgressView().scaleEffect(0.6))
+        ZStack(alignment: .topTrailing) {
+            // ── Image — explicit frame prevents scaledToFill overflow ──────
+            Group {
+                if let img = thumbnail {
+                    Image(uiImage: img).resizable().scaledToFill()
+                } else {
+                    Color.duckSoftPink.opacity(0.3).overlay(ProgressView().scaleEffect(0.6))
+                }
+            }
+            .frame(width: cellWidth, height: cellHeight)
+            .clipped()
+            .overlay(isSelected ? Color.duckPink.opacity(0.35) : Color.clear)
+            .contentShape(Rectangle())
+            .onTapGesture { onTap() }
+
+            // Top-right: iCloud badge or selection checkmark
+            VStack {
+                HStack {
+                    Spacer()
+                    if isICloud {
+                        Image(systemName: "icloud")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.9))
+                            .padding(.horizontal, 5).padding(.vertical, 3)
+                            .background(Color.black.opacity(0.55))
+                            .clipShape(Capsule())
+                            .padding(5)
+                    } else if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 20)).foregroundStyle(.white)
+                            .background(Circle().fill(Color.duckPink).padding(2))
+                            .padding(5)
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .overlay(isSelected ? Color.duckPink.opacity(0.35) : Color.clear)
+                Spacer()
+            }
 
-                // Top-right: iCloud badge or selection checkmark
+            if isICloud && isSelected {
                 VStack {
+                    Spacer()
                     HStack {
                         Spacer()
-                        if isICloud {
-                            Image(systemName: "icloud")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Color.white.opacity(0.9))
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 3)
-                                .background(Color.black.opacity(0.55))
-                                .clipShape(Capsule())
-                                .padding(5)
-                        } else if isSelected {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 20)).foregroundStyle(.white)
-                                .background(Circle().fill(Color.duckPink).padding(2))
-                                .padding(5)
-                        }
-                    }
-                    Spacer()
-                }
-
-                // When iCloud badge shown and item is selected, put checkmark bottom-right
-                if isICloud && isSelected {
-                    VStack {
-                        Spacer()
-                        HStack {
-                            Spacer()
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 18)).foregroundStyle(.white)
-                                .background(Circle().fill(Color.duckPink).padding(2))
-                                .padding(5)
-                        }
-                    }
-                }
-
-                // Tag badge — bottom-left corner
-                if let tag {
-                    VStack {
-                        Spacer()
-                        HStack {
-                            HStack(spacing: 3) {
-                                Image(systemName: tag.icon)
-                                    .font(.system(size: 9, weight: .medium))
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(.ultraThinMaterial)
-                            .clipShape(Capsule())
-                            .foregroundStyle(Color.secondary)
-                            Spacer()
-                        }
-                        .padding(5)
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 18)).foregroundStyle(.white)
+                            .background(Circle().fill(Color.duckPink).padding(2))
+                            .padding(5)
                     }
                 }
             }
+
+            // Tag badge — bottom-left
+            if let tag {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Image(systemName: tag.icon)
+                            .font(.system(size: 9, weight: .medium))
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Capsule())
+                            .foregroundStyle(Color.secondary)
+                        Spacer()
+                    }
+                    .padding(5)
+                }
+            }
         }
-        .buttonStyle(.plain)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(isSelected ? Color.duckPink : Color.duckSoftPink.opacity(0.3), lineWidth: isSelected ? 2 : 1))
+        .frame(width: cellWidth, height: cellHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(isSelected ? Color.duckPink : Color.duckSoftPink.opacity(0.3),
+                          lineWidth: isSelected ? 2 : 1))
         .onAppear {
             startLoading()
             isICloud = !Self.isStoredLocally(asset)
@@ -465,18 +448,20 @@ private struct ScreenshotCell: View {
     }
 
     private func startLoading() {
-        let cacheKey = asset.localIdentifier as NSString
+        let cacheKey = "\(asset.localIdentifier)_ss" as NSString
         if let cached = _screenshotCellCache.object(forKey: cacheKey) {
             thumbnail = cached
             return
         }
-        let opts = PHImageRequestOptions()
-        opts.deliveryMode = .opportunistic   // fast low-res first, then crisp
-        opts.isNetworkAccessAllowed = false
-        opts.resizeMode = .fast
+        let scale  = UIScreen.main.scale
+        let px     = CGSize(width: cellWidth * scale, height: cellHeight * scale)
+        let opts   = PHImageRequestOptions()
+        opts.deliveryMode        = .opportunistic   // low-res draft first, then full quality
+        opts.isNetworkAccessAllowed = true          // allow iCloud download for full quality
+        opts.resizeMode          = .exact
         requestID = PHImageManager.default().requestImage(
             for: asset,
-            targetSize: _ssCellPixelSize,    // correct pixel density — no upscale blur
+            targetSize: px,
             contentMode: .aspectFill,
             options: opts
         ) { image, info in
