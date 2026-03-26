@@ -324,42 +324,31 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         Task(priority: .utility)    { await self.fetchMetadataAssets() }
         Task(priority: .background) { await self.fetchStorageBreakdown() }
 
-        // ── Step 3: cache still valid? hide loading screen and bail ────────
+        // ── Step 3: reveal the app immediately — never block the user ─────
+        // Whether cache exists or not, open HomeView right now.
+        // Scans stream results into cards in the background.
+        isInitialScanReady = true
+
         let hasCachedData = !photoGroups.isEmpty || !blurPhotos.isEmpty || !screenshotAssets.isEmpty
-        if hasCachedData && !libraryChangedSinceLastScan {
-            withAnimation(.easeOut(duration: 0.4)) {
-                initialScanProgress = 1.0
-                isInitialScanReady  = true
-            }
-            return
-        }
+        if hasCachedData && !libraryChangedSinceLastScan { return }
 
-        // ── Step 4: first launch / library changed — tiered engine scan ────
+        // ── Step 4: first launch / library changed — tiered background scan ─
+        // All tiers run silently. Cards update as results arrive.
 
-        // Tier 1: pure PHFetch / FileManager (~200 ms)
-        initialScanPhase    = "Finding screenshots & files…"
-        initialScanProgress = 0.20
+        // Tier 1: pure PHFetch / FileManager — completes in ~200 ms
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.scanScreenshots() }
             group.addTask { await self.scanFiles() }
             group.addTask { await self.scanLargePhotos() }
         }
-        initialScanProgress = 0.45
 
-        // Tier 2: Laplacian blur + dHash duplicates (1–3 s)
-        initialScanPhase    = "Analyzing photos…"
+        // Tier 2: Laplacian blur + dHash duplicates
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.scanBlur() }
             group.addTask { await self.scanPhotos() }
         }
 
-        // Tiers 1+2 done — enough to show a useful HomeView. Reveal the app.
-        withAnimation(.easeOut(duration: 0.5)) {
-            initialScanProgress = 1.0
-            isInitialScanReady  = true
-        }
-
-        // Tier 3: heavy Vision / ML / geocoder — background, never blocks UI
+        // Tier 3: heavy Vision / ML / geocoder at background priority
         await Task(priority: .background) {
             await withTaskGroup(of: Void.self) { group in
                 group.addTask { await self.scanSemantic() }
