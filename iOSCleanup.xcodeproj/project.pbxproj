@@ -21,6 +21,7 @@
 		AA000002000000000000002A /* iOSCleanup.storekit in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000002B /* iOSCleanup.storekit */; };
 		AA000003000000000000001A /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000003000000000000001B /* OnboardingView.swift */; };
 		AA000004000000000000001A /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000004000000000000001B /* HomeView.swift */; };
+		BBLOAD001000000000000001 /* InitialLoadingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBLOAD001000000000000002 /* InitialLoadingView.swift */; };
 		AA000004000000000000002A /* HomeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000004000000000000002B /* HomeViewModel.swift */; };
 		AA000005000000000000001A /* PaywallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000005000000000000001B /* PaywallView.swift */; };
 		AA000006000000000000001A /* PhotoResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000006000000000000001B /* PhotoResultsView.swift */; };
@@ -109,6 +110,7 @@
 		AA000002000000000000002B /* iOSCleanup.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = iOSCleanup.storekit; sourceTree = "<group>"; };
 		AA000003000000000000001B /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		AA000004000000000000001B /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		BBLOAD001000000000000002 /* InitialLoadingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InitialLoadingView.swift; sourceTree = "<group>"; };
 		AA000004000000000000002B /* HomeViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeViewModel.swift; sourceTree = "<group>"; };
 		AA000005000000000000001B /* PaywallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaywallView.swift; sourceTree = "<group>"; };
 		AA000006000000000000001B /* PhotoResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoResultsView.swift; sourceTree = "<group>"; };
@@ -319,6 +321,7 @@
 			children = (
 				AA000003000000000000001B /* OnboardingView.swift */,
 				AA000004000000000000001B /* HomeView.swift */,
+				BBLOAD001000000000000002 /* InitialLoadingView.swift */,
 				AA000004000000000000002B /* HomeViewModel.swift */,
 				AA000005000000000000001B /* PaywallView.swift */,
 				CCSET0000000000000001B /* SettingsView.swift */,
@@ -497,6 +500,7 @@
 				BBCONFIG00000000000000001A /* AppConfig.swift in Sources */,
 				AA000003000000000000001A /* OnboardingView.swift in Sources */,
 				AA000004000000000000001A /* HomeView.swift in Sources */,
+				BBLOAD001000000000000001 /* InitialLoadingView.swift in Sources */,
 				AA000004000000000000002A /* HomeViewModel.swift in Sources */,
 				AA000005000000000000001A /* PaywallView.swift in Sources */,
 				CCSET0000000000000001A /* SettingsView.swift in Sources */,

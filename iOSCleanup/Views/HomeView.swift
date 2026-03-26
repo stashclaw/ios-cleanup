@@ -17,7 +17,21 @@ struct HomeView: View {
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        coreStack
+        ZStack {
+            coreStack
+
+            // Loading overlay — shown only on first launch / no-cache builds.
+            // Fades out automatically once Tier 1+2 engines finish.
+            if !viewModel.isInitialScanReady {
+                InitialLoadingView(
+                    progress: viewModel.initialScanProgress,
+                    phase: viewModel.initialScanPhase
+                )
+                .transition(.opacity)
+                .zIndex(100)
+            }
+        }
+        .animation(.easeOut(duration: 0.5), value: viewModel.isInitialScanReady)
             // Phase 2 nav observers (split to avoid type-checker timeout)
             .onChange(of: viewModel.eventRolls.count) { count in
                 guard pendingNav == .eventRolls, count > 0 else { return }

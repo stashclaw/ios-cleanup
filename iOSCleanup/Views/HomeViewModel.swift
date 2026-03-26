@@ -205,6 +205,15 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     /// HomeView uses this to show a "New photos detected" nudge.
     @Published var libraryChangedSinceLastScan: Bool = false
 
+    // MARK: - Initial-scan loading screen
+    /// false until either (a) valid cache is loaded or (b) Tier 1+2 engines complete.
+    /// HomeView shows an opaque loading overlay while this is false.
+    @Published var isInitialScanReady: Bool = false
+    /// 0.0 → 1.0 progress for the loading screen.
+    @Published var initialScanProgress: Double = 0
+    /// Human-readable phase shown under the progress bar.
+    @Published var initialScanPhase: String = "Starting up…"
+
     private let libraryObserver = LibraryChangeObserver()
 
     /// Total count of ALL assets in the photo library (photos + videos + screenshots).
@@ -294,40 +303,62 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     ///     Tier 1 (PHFetch only, ~200 ms) → Tier 2 (blur/dHash, 1–3 s) → Tier 3 (Vision/ML, background)
     private func autoScanOnLaunch() async {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        guard status == .authorized || status == .limited else { return }
+        guard status == .authorized || status == .limited else {
+            isInitialScanReady = true   // no permission — skip loading screen
+            return
+        }
 
         // ── Step 1: load cache off the main thread ─────────────────────────
+        initialScanPhase    = "Loading saved results…"
+        initialScanProgress = 0.05
         await Task.detached(priority: .userInitiated) { [weak self] in
             await self?.loadCacheOffMain()
         }.value
 
-        // ── Step 2: refresh metadata counts in parallel (no sequential await) ─
+        // ── Step 2: refresh metadata counts in parallel ────────────────────
+        initialScanPhase    = "Checking library…"
+        initialScanProgress = 0.10
         async let cnt:   Void = refreshTotalLibraryCount()
         async let meta:  Void = fetchMetadataAssets()
         async let store: Void = fetchStorageBreakdown()
         _ = await (cnt, meta, store)
 
-        // ── Step 3: cache still valid? nothing more to do ─────────────────
+        // ── Step 3: cache still valid? hide loading screen and bail ────────
         let hasCachedData = !photoGroups.isEmpty || !blurPhotos.isEmpty || !screenshotAssets.isEmpty
-        if hasCachedData && !libraryChangedSinceLastScan { return }
+        if hasCachedData && !libraryChangedSinceLastScan {
+            withAnimation(.easeOut(duration: 0.4)) {
+                initialScanProgress = 1.0
+                isInitialScanReady  = true
+            }
+            return
+        }
 
-        // ── Step 4: tiered engine scan — fast cards appear first ───────────
+        // ── Step 4: first launch / library changed — tiered engine scan ────
 
-        // Tier 1: pure PHFetch / FileManager (~200 ms) — populates cards almost instantly
+        // Tier 1: pure PHFetch / FileManager (~200 ms)
+        initialScanPhase    = "Finding screenshots & files…"
+        initialScanProgress = 0.20
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.scanScreenshots() }
             group.addTask { await self.scanFiles() }
             group.addTask { await self.scanLargePhotos() }
         }
+        initialScanProgress = 0.45
 
         // Tier 2: Laplacian blur + dHash duplicates (1–3 s)
+        initialScanPhase    = "Analyzing photos…"
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.scanBlur() }
             group.addTask { await self.scanPhotos() }
         }
 
-        // Tier 3: heavy Vision / ML / geocoder — run at background priority so
-        // the UI stays fluid while these stream in.
+        // Tiers 1+2 done — enough to show a useful HomeView. Reveal the app.
+        withAnimation(.easeOut(duration: 0.5)) {
+            initialScanProgress = 1.0
+            isInitialScanReady  = true
+        }
+
+        // Tier 3: heavy Vision / ML / geocoder — background, never blocks UI
         await Task(priority: .background) {
             await withTaskGroup(of: Void.self) { group in
                 group.addTask { await self.scanSemantic() }
