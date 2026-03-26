@@ -13,6 +13,7 @@ struct BlurResultsView: View {
     @State private var showPaywall = false
     @State private var visibleCount = 60
     @State private var showICloudDeleteAlert = false
+    @State private var previewAsset: PHAsset? = nil   // full-screen preview
 
     var body: some View {
         Group {
@@ -73,6 +74,9 @@ struct BlurResultsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .purchaseDidSucceed)) { _ in
             showPaywall = false
         }
+        .fullScreenCover(item: $previewAsset) { asset in
+            BlurFullScreenView(asset: asset)
+        }
         .confirmationDialog(
             "Some photos are stored in iCloud",
             isPresented: $showICloudDeleteAlert,
@@ -112,15 +116,17 @@ struct BlurResultsView: View {
     // MARK: - Photo grid (3 columns, rounded square cells)
 
     private var photoGrid: some View {
-        let gap: CGFloat = 10
-        let cardPt = (UIScreen.main.bounds.width - 52) / 3   // 16+16 padding + 10+10 gaps
-        let columns = Array(repeating: GridItem(.flexible(), spacing: gap), count: 3)
+        let gap: CGFloat = 4
+        let cardPt = (UIScreen.main.bounds.width - 32 - gap * 2) / 3   // 16+16 h-padding + 2 gaps
+        let columns = Array(repeating: GridItem(.fixed(cardPt), spacing: gap), count: 3)
         return LazyVGrid(columns: columns, spacing: gap) {
             ForEach(assets.prefix(visibleCount), id: \.localIdentifier) { asset in
                 BlurPhotoCell(
                     asset: asset,
+                    cellSize: cardPt,
                     isSelected: selectedAssets.contains(asset.localIdentifier),
-                    onTap: {
+                    onTap: { previewAsset = asset },   // tap = full-screen preview
+                    onSelect: {                         // long-press = toggle selection
                         if selectedAssets.contains(asset.localIdentifier) {
                             selectedAssets.remove(asset.localIdentifier)
                         } else {
@@ -128,8 +134,6 @@ struct BlurResultsView: View {
                         }
                     }
                 )
-                .frame(height: cardPt)
-                .clipped()
             }
             if visibleCount < assets.count {
                 Color.clear.frame(height: 1).gridCellColumns(3)
@@ -162,7 +166,7 @@ struct BlurResultsView: View {
     }
 }
 
-// MARK: - Cell (self-loading)
+// MARK: - Cell cache + size constants
 
 private let _blurCellCache: NSCache<NSString, UIImage> = {
     let c = NSCache<NSString, UIImage>()
@@ -171,90 +175,90 @@ private let _blurCellCache: NSCache<NSString, UIImage> = {
     return c
 }()
 
-@MainActor
-private let _blurCellPx: CGFloat = {
-    let scale = UIScreen.main.scale
-    return ((UIScreen.main.bounds.width - 32 - 20) / 3) * scale  // 16pt padding × 2, 10pt gap × 2
-}()
-
-@MainActor
-private let _blurCardPt: CGFloat = (UIScreen.main.bounds.width - 52) / 3  // 16+16 padding + 10+10 gaps
+// MARK: - Cell
 
 private struct BlurPhotoCell: View {
     let asset: PHAsset
+    let cellSize: CGFloat    // explicit pt side-length (square) passed from grid
     let isSelected: Bool
-    let onTap: () -> Void
+    let onTap: () -> Void    // single tap → full-screen preview
+    let onSelect: () -> Void // long press → toggle selection
 
     @State private var thumbnail: UIImage?
     @State private var requestID: PHImageRequestID?
     @State private var isICloud = false
 
     var body: some View {
-        Button(action: onTap) {
-            ZStack(alignment: .topTrailing) {
-                Group {
-                    if let img = thumbnail {
-                        Image(uiImage: img).resizable().scaledToFill()
-                    } else {
-                        Color.duckSoftPink.opacity(0.3).overlay(ProgressView().scaleEffect(0.6))
+        ZStack(alignment: .topTrailing) {
+            // ── Image ──────────────────────────────────────────────────────
+            Group {
+                if let img = thumbnail {
+                    Image(uiImage: img)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Color.duckSoftPink.opacity(0.3)
+                        .overlay(ProgressView().scaleEffect(0.6))
+                }
+            }
+            // Explicit fixed frame prevents scaledToFill from bleeding into
+            // adjacent columns (the root cause of the overlap bug).
+            .frame(width: cellSize, height: cellSize)
+            .clipped()
+            .overlay(isSelected ? Color.duckPink.opacity(0.35) : Color.clear)
+
+            // ── Badges ─────────────────────────────────────────────────────
+            VStack {
+                HStack {
+                    Spacer()
+                    if isICloud {
+                        Image(systemName: "icloud")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.9))
+                            .padding(.horizontal, 5).padding(.vertical, 3)
+                            .background(Color.black.opacity(0.55))
+                            .clipShape(Capsule())
+                            .padding(5)
+                    } else if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 20)).foregroundStyle(.white)
+                            .background(Circle().fill(Color.duckPink).padding(2))
+                            .padding(5)
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .overlay(isSelected ? Color.duckPink.opacity(0.35) : Color.clear)
-
+                Spacer()
+            }
+            if isICloud && isSelected {
                 VStack {
+                    Spacer()
                     HStack {
                         Spacer()
-                        if isICloud {
-                            Image(systemName: "icloud")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Color.white.opacity(0.9))
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 3)
-                                .background(Color.black.opacity(0.55))
-                                .clipShape(Capsule())
-                                .padding(5)
-                        } else if isSelected {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 20)).foregroundStyle(.white)
-                                .background(Circle().fill(Color.duckPink).padding(2))
-                                .padding(5)
-                        }
-                    }
-                    Spacer()
-                }
-                // When both iCloud badge and selection checkmark need to coexist,
-                // show checkmark underneath the iCloud badge in bottom-right.
-                if isICloud && isSelected {
-                    VStack {
-                        Spacer()
-                        HStack {
-                            Spacer()
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 18)).foregroundStyle(.white)
-                                .background(Circle().fill(Color.duckPink).padding(2))
-                                .padding(5)
-                        }
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 18)).foregroundStyle(.white)
+                            .background(Circle().fill(Color.duckPink).padding(2))
+                            .padding(5)
                     }
                 }
             }
         }
-        .buttonStyle(.plain)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(isSelected ? Color.duckPink : Color.duckSoftPink.opacity(0.3), lineWidth: isSelected ? 2 : 1))
-        .onAppear {
-            load()
-            isICloud = !Self.isStoredLocally(asset)
-        }
+        .frame(width: cellSize, height: cellSize)   // outer frame locks ZStack to grid slot
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(isSelected ? Color.duckPink : Color.duckSoftPink.opacity(0.3),
+                              lineWidth: isSelected ? 2 : 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
+        .onLongPressGesture { onSelect() }
+        .onAppear { load(); isICloud = !Self.isStoredLocally(asset) }
         .onDisappear { cancel() }
     }
 
     static func isStoredLocally(_ asset: PHAsset) -> Bool {
         let resources = PHAssetResource.assetResources(for: asset)
-        guard let resource = resources.first(where: { $0.type == .photo || $0.type == .video }) else { return true }
-        return (resource.value(forKey: "locallyAvailable") as? Bool) ?? true
+        guard let r = resources.first(where: { $0.type == .photo || $0.type == .video }) else { return true }
+        return (r.value(forKey: "locallyAvailable") as? Bool) ?? true
     }
 
     private func load() {
@@ -264,21 +268,82 @@ private struct BlurPhotoCell: View {
         opts.deliveryMode = .opportunistic
         opts.isNetworkAccessAllowed = false
         opts.resizeMode = .fast
-        let px = _blurCellPx
+        let scale = UIScreen.main.scale
+        let px = cellSize * scale
         requestID = PHImageManager.default().requestImage(
             for: asset, targetSize: CGSize(width: px, height: px),
             contentMode: .aspectFill, options: opts
-        ) { image, info in
-            guard let image else { return }
+        ) { img, info in
+            guard let img else { return }
             let degraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
             if !degraded {
-                _blurCellCache.setObject(image, forKey: key, cost: Int(image.size.width * image.size.height * 4))
+                _blurCellCache.setObject(img, forKey: key,
+                                         cost: Int(img.size.width * img.size.height * 4))
             }
-            DispatchQueue.main.async { thumbnail = image }
+            DispatchQueue.main.async { thumbnail = img }
         }
     }
 
     private func cancel() {
         if let id = requestID { PHImageManager.default().cancelImageRequest(id); requestID = nil }
+    }
+}
+
+// MARK: - Full-screen photo viewer
+
+/// Conform PHAsset to Identifiable so it can drive .fullScreenCover(item:).
+extension PHAsset: @retroactive Identifiable {
+    public var id: String { localIdentifier }
+}
+
+private struct BlurFullScreenView: View {
+    let asset: PHAsset
+    @Environment(\.dismiss) private var dismiss
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let img = image {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .ignoresSafeArea()
+            } else {
+                ProgressView().tint(.white)
+            }
+            // Close button
+            VStack {
+                HStack {
+                    Spacer()
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 30))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .padding(20)
+                    }
+                }
+                Spacer()
+            }
+        }
+        .task { await loadFullRes() }
+    }
+
+    private func loadFullRes() async {
+        let opts = PHImageRequestOptions()
+        opts.deliveryMode = .opportunistic
+        opts.isNetworkAccessAllowed = true
+        opts.resizeMode = .none
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            var done = false
+            PHImageManager.default().requestImage(
+                for: asset, targetSize: PHImageManagerMaximumSize,
+                contentMode: .aspectFit, options: opts
+            ) { img, info in
+                let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+                if let img { DispatchQueue.main.async { self.image = img } }
+                if !isDegraded, !done { done = true; c.resume() }
+            }
+        }
     }
 }
