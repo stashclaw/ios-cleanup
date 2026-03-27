@@ -34,6 +34,8 @@ actor PhotoFeedbackStore {
         }
         save()
         await profileStore.rebuild(from: events)
+        // Dual-write to SQLite ML store for training data persistence
+        await PhotoMLBridge.shared.persistFeedbackEvent(event)
         return true
     }
 
@@ -51,6 +53,8 @@ actor PhotoFeedbackStore {
         }
         save()
         await profileStore.rebuild(from: events)
+        // Dual-write batch to SQLite ML store
+        await PhotoMLBridge.shared.persistFeedbackEvents(newEvents)
     }
 
     func recordSimilarGroupDecision(

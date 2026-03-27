@@ -31,8 +31,15 @@ actor PhotoScanEngine {
     static let similarityThreshold: Float = 0.16
     private let bestShotRankingService = HeuristicBestShotRankingService()
     private let similarityPolicyEngine = ConservativeSimilarityPolicyEngine()
-    private let keeperRankingService = ConservativeKeeperRankingService()
+    private let keeperRankingService: KeeperRankingService = {
+        let mlService = MLKeeperRankingService.shared
+        if mlService.isAvailable {
+            return MLEnhancedKeeperRankingService()
+        }
+        return ConservativeKeeperRankingService()
+    }()
     private let preferenceAdjustmentService = PreferenceAdjustedRecommendationService()
+    private let mlBridge = PhotoMLBridge.shared
 
     nonisolated func scan(mode: CleanupMode) -> AsyncThrowingStream<PhotoScanUpdate, Error> {
         AsyncThrowingStream { continuation in
@@ -89,6 +96,13 @@ actor PhotoScanEngine {
                                 }
                                 processed += 1
                             }
+                        }
+
+                        // Persist features + embeddings to ML store (non-blocking)
+                        let batchAssets = batch
+                        let capturedPrints = prints
+                        Task.detached(priority: .background) { [mlBridge] in
+                            await mlBridge.persistFeatures(for: batchAssets, prints: capturedPrints)
                         }
 
                         if processed == targetCount || processed % refreshStride == 0 {

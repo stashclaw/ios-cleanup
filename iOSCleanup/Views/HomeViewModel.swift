@@ -99,6 +99,7 @@ final class HomeViewModel: ObservableObject {
     private var lastPersistTime: Date = .distantPast
     private var scanStartedAt: Date?
     private let analysisCache = PhotoAnalysisCache.shared
+    private let mlBridge = PhotoMLBridge.shared
 
     init() {
         loadPersistedCleanupState()
@@ -648,8 +649,13 @@ final class HomeViewModel: ObservableObject {
             }
         )
 
-        Task(priority: .utility) { [analysisCache] in
+        let groupAssets = photoGroups.flatMap(\.assets)
+        Task(priority: .utility) { [analysisCache, mlBridge] in
             await analysisCache.saveSnapshot(snapshot)
+            // Persist photo metadata to SQLite ML store for training data
+            if !groupAssets.isEmpty {
+                await mlBridge.persistFeatures(for: groupAssets, prints: [:])
+            }
         }
     }
 
@@ -730,7 +736,20 @@ final class HomeViewModel: ObservableObject {
 
     func learningDebugSummary() async -> String {
         let lines = await PhotoFeedbackStore.shared.feedbackSummaryLines()
-        return lines.joined(separator: "\n")
+        var mlLines: [String] = []
+        do {
+            let stats = try await mlBridge.stats()
+            mlLines = [
+                "--- ML Store ---",
+                "features=\(stats.featureCount) embeddings=\(stats.embeddingCount)",
+                "pairs=\(stats.pairCount) feedback=\(stats.feedbackEventCount)",
+                "training=\(stats.trainingRowCount) (keeper=\(stats.keeperRowCount) group=\(stats.groupOutcomeRowCount))",
+                "db=\(stats.formattedSize)"
+            ]
+        } catch {
+            mlLines = ["ML Store: \(error.localizedDescription)"]
+        }
+        return (lines + mlLines).joined(separator: "\n")
     }
 
     private func loadPersistedCleanupState() {

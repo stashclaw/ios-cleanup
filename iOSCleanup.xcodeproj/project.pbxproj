@@ -70,6 +70,11 @@
 		AA00000D000000000000003A /* Nunito-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000003B /* Nunito-SemiBold.ttf */; };
 		AA00000D000000000000004A /* Nunito-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000004B /* Nunito-Bold.ttf */; };
 		AA00000D000000000000005A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000005B /* Assets.xcassets */; };
+		AA000021000000000000001A /* PhotoMLStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000021000000000000001B /* PhotoMLStore.swift */; };
+		AA000022000000000000001A /* PhotoMLBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000022000000000000001B /* PhotoMLBridge.swift */; };
+		AA000023000000000000001A /* MLEnhancedKeeperRankingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000023000000000000001B /* MLEnhancedKeeperRankingService.swift */; };
+		AA000024000000000000001A /* PhotoMLStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000024000000000000001B /* PhotoMLStoreTests.swift */; };
+		AA000025000000000000001A /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000025000000000000001B /* libsqlite3.tbd */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -149,6 +154,11 @@
 		AA00000E000000000000001B /* UndoToast.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UndoToast.swift; sourceTree = "<group>"; };
 		AA00000E000000000000002B /* DeletionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeletionManager.swift; sourceTree = "<group>"; };
 		AA00000E000000000000003B /* PhotoDeletionGuardrails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoDeletionGuardrails.swift; sourceTree = "<group>"; };
+		AA000021000000000000001B /* PhotoMLStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoMLStore.swift; sourceTree = "<group>"; };
+		AA000022000000000000001B /* PhotoMLBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoMLBridge.swift; sourceTree = "<group>"; };
+		AA000023000000000000001B /* MLEnhancedKeeperRankingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLEnhancedKeeperRankingService.swift; sourceTree = "<group>"; };
+		AA000024000000000000001B /* PhotoMLStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoMLStoreTests.swift; sourceTree = "<group>"; };
+		AA000025000000000000001B /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -159,6 +169,7 @@
 				AA00000100000000000000BA /* Photos.framework in Frameworks */,
 				AA00000100000000000000CA /* Contacts.framework in Frameworks */,
 				AA00000100000000000000DA /* Vision.framework in Frameworks */,
+				AA000025000000000000001A /* libsqlite3.tbd in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -200,6 +211,7 @@
 				AA0000010000000000000111 /* SimilarityPolicyTests.swift */,
 				AA00001D000000000000001B /* PreferenceAdjustedRecommendationTests.swift */,
 				AA00001B000000000000001B /* PhotoFeedbackLearningTests.swift */,
+				AA000024000000000000001B /* PhotoMLStoreTests.swift */,
 			);
 			path = iOSCleanupTests;
 			sourceTree = "<group>";
@@ -231,6 +243,9 @@
 				AA000009000000000000001B /* VideoCompressionEngine.swift */,
 				AA00000E000000000000002B /* DeletionManager.swift */,
 				AA00000E000000000000003B /* PhotoDeletionGuardrails.swift */,
+				AA000021000000000000001B /* PhotoMLStore.swift */,
+				AA000022000000000000001B /* PhotoMLBridge.swift */,
+				AA000023000000000000001B /* MLEnhancedKeeperRankingService.swift */,
 			);
 			path = Engines;
 			sourceTree = "<group>";
@@ -276,6 +291,7 @@
 				AA00000100000000000000BB /* Photos.framework */,
 				AA00000100000000000000CB /* Contacts.framework */,
 				AA00000100000000000000DB /* Vision.framework */,
+				AA000025000000000000001B /* libsqlite3.tbd */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -507,6 +523,9 @@
 				AA00000F000000000000002A /* PhotoDuckShellView.swift in Sources */,
 				AA00000F000000000000003A /* Color+PhotoDuck.swift in Sources */,
 				AA00000F000000000000004A /* PHAsset+FileSize.swift in Sources */,
+				AA000021000000000000001A /* PhotoMLStore.swift in Sources */,
+				AA000022000000000000001A /* PhotoMLBridge.swift in Sources */,
+				AA000023000000000000001A /* MLEnhancedKeeperRankingService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -521,6 +540,7 @@
 				AA0000010000000000000110 /* SimilarityPolicyTests.swift in Sources */,
 				AA00001D000000000000001A /* PreferenceAdjustedRecommendationTests.swift in Sources */,
 				AA00001B000000000000001A /* PhotoFeedbackLearningTests.swift in Sources */,
+				AA000024000000000000001A /* PhotoMLStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

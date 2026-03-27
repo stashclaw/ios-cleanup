@@ -36,7 +36,11 @@ All engines conform to the actor model — no shared mutable state across thread
 | `FileScanEngine` | `PHAsset` video enumeration + `FileManager` to surface large files (>50 MB). |
 | `VideoCompressionEngine` | `AVAssetExportSession` actor; emits `AsyncStream<CompressionEvent>`. |
 | `DeletionManager` | Wraps `PHPhotoLibrary.performChanges`. Provides 5-second undo window before committing. |
-| `SimilarReviewServices` | Heuristic best-shot ranking (resolution 34%, framing 22%, recency/favorites/burst bonuses). No ML model — weights are hand-tuned. |
+| `SimilarReviewServices` | Heuristic best-shot ranking (resolution 34%, framing 22%, recency/favorites/burst bonuses). Heuristic baseline, enhanced by ML when model is bundled. |
+| `PhotoMLStore` | SQLite-backed (`libsqlite3`) feature store for ML training data. Tables: `photo_features`, `pairwise_similarity`, `feedback_events`, `training_rows`. CSV export for CreateML. Located at `Application Support/PhotoDuck/ml/photoduck-ml.sqlite`. |
+| `PhotoMLBridge` | Bridges domain types ↔ SQLite records. Extracts VNFeaturePrintObservation as raw `Data`. Exports training CSVs + raw DB to Documents for AirDrop/Finder. |
+| `MLEnhancedKeeperRankingService` | Wraps `ConservativeKeeperRankingService` with CoreML predictions (60% heuristic / 40% ML blend). Auto-falls back to heuristics when no model is bundled. |
+| `SimilarityCoreMLClassifier` | `MLKeeperRankingService` + `MLGroupActionService` — loads `PhotoDuckKeeper.mlmodelc` and `PhotoDuckGroupAction.mlmodelc` from app bundle. `MLFeatureProvider` adapters for both. |
 
 ### ViewModel layer (`Views/`)
 - **`HomeViewModel`** (`@MainActor ObservableObject`) — owns all three engines and the cleanup dashboard. Persists scan state to `UserDefaults` under key `photoduck.cleanup-state.v2` as JSON. Tracks freshness with `CleanupResultsFreshnessState` (`.live` / `.lastKnown` / `.stale`).
@@ -65,5 +69,37 @@ StoreKit 2, non-consumable ID `com.yourname.iOSCleanup.unlock`. Stored in `@AppS
 - **No external packages** — zero Swift Package Manager dependencies by design.
 - **`PHImageManager.requestImage` with `.fastFormat`** can fire the completion handler twice (degraded first, then final). Always guard with `PHImageResultIsDegradedKey` before resuming a `CheckedContinuation`.
 - **Phase 1 engine files must not be modified** — only `Models/` may be extended. The seam for future AI best-shot is in `SimilarReviewServices`.
-- **Similarity threshold** is `PhotoScanEngine.similarityThreshold = 0.12` (distance, not score). Near-duplicate cutoff is `0.05`.
-- Tests cover clustering logic and threshold boundaries only — no live `PHAsset` tests exist.
+- **Similarity threshold** is `PhotoScanEngine.similarityThreshold = 0.16` (distance, not score). Near-duplicate cutoff is `0.05`.
+- Tests cover clustering logic, threshold boundaries, and ML store operations — no live `PHAsset` tests exist.
+- **Build simulator**: `iPhone 17 Pro` (iPhone 16 not available on this machine).
+
+## ML Training Pipeline
+
+### On-device data collection (automatic)
+Every scan persists Vision embeddings + photo metadata to SQLite. Every keep/delete/skip decision dual-writes to SQLite via `PhotoMLBridge`. Data lives at `Application Support/PhotoDuck/ml/photoduck-ml.sqlite`.
+
+### Export from device
+The app writes to `Documents/PhotoDuck-ML-Export/`:
+- `keeper_ranking_training.csv` — per-asset training rows
+- `group_outcome_training.csv` — per-group training rows
+- `training_stats.json` — collection summary
+- `photoduck-ml.sqlite` — raw database copy
+
+### Train on Mac (10GB workspace)
+```bash
+cd MLTraining
+swift TrainKeeperModel.swift /path/to/PhotoDuck-ML-Export
+```
+Outputs `trained-models/PhotoDuckKeeper.mlmodel` + `PhotoDuckGroupAction.mlmodel`.
+
+### Compile & bundle
+```bash
+xcrun coremlcompiler compile trained-models/PhotoDuckKeeper.mlmodel .
+xcrun coremlcompiler compile trained-models/PhotoDuckGroupAction.mlmodel .
+```
+Drop `.mlmodelc` directories into Xcode project. On next launch, `MLEnhancedKeeperRankingService` picks them up automatically.
+
+### Storage budget
+- Embedding per photo: 512 bytes (128 floats × 4 bytes)
+- Metadata per photo: ~200 bytes
+- 50K photos ≈ 35 MB. 10GB budget = ~14M photos of headroom.
