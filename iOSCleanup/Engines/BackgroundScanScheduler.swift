@@ -75,6 +75,9 @@ enum BackgroundScanScheduler {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status == .authorized || status == .limited else { return }
 
+        // Clear any stale pending notification before posting a new one.
+        NotificationManager.clearPendingNotifications()
+
         // Run the three main photo scan engines and write results to the shared cache.
         // HomeViewModel reads from this cache on next foreground launch.
         let cacheManager = BackgroundScanCacheWriter()

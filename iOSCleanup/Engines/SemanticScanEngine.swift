@@ -10,7 +10,7 @@ enum SemanticScanEvent: Sendable {
 actor SemanticScanEngine {
 
     private static let confidenceThreshold: Float = 0.4
-    private static let maxInFlight: Int = 4
+    private static let maxInFlight = min(ProcessInfo.processInfo.activeProcessorCount, 8)
     private static let progressInterval: Int = 40
 
     nonisolated func scan() -> AsyncThrowingStream<SemanticScanEvent, Error> {
@@ -20,19 +20,46 @@ actor SemanticScanEngine {
                     let assets = try await self.fetchAssets()
                     let total = assets.count
 
+                    // --- SQLite cache: load fresh semantic classifications ---
+                    var modDates: [String: Date] = [:]
+                    modDates.reserveCapacity(assets.count)
+                    for a in assets { modDates[a.localIdentifier] = a.modificationDate }
+
+                    let cached = await AnalysisCacheStore.shared.fetchFreshAnalyses(
+                        for: assets.map(\.localIdentifier),
+                        currentModDates: modDates
+                    )
+
                     // Accumulate results: category → [PHAsset]
                     var buckets: [SemanticCategory: [PHAsset]] = [:]
                     for cat in SemanticCategory.allCases { buckets[cat] = [] }
 
-                    var completed = 0
+                    var uncachedAssets: [PHAsset] = []
+
+                    for a in assets {
+                        if let hit = cached[a.localIdentifier], let catStr = hit.semanticCategory,
+                           let cat = SemanticCategory(rawValue: catStr) {
+                            buckets[cat, default: []].append(a)
+                        } else {
+                            uncachedAssets.append(a)
+                        }
+                    }
+
+                    let cachedCount = total - uncachedAssets.count
+                    if cachedCount > 0 {
+                        continuation.yield(.progress(completed: cachedCount, total: total))
+                    }
+
+                    let counter = ThreadSafeCounter()
+                    var newResults: [(identifier: String, modDate: Date, category: String)] = []
 
                     await withTaskGroup(of: (PHAsset, SemanticCategory?).self) { group in
                         var nextIndex = 0
                         var inFlight = 0
 
                         // Prime the pump
-                        while inFlight < Self.maxInFlight, nextIndex < assets.count {
-                            let a = assets[nextIndex]; nextIndex += 1
+                        while inFlight < Self.maxInFlight, nextIndex < uncachedAssets.count {
+                            let a = uncachedAssets[nextIndex]; nextIndex += 1
                             group.addTask { await self.classify(asset: a) }
                             inFlight += 1
                         }
@@ -42,18 +69,27 @@ actor SemanticScanEngine {
 
                             if let category {
                                 buckets[category, default: []].append(asset)
+                                if let mod = modDates[asset.localIdentifier] {
+                                    newResults.append((identifier: asset.localIdentifier, modDate: mod, category: category.rawValue))
+                                }
                             }
 
-                            completed += 1
+                            let completed = counter.increment() + cachedCount
                             if completed % Self.progressInterval == 0 || completed == total {
                                 continuation.yield(.progress(completed: completed, total: total))
+                                await Task.yield()
                             }
 
-                            if nextIndex < assets.count {
-                                let a = assets[nextIndex]; nextIndex += 1
+                            if nextIndex < uncachedAssets.count {
+                                let a = uncachedAssets[nextIndex]; nextIndex += 1
                                 group.addTask { await self.classify(asset: a) }
                             }
                         }
+                    }
+
+                    // Persist newly computed classifications to SQLite
+                    if !newResults.isEmpty {
+                        await AnalysisCacheStore.shared.upsertSemanticCategories(newResults)
                     }
 
                     // Build non-empty groups, sorted by asset count descending
@@ -93,39 +129,39 @@ actor SemanticScanEngine {
         let image = await requestThumbnail(for: asset)
         guard let cgImage = image?.cgImage else { return (asset, nil) }
 
-        let request = VNClassifyImageRequest()
-        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        let bestCategory: SemanticCategory? = autoreleasepool {
+            let request = VNClassifyImageRequest()
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
 
-        do {
-            try handler.perform([request])
-        } catch {
-            return (asset, nil)
-        }
+            do {
+                try handler.perform([request])
+            } catch {
+                return nil
+            }
 
-        guard let observations = request.results, !observations.isEmpty else {
-            return (asset, nil)
-        }
+            guard let observations = request.results, !observations.isEmpty else {
+                return nil
+            }
 
-        // Find the highest-confidence observation that maps to one of our categories.
-        // VNClassifyImageRequest returns observations sorted by confidence descending,
-        // so we scan in order and stop at the first identifier that matches a category.
-        var bestCategory: SemanticCategory? = nil
-        var bestConfidence: Float = Self.confidenceThreshold
+            // Find the highest-confidence observation that maps to one of our categories.
+            var best: SemanticCategory? = nil
+            var bestConf: Float = Self.confidenceThreshold
 
-        outerLoop: for observation in observations where observation.confidence >= Self.confidenceThreshold {
-            let identifier = observation.identifier.lowercased()
-            for category in SemanticCategory.allCases {
-                for prefix in category.classifierIdentifiers {
-                    if identifier.hasPrefix(prefix) || identifier.contains(prefix) {
-                        if observation.confidence > bestConfidence {
-                            bestConfidence = observation.confidence
-                            bestCategory = category
+            for observation in observations where observation.confidence >= Self.confidenceThreshold {
+                let identifier = observation.identifier.lowercased()
+                for category in SemanticCategory.allCases {
+                    for prefix in category.classifierIdentifiers {
+                        if identifier.hasPrefix(prefix) || identifier.contains(prefix) {
+                            if observation.confidence > bestConf {
+                                bestConf = observation.confidence
+                                best = category
+                            }
+                            return best
                         }
-                        // Observations are sorted by confidence; once we match the top one, done.
-                        break outerLoop
                     }
                 }
             }
+            return best
         }
 
         return (asset, bestCategory)

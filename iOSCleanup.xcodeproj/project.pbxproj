@@ -75,6 +75,8 @@
 		SEMRSV000000000000001A /* SemanticResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SEMRSV000000000000001B /* SemanticResultsView.swift */; };
 		USRDCS000000000000001A /* UserDecisionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = USRDCS000000000000001B /* UserDecisionStore.swift */; };
 		WRAFFY000000000000001A /* WastedReasonAffinityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = WRAFFY000000000000001B /* WastedReasonAffinityStore.swift */; };
+		SQLCA0000000000000001A /* AnalysisCacheStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = SQLCA0000000000000001B /* AnalysisCacheStore.swift */; };
+		NTFMG0000000000000001A /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = NTFMG0000000000000001B /* NotificationManager.swift */; };
 		VIDENG000000000000001A /* VideoDuplicateEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = VIDENG000000000000001B /* VideoDuplicateEngine.swift */; };
 		VIDGRP000000000000001A /* VideoGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = VIDGRP000000000000001B /* VideoGroup.swift */; };
 		VIDGRV000000000000001A /* VideoGroupResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = VIDGRV000000000000001B /* VideoGroupResultsView.swift */; };
@@ -169,6 +171,8 @@
 		SEMRSV000000000000001B /* SemanticResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SemanticResultsView.swift; sourceTree = "<group>"; };
 		USRDCS000000000000001B /* UserDecisionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserDecisionStore.swift; sourceTree = "<group>"; };
 		WRAFFY000000000000001B /* WastedReasonAffinityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WastedReasonAffinityStore.swift; sourceTree = "<group>"; };
+		SQLCA0000000000000001B /* AnalysisCacheStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisCacheStore.swift; sourceTree = "<group>"; };
+		NTFMG0000000000000001B /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
 		VIDENG000000000000001B /* VideoDuplicateEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDuplicateEngine.swift; sourceTree = "<group>"; };
 		VIDGRP000000000000001B /* VideoGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoGroup.swift; sourceTree = "<group>"; };
 		VIDGRV000000000000001B /* VideoGroupResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoGroupResultsView.swift; sourceTree = "<group>"; };
@@ -280,6 +284,7 @@
 				PQANAL000000000000001B /* PhotoQualityAnalyzer.swift */,
 				CTNMM0000000000000001B /* NameMatcher.swift */,
 				CTPHN0000000000000001B /* PhoneNormalizer.swift */,
+				NTFMG0000000000000001B /* NotificationManager.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -309,6 +314,7 @@
 				AA000002000000000000001B /* PurchaseManager.swift */,
 				USRDCS000000000000001B /* UserDecisionStore.swift */,
 				WRAFFY000000000000001B /* WastedReasonAffinityStore.swift */,
+				SQLCA0000000000000001B /* AnalysisCacheStore.swift */,
 			);
 			path = Store;
 			sourceTree = "<group>";
@@ -504,6 +510,8 @@
 				AA000002000000000000001A /* PurchaseManager.swift in Sources */,
 				USRDCS000000000000001A /* UserDecisionStore.swift in Sources */,
 				WRAFFY000000000000001A /* WastedReasonAffinityStore.swift in Sources */,
+				SQLCA0000000000000001A /* AnalysisCacheStore.swift in Sources */,
+				NTFMG0000000000000001A /* NotificationManager.swift in Sources */,
 				BBCONFIG00000000000000001A /* AppConfig.swift in Sources */,
 				AA000003000000000000001A /* OnboardingView.swift in Sources */,
 				AA000004000000000000001A /* HomeView.swift in Sources */,

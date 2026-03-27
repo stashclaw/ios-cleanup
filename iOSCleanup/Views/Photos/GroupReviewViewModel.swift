@@ -207,7 +207,7 @@ final class GroupReviewViewModel: ObservableObject {
         UserDefaults.standard.set(Array(skippedGroupKeys), forKey: Self.skippedKey)
     }
 
-    private func persistCompleted(_ group: PhotoGroup) {
+    func persistCompleted(_ group: PhotoGroup) {
         completedGroupKeys.insert(Self.groupKey(for: group))
         UserDefaults.standard.set(Array(completedGroupKeys), forKey: Self.completedKey)
     }

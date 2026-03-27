@@ -167,6 +167,11 @@ struct PhotoResultsView: View {
         .onChange(of: reviewVM.completedGroupKeys.count) { _ in homeViewModel.refreshReviewedGroupKeys() }
         .onChange(of: reviewVM.skippedGroupKeys.count)   { _ in homeViewModel.refreshReviewedGroupKeys() }
         .onChange(of: reviewVM.markedIDs.count)          { _ in homeViewModel.refreshReviewedGroupKeys() }
+        // Refresh when GroupReviewView fullScreenCover dismisses — catches skips/queues
+        // that happened while PhotoResultsView was behind the cover.
+        .onChange(of: showReviewMode) { isShowing in
+            if !isShowing { homeViewModel.refreshReviewedGroupKeys() }
+        }
         .onAppear { homeViewModel.refreshReviewedGroupKeys() }
         .overlay(alignment: .bottom) {
             if reviewVM.markedIDs.count > 0 { floatingDeleteBar }
@@ -364,21 +369,24 @@ struct PhotoResultsView: View {
     // MARK: - Bulk delete
 
     private func bulkDelete() async {
-        let toDelete = liveGroups
-            .filter { selectedGroups.contains($0.id) }
-            .flatMap { Array($0.assets.dropFirst()) }
+        let affectedGroups = liveGroups.filter { selectedGroups.contains($0.id) }
+        let toDelete = affectedGroups.flatMap { Array($0.assets.dropFirst()) }
         let bytes = toDelete.reduce(Int64(0)) { sum, asset in
             let size = PHAssetResource.assetResources(for: asset)
                 .first.flatMap { $0.value(forKey: "fileSize") as? Int64 } ?? 0
             return sum + size
         }
         do {
+            // Mark groups as completed BEFORE performChanges so they stay hidden
+            // even if a library change notification fires mid-delete.
+            for group in affectedGroups {
+                reviewVM.persistCompleted(group)
+            }
             try await PHPhotoLibrary.shared().performChanges {
                 PHAssetChangeRequest.deleteAssets(toDelete as NSFastEnumeration)
             }
-            if bytes > 0 {
-                NotificationCenter.default.post(name: .didFreeBytes, object: nil, userInfo: ["bytes": bytes])
-            }
+            NotificationCenter.default.post(name: .didFreeBytes, object: nil,
+                                            userInfo: ["bytes": bytes, "count": toDelete.count])
             selectedGroups.removeAll()
             isSelectMode = false
         } catch {

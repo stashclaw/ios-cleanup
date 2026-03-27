@@ -203,7 +203,21 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     /// and PhotoResultsView's skipped section.
     @Published private(set) var skippedPhotoGroups: [PhotoGroup] = []
 
+    /// Coalescing task — multiple rapid-fire calls (from 3+ onChange handlers) are merged
+    /// into a single execution after a short delay.
+    private var pendingRefreshTask: Task<Void, Never>?
+
     func refreshReviewedGroupKeys() {
+        pendingRefreshTask?.cancel()
+        pendingRefreshTask = Task { @MainActor [weak self] in
+            // Tiny delay to coalesce rapid-fire calls from multiple .onChange handlers
+            try? await Task.sleep(nanoseconds: 16_000_000) // ~16ms = 1 frame
+            guard !Task.isCancelled, let self else { return }
+            self.performRefreshReviewedGroupKeys()
+        }
+    }
+
+    private func performRefreshReviewedGroupKeys() {
         let completedKeys    = Set(UserDefaults.standard.stringArray(forKey: GroupReviewViewModel.completedKey) ?? [])
         let skippedGroupKeys = Set(UserDefaults.standard.stringArray(forKey: GroupReviewViewModel.skippedKey)   ?? [])
         let markedAssetIDs   = Set(UserDefaults.standard.stringArray(forKey: GroupReviewViewModel.cacheKey)     ?? [])
@@ -241,6 +255,10 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
     /// Set to true when the photo library adds new assets after the last scan.
     /// HomeView uses this to show a "New photos detected" nudge.
     @Published var libraryChangedSinceLastScan: Bool = false
+
+    /// Number of new photos found by background scan or incremental foreground scan
+    /// that the user hasn't reviewed yet. Drives the NewPhotosReadyBanner in HomeView.
+    @Published var newPhotosReadyCount: Int = 0
 
     // MARK: - Initial-scan loading screen
     /// false until either (a) valid cache is loaded or (b) Tier 1+2 engines complete.
@@ -328,6 +346,7 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         refreshReviewedGroupKeys()
         libraryObserver.viewModel = self
         PHPhotoLibrary.shared().register(libraryObserver)
+        NotificationManager.clearBadge()
         // Single coordinator — handles cache load, metadata refresh, and tiered engine scan.
         Task(priority: .utility) { await autoScanOnLaunch() }
     }
@@ -363,6 +382,15 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         Task(priority: .utility)    { await self.fetchMetadataAssets() }
         Task(priority: .background) { await self.fetchStorageBreakdown() }
 
+        // ── Step 2.5: check for results deposited by the background scan ──
+        let bgNewGroups = UserDefaults.standard.integer(forKey: "photoduck.newGroupCountFromBG")
+        let bgNewBlur   = UserDefaults.standard.integer(forKey: "photoduck.newBlurCountFromBG")
+        if bgNewGroups + bgNewBlur > 0 {
+            newPhotosReadyCount = bgNewGroups + bgNewBlur
+            UserDefaults.standard.set(0, forKey: "photoduck.newGroupCountFromBG")
+            UserDefaults.standard.set(0, forKey: "photoduck.newBlurCountFromBG")
+        }
+
         // ── Step 3: reveal the app immediately — never block the user ─────
         // Whether cache exists or not, open HomeView right now.
         // Scans stream results into cards in the background.
@@ -385,6 +413,12 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.scanBlur() }
             group.addTask { await self.scanPhotos() }
+        }
+
+        // Request notification permission after first scan finds results.
+        // Deferred to this point so the user sees value before being prompted.
+        if !photoGroups.isEmpty || !blurPhotos.isEmpty {
+            Task { await NotificationManager.requestPermissionIfNeeded() }
         }
 
         // Tier 3: heavy Vision / ML / geocoder at background priority
@@ -947,13 +981,15 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
 
         // Sort ascending (lowest quality = most likely to delete)
         scored.sort { $0.score < $1.score }
-        let qualityPicks = Array(scored.prefix(200).map(\.asset))
+        let qualityPicks = Array(scored.prefix(300).map(\.asset))
+
+        await Task.yield()  // Let UI breathe between phases
 
         // ── Phase 2: wasted-shot detection ──────────────────────────────────
         // Read user affinity — categories deleted ≥5 times get 2× scan cap.
         let affinityCounts = await WastedReasonAffinityStore.shared.allCounts()
         let expandedScan = affinityCounts.values.contains { $0 >= 5 }
-        let effectiveCap = expandedScan ? 1000 : 500
+        let effectiveCap = expandedScan ? 1500 : 800
 
         let alreadyFlagged = Set(qualityPicks.map(\.localIdentifier)).union(seen)
         let wastedAssets = await detectWastedShots(excluding: alreadyFlagged, cap: effectiveCap)
@@ -990,6 +1026,20 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
             reasons[id] = reason
         }
 
+        await Task.yield()  // Let UI breathe before Phase 3
+
+        // ── Phase 3: shared / message photo detection (heuristic, no image loading) ──
+        // Run off main thread — PHAssetResource.assetResources() is synchronous and blocks.
+        let alreadyInList = Set(finalList.map(\.localIdentifier)).union(alreadyFlagged)
+        let candidatesForShared = candidates
+        let sharedPhotos = await Task.detached(priority: .utility) {
+            self.detectSharedPhotos(from: candidatesForShared, excluding: alreadyInList, cap: 200)
+        }.value
+        for (asset, reason) in sharedPhotos {
+            finalList.append(asset)
+            reasons[asset.localIdentifier] = reason
+        }
+
         smartPicks = finalList
         smartPicksReasons = reasons
         smartPicksScanState = .done
@@ -1003,29 +1053,34 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         excluding: Set<String>,
         cap: Int
     ) async -> [(PHAsset, WastedReason)] {
-        // Fetch recent photos, newest first, skip Live Photo burst sub-resources etc.
-        let opts = PHFetchOptions()
-        opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        opts.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
-        let result = PHAsset.fetchAssets(with: opts)
+        // Fetch recent photos off main thread — PHAsset.fetchAssets + enumerateObjects
+        // can take 100–500ms on 10k+ libraries and must not block UI.
+        let assets: [PHAsset] = await Task.detached(priority: .utility) {
+            let opts = PHFetchOptions()
+            opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+            opts.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+            let result = PHAsset.fetchAssets(with: opts)
 
-        // Build a candidate list (skip already-flagged assets)
-        var assets: [PHAsset] = []
-        result.enumerateObjects { asset, _, stop in
-            guard !excluding.contains(asset.localIdentifier) else { return }
-            assets.append(asset)
-            if assets.count >= cap { stop.pointee = true }
-        }
+            var list: [PHAsset] = []
+            result.enumerateObjects { asset, _, stop in
+                guard !excluding.contains(asset.localIdentifier) else { return }
+                list.append(asset)
+                if list.count >= cap { stop.pointee = true }
+            }
+            return list
+        }.value
 
         guard !assets.isEmpty else { return [] }
 
-        // Run detection concurrently — cap at 4 in-flight to limit memory
+        // Run detection concurrently — dynamic cap, yield every 40 to keep UI responsive
+        let maxInFlight = min(ProcessInfo.processInfo.activeProcessorCount, 8)
         var detections: [(PHAsset, WastedReason)] = []
+        var processedCount = 0
         await withTaskGroup(of: (PHAsset, WastedReason)?.self) { group in
             var nextIndex = 0
             var inFlight = 0
 
-            while inFlight < 4, nextIndex < assets.count {
+            while inFlight < maxInFlight, nextIndex < assets.count {
                 let a = assets[nextIndex]; nextIndex += 1
                 group.addTask { await Self.classifyWastedShot(a) }
                 inFlight += 1
@@ -1035,6 +1090,10 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
                 inFlight -= 1
                 if let (asset, reason) = result {
                     detections.append((asset, reason))
+                }
+                processedCount += 1
+                if processedCount % 40 == 0 {
+                    await Task.yield()  // Let UI breathe
                 }
                 if nextIndex < assets.count {
                     let a = assets[nextIndex]; nextIndex += 1
@@ -1070,6 +1129,9 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
         }
 
         guard let image, let cgImage = image.cgImage else { return nil }
+
+        // Wrap synchronous Vision/CIImage work in autoreleasepool to release transient buffers.
+        let syncResult: (PHAsset, WastedReason)? = autoreleasepool {
 
         // ── Compute mean luminance once (reused across checks) ────────────────
         var luminance: Float = 0.5  // conservative default
@@ -1149,7 +1211,104 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
             }
         }
 
+        // ── 6. Low light: dim but not black (0.08–0.15) ────────────────────
+        if luminance >= 0.08 && luminance < 0.15 {
+            return (asset, .lowLight)
+        }
+
         return nil
+        } // end autoreleasepool
+
+        if let syncResult { return syncResult }
+
+        // ── 7–8. Label-based checks (reuse PhotoQualityAnalyzer's existing labels) ──
+        let labels = await PhotoQualityAnalyzer.shared.labels(for: asset)
+
+        // Eyes closed: face detected with both eyes shut
+        if labels.contains(.eyesClosed) {
+            return (asset, .eyesClosed)
+        }
+
+        // No subject: Vision saliency found nothing interesting
+        if labels.contains(.noSubject) {
+            return (asset, .noSubject)
+        }
+
+        // Blurry: Laplacian variance below adaptive threshold
+        if labels.contains(.blurry) {
+            return (asset, .blurryPhoto)
+        }
+
+        return nil
+    }
+
+    // MARK: - Shared / message photo detection (heuristic)
+
+    /// Detects photos likely received via iMessage, WhatsApp, AirDrop etc.
+    /// Uses a combined-signal heuristic: no GPS, no camera EXIF, small file size,
+    /// creation ≠ modification date, no burst/live/depth. ≥3 signals = likely shared.
+    /// Lightweight — no image loading, only metadata reads. Runs off main thread.
+    nonisolated private func detectSharedPhotos(
+        from assets: [PHAsset],
+        excluding: Set<String>,
+        cap: Int
+    ) -> [(PHAsset, WastedReason)] {
+        var results: [(PHAsset, WastedReason)] = []
+
+        for asset in assets {
+            guard results.count < cap else { break }
+            let id = asset.localIdentifier
+            guard !excluding.contains(id) else { continue }
+
+            var signals = 0
+
+            // Signal 1: No GPS location (camera photos almost always have GPS)
+            if asset.location == nil { signals += 1 }
+
+            // Signal 2: No camera metadata in EXIF
+            let resources = PHAssetResource.assetResources(for: asset)
+            let hasNoCamera = !resources.contains { res in
+                // originalFilename from a camera typically has maker prefix
+                let name = res.originalFilename.lowercased()
+                return name.hasPrefix("img_") == false && name.hasPrefix("dsc") ||
+                       name.hasPrefix("photo") == false
+            }
+            // Simpler check: if the resource has no originalFilename from a camera maker pattern
+            let filename = resources.first?.originalFilename ?? ""
+            let lowerFilename = filename.lowercased()
+            if lowerFilename.hasPrefix("image") || lowerFilename.contains("-") && lowerFilename.count > 30 {
+                // UUID-style filenames (common from messaging apps)
+                signals += 1
+            }
+
+            // Signal 3: Small file size (messaging apps compress to < 500KB)
+            if let res = resources.first,
+               let size = res.value(forKey: "fileSize") as? Int64,
+               size > 0, size < 500_000 {
+                signals += 1
+            }
+
+            // Signal 4: Creation ≠ modification date (saved-from-message adjusts modDate)
+            if let created = asset.creationDate, let modified = asset.modificationDate,
+               abs(created.timeIntervalSince(modified)) > 60 {
+                signals += 1
+            }
+
+            // Signal 5: No burst, live, or depth (received photos lose these)
+            let hasBurst = asset.burstIdentifier != nil
+            let isLive = asset.mediaSubtypes.contains(.photoLive)
+            let isDepth = asset.mediaSubtypes.contains(.photoDepthEffect)
+            if !hasBurst && !isLive && !isDepth {
+                signals += 1
+            }
+
+            // Threshold: ≥3 signals = likely received/shared
+            if signals >= 3 {
+                results.append((asset, .sharedPhoto))
+            }
+        }
+
+        return results
     }
 
     // MARK: - Video Duplicates
@@ -1378,6 +1537,17 @@ final class HomeViewModel: ObservableObject, @unchecked Sendable {
             rebuiltLargePhotos = zip(lpIds, lpSizes).compactMap { id, size in
                 guard let asset = lpMap[id] else { return nil }
                 return LargePhotoItem(id: UUID(), asset: asset, byteSize: size)
+            }
+        }
+
+        // ── SQLite cold-start fallback: recover partial results if JSON was empty ──
+        // If blur/semantic data was not in the JSON cache but exists in SQLite
+        // (e.g. app was killed mid-scan), recover it here.
+        if rebuiltBlur.isEmpty {
+            let blurIds = await AnalysisCacheStore.shared.allBlurryIdentifiers()
+            if !blurIds.isEmpty {
+                let f = PHAsset.fetchAssets(withLocalIdentifiers: blurIds, options: nil)
+                f.enumerateObjects { a, _, _ in rebuiltBlur.append(a) }
             }
         }
 

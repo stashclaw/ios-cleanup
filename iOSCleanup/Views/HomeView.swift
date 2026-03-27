@@ -63,6 +63,13 @@ struct HomeView: View {
                     VStack(spacing: 16) {
                         headerRow
                         topCard          // dual-purpose: scan progress OR storage
+
+                        // "New photos ready" banner — shown after background scan finds new results
+                        if viewModel.newPhotosReadyCount > 0 {
+                            newPhotosReadyBanner
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
+
                         if !viewModel.isAnyScanning {
                             scanButton
                         }
@@ -76,6 +83,7 @@ struct HomeView: View {
             .navigationDestination(for: NavDest.self) { dest in
                 destinationView(for: dest)
             }
+            .onAppear { NotificationManager.clearBadge() }
         }
         .sheet(isPresented: $showPaywall) { PaywallView().environmentObject(purchaseManager) }
         .sheet(isPresented: $showCompletion) { CompletionOverlay(viewModel: viewModel) }
@@ -580,11 +588,46 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    // MARK: - New Photos Ready Banner
+
+    private var newPhotosReadyBanner: some View {
+        Button {
+            withAnimation { viewModel.newPhotosReadyCount = 0 }
+            navPath.append(NavDest.duplicates)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "sparkles")
+                    .font(.title2)
+                    .foregroundStyle(.white)
+                Text("\(viewModel.newPhotosReadyCount) new photo\(viewModel.newPhotosReadyCount == 1 ? "" : "s") ready to review")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                Spacer()
+                Button {
+                    withAnimation { viewModel.newPhotosReadyCount = 0 }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color(red: 0.97, green: 0.37, blue: 0.64)) // duck pink
+            )
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal)
+    }
+
     // MARK: - Scan Button (hidden while scanning — top card takes over)
 
     private var scanButton: some View {
         VStack(spacing: 8) {
-            Button(action: startScan) {
+            Button(action: startFullScan) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(viewModel.hasAnyResult ? "Rescan Library" : "Smart Clean")
@@ -631,7 +674,7 @@ struct HomeView: View {
                             .foregroundStyle(Color.white.opacity(0.4))
                     }
                     Spacer()
-                    Button(action: startScan) {
+                    Button(action: startIncrementalScan) {
                         Label("Scan for new photos", systemImage: "plus.viewfinder")
                             .font(.system(size: 12))
                             .foregroundStyle(Color.white.opacity(0.4))
@@ -938,7 +981,29 @@ struct HomeView: View {
 
     // MARK: - Helpers
 
-    private func startScan() {
+    /// Full rescan: wipes cached results first so all engines run from scratch.
+    /// Used by the primary "Rescan Library" / "Smart Clean" button.
+    private func startFullScan() {
+        viewModel.clearCache()
+        let task = Task {
+            await viewModel.refreshTotalLibraryCount()
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { await viewModel.scanPhotos() }
+                group.addTask { await viewModel.scanFiles() }
+                group.addTask { await viewModel.scanBlur() }
+                group.addTask { await viewModel.scanScreenshots() }
+                group.addTask { await viewModel.scanLargePhotos() }
+                group.addTask { await viewModel.scanContacts() }
+                group.addTask { await viewModel.scanSemantic() }
+                group.addTask { await viewModel.scanEventRolls() }
+            }
+        }
+        viewModel.registerScanTask(task)
+    }
+
+    /// Incremental scan: only picks up assets added since the last scan.
+    /// Used by "Scan for new photos".
+    private func startIncrementalScan() {
         let task = Task {
             await viewModel.refreshTotalLibraryCount()
             await withTaskGroup(of: Void.self) { group in

@@ -10,6 +10,7 @@ enum DuplicateScanEvent: Sendable {
 actor DuplicateHashEngine {
 
     private let imageLoader: any ImageLoader
+    private static let maxInFlight = min(ProcessInfo.processInfo.activeProcessorCount, 8)
 
     init(imageLoader: any ImageLoader = PHImageLoader()) {
         self.imageLoader = imageLoader
@@ -22,17 +23,45 @@ actor DuplicateHashEngine {
                     let assets = try await fetchAssets(addedAfter: addedAfter)
                     guard !Task.isCancelled else { continuation.finish(); return }
 
+                    // --- SQLite cache: load fresh dHash values, skip recomputation ---
+                    var modDates: [String: Date] = [:]
+                    modDates.reserveCapacity(assets.count)
+                    for a in assets { modDates[a.localIdentifier] = a.modificationDate }
+
+                    let cached = await AnalysisCacheStore.shared.fetchFreshAnalyses(
+                        for: assets.map(\.localIdentifier),
+                        currentModDates: modDates
+                    )
+
+                    var hashes: [String: UInt64] = [:]
+                    hashes.reserveCapacity(assets.count)
+                    var uncachedAssets: [PHAsset] = []
+
+                    for a in assets {
+                        if let hit = cached[a.localIdentifier], let dh = hit.dhash {
+                            hashes[a.localIdentifier] = dh
+                        } else {
+                            uncachedAssets.append(a)
+                        }
+                    }
+
                     let total = assets.count
                     let counter = ThreadSafeCounter()
                     let throttle = ProgressThrottle(every: 40)
-                    var hashes: [String: UInt64] = [:]
+                    // Credit cached assets toward progress so the bar starts where we left off
+                    let cachedCount = total - uncachedAssets.count
+                    if cachedCount > 0 {
+                        continuation.yield(.progress(completed: cachedCount, total: total))
+                    }
+
+                    var newHashes: [(identifier: String, modDate: Date, dhash: UInt64)] = []
 
                     await withTaskGroup(of: (String, UInt64?).self) { group in
                         var nextIndex = 0
                         var inFlight = 0
 
-                        while inFlight < 4, nextIndex < assets.count {
-                            let a = assets[nextIndex]
+                        while inFlight < Self.maxInFlight, nextIndex < uncachedAssets.count {
+                            let a = uncachedAssets[nextIndex]
                             nextIndex += 1
                             group.addTask {
                                 let hash = await self.dHash(for: a)
@@ -43,13 +72,19 @@ actor DuplicateHashEngine {
 
                         for await (id, hash) in group {
                             guard !Task.isCancelled else { group.cancelAll(); return }
-                            if let hash { hashes[id] = hash }
-                            let completed = counter.increment()
+                            if let hash {
+                                hashes[id] = hash
+                                if let mod = modDates[id] {
+                                    newHashes.append((identifier: id, modDate: mod, dhash: hash))
+                                }
+                            }
+                            let completed = counter.increment() + cachedCount
                             if throttle.shouldReport(completed: completed) {
                                 continuation.yield(.progress(completed: completed, total: total))
+                                await Task.yield()
                             }
-                            if nextIndex < assets.count {
-                                let a = assets[nextIndex]
+                            if nextIndex < uncachedAssets.count {
+                                let a = uncachedAssets[nextIndex]
                                 nextIndex += 1
                                 group.addTask {
                                     let hash = await self.dHash(for: a)
@@ -57,6 +92,11 @@ actor DuplicateHashEngine {
                                 }
                             }
                         }
+                    }
+
+                    // Persist newly computed hashes to SQLite
+                    if !newHashes.isEmpty {
+                        await AnalysisCacheStore.shared.upsertDHashes(newHashes)
                     }
 
                     var buckets: [UInt64: [PHAsset]] = [:]
@@ -135,7 +175,7 @@ actor DuplicateHashEngine {
                     continuation.resume(returning: nil)
                     return
                 }
-                continuation.resume(returning: Self.computeDHash(from: cgImage))
+                continuation.resume(returning: autoreleasepool { Self.computeDHash(from: cgImage) })
             }
         }
     }

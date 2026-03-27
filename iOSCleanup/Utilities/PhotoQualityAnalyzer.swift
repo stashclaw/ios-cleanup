@@ -115,7 +115,21 @@ actor PhotoQualityAnalyzer {
     /// Fallback path (no model):
     ///   Derives score from heuristic quality labels (Laplacian blur, luminance, Vision face).
     func qualityScore(for asset: PHAsset) async -> Float {
+        // 1. In-memory cache (fastest)
         if let hit = scoreCache[asset.localIdentifier] { return hit }
+
+        // 2. SQLite cache (survives relaunch, avoids recomputation)
+        let modDate = asset.modificationDate ?? Date.distantPast
+        let sqliteHit = await AnalysisCacheStore.shared.fetchFreshAnalyses(
+            for: [asset.localIdentifier],
+            currentModDates: [asset.localIdentifier: modDate]
+        )
+        if let cached = sqliteHit[asset.localIdentifier], let qs = cached.qualityScore {
+            scoreCache[asset.localIdentifier] = qs
+            return qs
+        }
+
+        // 3. Compute fresh
         let score: Float
         if let vnModel = loadedQualityModel() {
             score = await coreMLQualityScore(for: asset, vnModel: vnModel)
@@ -123,6 +137,11 @@ actor PhotoQualityAnalyzer {
             score = await heuristicQualityScore(for: asset)
         }
         scoreCache[asset.localIdentifier] = score
+
+        // 4. Persist to SQLite for next launch
+        await AnalysisCacheStore.shared.upsertQualityScores([
+            (identifier: asset.localIdentifier, modDate: modDate, score: score)
+        ])
         return score
     }
 

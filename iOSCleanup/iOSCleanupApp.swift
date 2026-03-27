@@ -16,6 +16,7 @@ struct iOSCleanupApp: App {
                 .task {
                     await purchaseManager.updatePurchaseStatus()
                     BackgroundScanScheduler.scheduleIfNeeded()
+                    NotificationManager.clearBadge()
                 }
         }
     }

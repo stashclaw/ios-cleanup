@@ -82,6 +82,11 @@ actor BackgroundScanCacheWriter {
     func run() async {
         guard !Task.isCancelled else { return }
 
+        // Snapshot existing state BEFORE scanning so we can count truly new results.
+        let existing = loadExistingCache()
+        let beforeGroupIDs = Set((existing?.photoGroups ?? []).map(\.id))
+        let beforeBlurCount = (existing?.blurPhotoIds ?? []).count
+
         // Run duplicate hash scan (fastest, most impactful)
         let duplicateGroups = await runDuplicateScan()
 
@@ -93,7 +98,18 @@ actor BackgroundScanCacheWriter {
         guard !Task.isCancelled else { return }
 
         // Merge new results into existing cache (preserving large files, screenshots, etc.)
-        await mergeAndSave(duplicateGroups: duplicateGroups, blurPhotoIds: blurIds)
+        let mergedGroupIDs = await mergeAndSave(duplicateGroups: duplicateGroups, blurPhotoIds: blurIds)
+
+        // Count truly NEW results (groups/blur photos not in the "before" snapshot).
+        let newGroupCount = mergedGroupIDs.subtracting(beforeGroupIDs).count
+        let newBlurCount  = max(0, blurIds.count - beforeBlurCount)
+        let totalNewPhotos = newGroupCount + newBlurCount
+
+        if totalNewPhotos > 0 {
+            UserDefaults.standard.set(newGroupCount, forKey: "photoduck.newGroupCountFromBG")
+            UserDefaults.standard.set(newBlurCount,  forKey: "photoduck.newBlurCountFromBG")
+            NotificationManager.scheduleNewPhotosNotification(newPhotoCount: totalNewPhotos)
+        }
 
         guard !Task.isCancelled else { return }
 
@@ -154,7 +170,9 @@ actor BackgroundScanCacheWriter {
 
     // MARK: - Cache merge + write
 
-    private func mergeAndSave(duplicateGroups: [BGCachedPhotoGroup], blurPhotoIds: [String]) async {
+    /// Merges new scan results into the existing cache, returns the set of ALL merged group IDs.
+    @discardableResult
+    private func mergeAndSave(duplicateGroups: [BGCachedPhotoGroup], blurPhotoIds: [String]) async -> Set<UUID> {
         // Load existing cache so we preserve fields we didn't scan (largeFiles, screenshots, etc.)
         let existing = loadExistingCache()
         let now = Date()
@@ -210,6 +228,8 @@ actor BackgroundScanCacheWriter {
         } catch {
             // Non-fatal: HomeViewModel will rescan on next foreground launch
         }
+
+        return Set(mergedGroups.map(\.id))
     }
 
     // MARK: - Helpers

@@ -25,7 +25,7 @@ struct BlurAnalyzer {
 
     /// Returns whether `cgImage` appears blurry.
     ///
-    /// Algorithm: scales to 1024px long-edge, computes Laplacian variance over a 4×4 tile
+    /// Algorithm: scales to 512px long-edge, computes Laplacian variance over a 4×4 tile
     /// grid, then reasons about p10/p50/p90 of tile variances. Face-aware when observations
     /// are supplied: judges sharpness only within face bounding boxes to avoid bokeh false-positives.
     ///
@@ -33,8 +33,9 @@ struct BlurAnalyzer {
     /// shots are not false-positively flagged as blurry. A pitch-black image has ~40% of the
     /// threshold of a fully-lit image.
     static func isBlurry(cgImage: CGImage, faces: [VNFaceObservation] = []) -> Bool {
-        // Scale to 1024 on the long edge for consistent threshold behaviour.
-        let maxSide = 1024
+        // Scale to 512 on the long edge for consistent threshold behaviour.
+        // Laplacian variance is per-pixel; thresholds are resolution-independent.
+        let maxSide = 512
         let w0 = cgImage.width, h0 = cgImage.height
         let scale = min(1.0, Double(maxSide) / Double(max(w0, h0)))
         let width  = max(1, Int(Double(w0) * scale))
@@ -263,34 +264,75 @@ enum BlurScanEvent: Sendable {
 
 actor BlurScanEngine {
 
+    private static let maxInFlight = min(ProcessInfo.processInfo.activeProcessorCount, 8)
+
     nonisolated func scan(addedAfter: Date? = nil) -> AsyncThrowingStream<BlurScanEvent, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 do {
                     let assets  = try await fetchAssets(addedAfter: addedAfter)
                     let total   = assets.count
-                    var completed = 0
+
+                    // --- SQLite cache: load fresh blur results ---
+                    var modDates: [String: Date] = [:]
+                    modDates.reserveCapacity(assets.count)
+                    for a in assets { modDates[a.localIdentifier] = a.modificationDate }
+
+                    let cached = await AnalysisCacheStore.shared.fetchFreshAnalyses(
+                        for: assets.map(\.localIdentifier),
+                        currentModDates: modDates
+                    )
+
                     var blurry: [PHAsset] = []
+                    var uncachedAssets: [PHAsset] = []
+
+                    for a in assets {
+                        if let hit = cached[a.localIdentifier], let ib = hit.isBlurry {
+                            if ib { blurry.append(a) }
+                        } else {
+                            uncachedAssets.append(a)
+                        }
+                    }
+
+                    let cachedCount = total - uncachedAssets.count
+                    if cachedCount > 0 {
+                        continuation.yield(.progress(completed: cachedCount, total: total))
+                    }
+
+                    let throttle = ProgressThrottle(every: 40)
+                    let counter = ThreadSafeCounter()
+                    var newResults: [(identifier: String, modDate: Date, isBlurry: Bool)] = []
 
                     await withTaskGroup(of: (PHAsset, Bool).self) { group in
                         var nextIndex = 0
                         var inFlight  = 0
 
-                        while inFlight < 4, nextIndex < assets.count {
-                            let a = assets[nextIndex]; nextIndex += 1
+                        while inFlight < Self.maxInFlight, nextIndex < uncachedAssets.count {
+                            let a = uncachedAssets[nextIndex]; nextIndex += 1
                             group.addTask { await self.checkBlur(asset: a) }
                             inFlight += 1
                         }
 
                         for await (asset, isBlurry) in group {
                             if isBlurry { blurry.append(asset) }
-                            completed += 1
-                            continuation.yield(.progress(completed: completed, total: total))
-                            if nextIndex < assets.count {
-                                let a = assets[nextIndex]; nextIndex += 1
+                            if let mod = modDates[asset.localIdentifier] {
+                                newResults.append((identifier: asset.localIdentifier, modDate: mod, isBlurry: isBlurry))
+                            }
+                            let completed = counter.increment() + cachedCount
+                            if throttle.shouldReport(completed: completed) {
+                                continuation.yield(.progress(completed: completed, total: total))
+                                await Task.yield()
+                            }
+                            if nextIndex < uncachedAssets.count {
+                                let a = uncachedAssets[nextIndex]; nextIndex += 1
                                 group.addTask { await self.checkBlur(asset: a) }
                             }
                         }
+                    }
+
+                    // Persist newly computed blur results to SQLite
+                    if !newResults.isEmpty {
+                        await AnalysisCacheStore.shared.upsertBlurResults(newResults)
                     }
 
                     continuation.yield(.blurryPhotosFound(blurry))
@@ -325,12 +367,14 @@ actor BlurScanEngine {
         return assets
     }
 
-    /// Loads the image at 1024px (matching BlurAnalyzer's internal scale),
-    /// detects faces, then evaluates blur — all in one actor call.
+    /// Loads the image at 512px, detects faces, then evaluates blur — all in one actor call.
+    /// Wrapped in autoreleasepool to release transient CGImage/Vision buffers promptly.
     private func checkBlur(asset: PHAsset) async -> (PHAsset, Bool) {
         guard let cgImage = await loadImage(asset: asset) else { return (asset, false) }
-        let faces    = detectFaces(in: cgImage)
-        let isBlurry = BlurAnalyzer.isBlurry(cgImage: cgImage, faces: faces)
+        let isBlurry = autoreleasepool {
+            let faces = detectFaces(in: cgImage)
+            return BlurAnalyzer.isBlurry(cgImage: cgImage, faces: faces)
+        }
         return (asset, isBlurry)
     }
 
@@ -342,7 +386,7 @@ actor BlurScanEngine {
             options.isNetworkAccessAllowed = false
             PHImageManager.default().requestImage(
                 for: asset,
-                targetSize: CGSize(width: 1024, height: 1024),
+                targetSize: CGSize(width: 512, height: 512),
                 contentMode: .aspectFit,
                 options: options
             ) { image, _ in
