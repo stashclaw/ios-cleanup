@@ -3,7 +3,6 @@ import Photos
 
 struct SwipeModeView: View {
     let groups: [PhotoGroup]
-    @EnvironmentObject private var purchaseManager: PurchaseManager
     @EnvironmentObject private var deletionManager: DeletionManager
     @Environment(\.dismiss) private var dismiss
     @StateObject private var viewModel: SwipeModeViewModel
@@ -19,7 +18,6 @@ struct SwipeModeView: View {
                 if viewModel.isComplete {
                     DuckModeCompletion(
                         viewModel: viewModel,
-                        purchaseManager: purchaseManager,
                         deletionManager: deletionManager,
                         onDismiss: { dismiss() }
                     )
@@ -35,7 +33,23 @@ struct SwipeModeView: View {
                     Button("Done") { dismiss() }
                         .foregroundStyle(Color.white)
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        viewModel.undoLastSwipe()
+                    } label: {
+                        Label("Undo Swipe", systemImage: "arrow.uturn.backward")
+                    }
+                    .foregroundStyle(Color.white)
+                    .disabled(!viewModel.canUndoLastSwipe)
+                }
             }
+        }
+        .onChange(of: deletionManager.undoEventID) { _ in
+            viewModel.restoreUndoneAssets(deletionManager.lastUndoneAssetIDs)
+        }
+        .onChange(of: deletionManager.lastDeletionError) { error in
+            guard error != nil else { return }
+            viewModel.restoreUndoneAssets(deletionManager.lastFailedAssetIDs)
         }
     }
 
@@ -50,7 +64,10 @@ struct SwipeModeView: View {
             // Background cards (depth effect)
             ForEach(upcomingEntries.reversed().prefix(2), id: \.id) { entry in
                 if case .asset(let asset, _) = entry, entry.id != viewModel.current?.id {
-                    DuckAssetCard(asset: asset)
+                    DuckAssetCard(
+                        asset: asset,
+                        estimatedFileSize: viewModel.fileSize(for: asset.localIdentifier)
+                    )
                         .scaleEffect(0.93)
                         .opacity(0.5)
                 }
@@ -62,7 +79,7 @@ struct SwipeModeView: View {
                 ZStack {
                     Color.red.opacity(0.85 + leftStripIntensity * 0.15)
                     Image(systemName: "trash")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(.duckBody(20, weight: .semibold, relativeTo: .title3))
                         .foregroundStyle(.white)
                         .scaleEffect(1 + leftStripIntensity * 0.4)
                 }
@@ -75,7 +92,7 @@ struct SwipeModeView: View {
                 ZStack {
                     Color.green.opacity(0.85 + rightStripIntensity * 0.15)
                     Image(systemName: "checkmark")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(.duckBody(20, weight: .semibold, relativeTo: .title3))
                         .foregroundStyle(.white)
                         .scaleEffect(1 + rightStripIntensity * 0.4)
                 }
@@ -86,20 +103,28 @@ struct SwipeModeView: View {
 
             // Current card
             if let current = viewModel.current, case .asset(let asset, _) = current {
-                DuckAssetCard(asset: asset, monthHeader: currentMonthHeader)
-                    .offset(dragOffset)
-                    .rotationEffect(.degrees(Double(dragOffset.width) / 20))
+                DuckAssetCard(
+                    asset: asset,
+                    estimatedFileSize: viewModel.fileSize(for: asset.localIdentifier),
+                    monthHeader: currentMonthHeader
+                )
+                    .offset(cardOffset)
+                    .rotationEffect(.degrees(Double(cardOffset.width) / 20))
                     .gesture(
                         DragGesture()
-                            .onChanged { dragOffset = $0.translation }
+                            .onChanged {
+                                guard !viewModel.isTransitioning else { return }
+                                dragOffset = $0.translation
+                            }
                             .onEnded { value in
-                                withAnimation(.spring()) {
+                                withAnimation(.duckSpring) {
                                     if value.translation.width < -swipeThreshold { swipeLeft() }
                                     else if value.translation.width > swipeThreshold { swipeRight() }
                                     else { dragOffset = .zero }
                                 }
                             }
                     )
+                    .allowsHitTesting(!viewModel.isTransitioning)
             }
 
             // Progress + round buttons overlay
@@ -129,11 +154,12 @@ struct SwipeModeView: View {
                                 .fill(Color.duckPink)
                                 .frame(width: 64, height: 64)
                             Image(systemName: "trash")
-                                .font(.system(size: 24, weight: .semibold))
+                                .font(.duckBody(24, weight: .semibold, relativeTo: .title2))
                                 .foregroundStyle(.white)
                         }
                     }
                     .accessibilityLabel("Duck it")
+                    .disabled(viewModel.isTransitioning)
 
                     // Keep it — white outlined
                     Button { swipeRight() } label: {
@@ -142,11 +168,12 @@ struct SwipeModeView: View {
                                 .strokeBorder(.white, lineWidth: 2)
                                 .frame(width: 64, height: 64)
                             Image(systemName: "heart")
-                                .font(.system(size: 24, weight: .semibold))
+                                .font(.duckBody(24, weight: .semibold, relativeTo: .title2))
                                 .foregroundStyle(.white)
                         }
                     }
                     .accessibilityLabel("Keep it")
+                    .disabled(viewModel.isTransitioning)
                 }
                 .padding(.bottom, 48)
             }
@@ -156,13 +183,13 @@ struct SwipeModeView: View {
     // MARK: - Strip intensity (0…1)
 
     private var leftStripIntensity: Double {
-        guard dragOffset.width < 0 else { return 0 }
-        return min(Double(-dragOffset.width) / Double(swipeThreshold), 1)
+        guard cardOffset.width < 0 else { return 0 }
+        return min(Double(-cardOffset.width) / Double(swipeThreshold), 1)
     }
 
     private var rightStripIntensity: Double {
-        guard dragOffset.width > 0 else { return 0 }
-        return min(Double(dragOffset.width) / Double(swipeThreshold), 1)
+        guard cardOffset.width > 0 else { return 0 }
+        return min(Double(cardOffset.width) / Double(swipeThreshold), 1)
     }
 
     // MARK: - Helpers
@@ -179,14 +206,28 @@ struct SwipeModeView: View {
         }.first
     }
 
+    private var cardOffset: CGSize {
+        switch viewModel.transitionDecision {
+        case .delete: return CGSize(width: -500, height: 0)
+        case .keep: return CGSize(width: 500, height: 0)
+        case nil: return dragOffset
+        }
+    }
+
     private func swipeLeft() {
-        withAnimation(.easeOut(duration: 0.25)) { dragOffset = CGSize(width: -500, height: 0) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { dragOffset = .zero; viewModel.delete() }
+        guard !viewModel.isTransitioning else { return }
+        dragOffset = .zero
+        withAnimation(.easeOut(duration: 0.25)) {
+            viewModel.delete()
+        }
     }
 
     private func swipeRight() {
-        withAnimation(.easeOut(duration: 0.25)) { dragOffset = CGSize(width: 500, height: 0) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { dragOffset = .zero; viewModel.keep() }
+        guard !viewModel.isTransitioning else { return }
+        dragOffset = .zero
+        withAnimation(.easeOut(duration: 0.25)) {
+            viewModel.keep()
+        }
     }
 }
 
@@ -194,14 +235,15 @@ struct SwipeModeView: View {
 
 private struct DuckModeCompletion: View {
     @ObservedObject var viewModel: SwipeModeViewModel
-    let purchaseManager: PurchaseManager
     let deletionManager: DeletionManager
     let onDismiss: () -> Void
 
-    @State private var showPaywall = false
-
     private var pendingGB: String {
         ByteCountFormatter.string(fromByteCount: viewModel.pendingDeleteBytes, countStyle: .file)
+    }
+
+    private var isEmptyReview: Bool {
+        viewModel.totalReviewableCount == 0
     }
 
     var body: some View {
@@ -209,18 +251,45 @@ private struct DuckModeCompletion: View {
             VStack(spacing: 24) {
                 Spacer(minLength: 32)
 
-                RoundedRectangle(cornerRadius: 28)
-                    .fill(Color.duckYellow)
-                    .frame(width: 120, height: 120)
+                PhotoDuckMascotArt(size: 120)
 
-                Text("You ducked \(viewModel.duckedCount) photo\(viewModel.duckedCount == 1 ? "" : "s")")
+                Text(completionTitle)
                     .font(.duckTitle)
                     .foregroundStyle(Color.duckBerry)
+                    .multilineTextAlignment(.center)
+
+                if isEmptyReview {
+                    Text("There are no high-confidence cleanup suggestions in this review. Similar photos that need judgment stay review-only.")
+                        .font(.duckBody)
+                        .foregroundStyle(Color.duckRose)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 28)
+                }
 
                 if viewModel.pendingDeleteBytes > 0 {
-                    Text("\(pendingGB) to free")
+                    Text("Potential space: \(pendingGB)")
                         .font(.duckDisplay)
                         .foregroundStyle(Color.duckPink)
+                }
+
+                if viewModel.hasPendingDeletes {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Selected for Recently Deleted")
+                            .font(.duckBody.weight(.semibold))
+                            .foregroundStyle(Color.duckBerry)
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            LazyHStack(spacing: 8) {
+                                ForEach(
+                                    viewModel.pendingDeleteAssets,
+                                    id: \.localIdentifier
+                                ) { asset in
+                                    PendingDeleteThumbnail(asset: asset)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
                 }
 
                 if let error = viewModel.deleteError {
@@ -229,31 +298,44 @@ private struct DuckModeCompletion: View {
 
                 if deletionManager.isDeleting {
                     VStack(spacing: 12) {
-                        StatusBadge(title: "Freeing your space...", accent: .duckPink)
+                        StatusBadge(title: "Moving to Recently Deleted...", accent: .duckPink)
                         DuckProgressBar(progress: deletionManager.deletionProgress, color: .duckPink)
                             .frame(height: 12)
                             .padding(.horizontal, 20)
-                        Text("\(ByteCountFormatter.string(fromByteCount: deletionManager.bulkProcessedBytes, countStyle: .file)) freed of \(ByteCountFormatter.string(fromByteCount: deletionManager.bulkTotalBytes, countStyle: .file)) total")
+                        Text("\(ByteCountFormatter.string(fromByteCount: deletionManager.bulkProcessedBytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: deletionManager.bulkTotalBytes, countStyle: .file)) selected")
                             .font(.duckBody)
                             .foregroundStyle(Color.duckRose)
                         Text("\(deletionManager.bulkProcessedCount) of \(deletionManager.bulkTotalCount) photos")
                             .font(.duckCaption)
                             .foregroundStyle(Color.duckBerry)
+                        Text("Space is permanently reclaimed after Recently Deleted is emptied.")
+                            .font(.duckCaption)
+                            .foregroundStyle(Color.duckRose)
+                            .multilineTextAlignment(.center)
                     }
                 } else {
                     VStack(spacing: 12) {
-                        DuckPrimaryButton(title: "Free the space ✦") {
-                            guard purchaseManager.isPurchased else { showPaywall = true; return }
-                            Task {
-                                try? await deletionManager.bulkDelete(assets: viewModel.toDeleteAssets)
+                        if viewModel.hasPendingDeletes {
+                            DuckPrimaryButton(title: "Move to Recently Deleted") {
+                                Task {
+                                    await viewModel.commitDeletes(using: deletionManager)
+                                }
                             }
-                        }
-                        .padding(.horizontal, 32)
+                            .padding(.horizontal, 32)
 
-                        DuckOutlineButton(title: "Review again", color: .duckRose) {
-                            viewModel.resetQueue()
+                            Text("Potential space is reclaimed after Recently Deleted is emptied.")
+                                .font(.duckCaption)
+                                .foregroundStyle(Color.duckRose)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 32)
                         }
-                        .padding(.horizontal, 20)
+
+                        if !isEmptyReview {
+                            DuckOutlineButton(title: "Review again", color: .duckRose) {
+                                viewModel.resetQueue()
+                            }
+                            .padding(.horizontal, 20)
+                        }
                     }
                 }
 
@@ -265,11 +347,53 @@ private struct DuckModeCompletion: View {
             }
         }
         .background(Color.duckBlush.ignoresSafeArea())
-        .sheet(isPresented: $showPaywall) {
-            PaywallView().environmentObject(purchaseManager)
+    }
+
+    private var completionTitle: String {
+        if isEmptyReview {
+            return "Nothing to review"
         }
-        .onReceive(NotificationCenter.default.publisher(for: .purchaseDidSucceed)) { _ in
-            showPaywall = false
+        if viewModel.duckedCount == 0 {
+            return "You kept every photo"
+        }
+        return "Selected \(viewModel.duckedCount) photo\(viewModel.duckedCount == 1 ? "" : "s")"
+    }
+}
+
+private struct PendingDeleteThumbnail: View {
+    let asset: PHAsset
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color.duckSoftPink.opacity(0.4)
+                    .overlay(ProgressView().tint(.white))
+            }
+        }
+        .frame(width: 88, height: 88)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(alignment: .topTrailing) {
+            Image(systemName: "trash.fill")
+                .font(.duckMicro.weight(.bold))
+                .foregroundStyle(.white)
+                .padding(6)
+                .background(Color.duckDanger, in: Circle())
+                .padding(5)
+        }
+        .accessibilityLabel("Selected for Recently Deleted")
+        .task {
+            image = await asset.loadImage(
+                targetSize: CGSize(width: 176, height: 176),
+                deliveryMode: .opportunistic,
+                allowNetwork: true,
+                contentMode: .aspectFill,
+                acceptsDegradedResult: true
+            )
         }
     }
 }
@@ -278,7 +402,9 @@ private struct DuckModeCompletion: View {
 
 private struct DuckAssetCard: View {
     let asset: PHAsset
+    let estimatedFileSize: Int64?
     var monthHeader: String? = nil
+    @Environment(\.displayScale) private var displayScale
     @State private var image: UIImage?
 
     private static let dateFormatter: DateFormatter = {
@@ -290,6 +416,11 @@ private struct DuckAssetCard: View {
 
     var body: some View {
         GeometryReader { geo in
+            let targetSize = CGSize(
+                width: max(geo.size.width * displayScale, 1),
+                height: max(geo.size.height * displayScale, 1)
+            )
+
             ZStack(alignment: .bottom) {
                 // Photo — edge-to-edge, scaledToFill
                 Group {
@@ -325,42 +456,32 @@ private struct DuckAssetCard: View {
                             .font(.duckBody.weight(.semibold))
                             .foregroundStyle(.white)
                     }
-                    Text(fileSizeLabel)
-                        .font(.duckCaption)
-                        .foregroundStyle(.white.opacity(0.8))
+                    if let fileSizeLabel {
+                        Text(fileSizeLabel)
+                            .font(.duckCaption)
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 44) // inset from side strips
                 .padding(.bottom, 20)
             }
-        }
-        .task { image = await loadImage(for: asset) }
-    }
-
-    private var fileSizeLabel: String {
-        let resources = PHAssetResource.assetResources(for: asset)
-        var total: Int64 = 0
-        for r in resources {
-            if let s = r.value(forKey: "fileSize") as? Int64 { total += s }
-            else if let s = r.value(forKey: "fileSize") as? Int { total += Int64(s) }
-        }
-        guard total > 0 else { return "" }
-        return ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
-    }
-
-    private func loadImage(for asset: PHAsset) async -> UIImage? {
-        await withCheckedContinuation { continuation in
-            let options = PHImageRequestOptions()
-            options.deliveryMode = .opportunistic
-            options.isNetworkAccessAllowed = true
-            PHImageManager.default().requestImage(
-                for: asset, targetSize: CGSize(width: 800, height: 1200),
-                contentMode: .aspectFill, options: options
-            ) { image, info in
-                let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) == true
-                guard !isDegraded else { return }
-                continuation.resume(returning: image)
+            .task(id: "\(Int(targetSize.width.rounded()))x\(Int(targetSize.height.rounded()))") {
+                image = await asset.loadImage(
+                    targetSize: targetSize,
+                    deliveryMode: .opportunistic,
+                    allowNetwork: true,
+                    contentMode: .aspectFill,
+                    acceptsDegradedResult: true
+                )
             }
         }
     }
+
+    private var fileSizeLabel: String? {
+        guard let estimatedFileSize, estimatedFileSize > 0 else { return nil }
+        let size = ByteCountFormatter.string(fromByteCount: estimatedFileSize, countStyle: .file)
+        return "Est. \(size)"
+    }
+
 }

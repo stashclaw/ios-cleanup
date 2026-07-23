@@ -23,3 +23,6 @@ fastlane/test_output
 
 # macOS
 .DS_Store
+
+# Generated design intermediates
+tmp/

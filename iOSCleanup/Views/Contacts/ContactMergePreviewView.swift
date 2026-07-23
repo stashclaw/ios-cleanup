@@ -117,8 +117,8 @@ struct ContactMergePreviewView: View {
         VStack(spacing: 12) {
             if let error = mergeError {
                 Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.duckDanger)
             }
 
             Button(action: {
@@ -130,18 +130,21 @@ struct ContactMergePreviewView: View {
                         ProgressView()
                             .tint(.white)
                     } else {
-                        Label(
-                            purchaseManager.isPurchased ? "Merge Contacts" : "Merge Contacts 🔒",
-                            systemImage: "person.2.fill"
-                        )
-                        .font(.headline)
+                        HStack(spacing: 8) {
+                            Image(systemName: "person.2.fill")
+                            Text("Merge Contacts")
+                            if !purchaseManager.isPurchased {
+                                Image(systemName: "lock.fill")
+                            }
+                        }
+                        .font(.duckButton)
                     }
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(.blue)
+                .background(Color.duckPink)
                 .foregroundStyle(Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .clipShape(RoundedRectangle(cornerRadius: DuckCornerRadius.control))
             }
             .disabled(isMerging)
         }

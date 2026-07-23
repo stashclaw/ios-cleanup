@@ -165,7 +165,7 @@ struct PreferenceAdjustedRecommendationService: Sendable {
             adjustedSuggestedAction: adjustedAction,
             queuePriorityBoost: queuePriorityBoost,
             queuePrioritySuppression: queuePrioritySuppression,
-            reasons: uniqueStrings(reasons)
+            reasons: reasons.uniquePreservingOrder()
         )
     }
 
@@ -194,7 +194,4 @@ struct PreferenceAdjustedRecommendationService: Sendable {
     }
 }
 
-private func uniqueStrings(_ strings: [String]) -> [String] {
-    var seen = Set<String>()
-    return strings.filter { seen.insert($0).inserted }
-}
+// uniqueStrings consolidated into [String].uniquePreservingOrder() in SharedHelpers.swift

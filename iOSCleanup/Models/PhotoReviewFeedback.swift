@@ -229,6 +229,7 @@ struct PhotoTrainingExportRow: Codable, Sendable, Hashable, Identifiable {
     let policyVersion: Int
     let modelVersion: Int
     let featureSchemaVersion: Int
+    let activeChoice: Bool
     let featureVector: PhotoTrainingFeatureVector?
 }
 

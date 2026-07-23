@@ -9,6 +9,8 @@ extension Font {
     static let duckBody = BrandFont.makeBody(size: 15, weight: .semibold, relativeTo: .body)
     static let duckCaption = BrandFont.makeBody(size: 13, weight: .regular, relativeTo: .caption)
     static let duckLabel = BrandFont.makeBody(size: 11, weight: .bold, relativeTo: .caption2)
+    static let duckStat = BrandFont.makeDisplay(size: 24, relativeTo: .title2)
+    static let duckMicro = BrandFont.makeBody(size: 10, weight: .semibold, relativeTo: .caption2)
 
     static func duckDisplay(_ size: CGFloat, relativeTo textStyle: Font.TextStyle = .largeTitle) -> Font {
         BrandFont.makeDisplay(size: size, relativeTo: textStyle)
@@ -17,6 +19,20 @@ extension Font {
     static func duckBody(_ size: CGFloat, weight: Font.Weight = .regular, relativeTo textStyle: Font.TextStyle = .body) -> Font {
         BrandFont.makeBody(size: size, weight: weight, relativeTo: textStyle)
     }
+}
+
+enum DuckSpacing {
+    static let xSmall: CGFloat = 4
+    static let small: CGFloat = 8
+    static let medium: CGFloat = 16
+    static let large: CGFloat = 24
+    static let xLarge: CGFloat = 32
+}
+
+enum DuckCornerRadius {
+    static let control: CGFloat = 12
+    static let card: CGFloat = 16
+    static let hero: CGFloat = 30
 }
 
 private enum BrandFont {

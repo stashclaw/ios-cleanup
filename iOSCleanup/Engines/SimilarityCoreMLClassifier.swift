@@ -1,12 +1,8 @@
 import CoreML
+import OSLog
 import Photos
 
 // MARK: - Protocols
-
-protocol SimilarityClassificationService: Sendable {
-    func similarityScore(lhs: PHAsset, rhs: PHAsset) async -> Double?
-    var isAvailable: Bool { get }
-}
 
 protocol KeeperPredictionService: Sendable {
     func predictKeeper(features: KeeperPredictionInput) async -> KeeperPredictionOutput?
@@ -37,6 +33,20 @@ struct KeeperPredictionInput: Sendable {
     let fileSizeBytes: Int64
 }
 
+enum KeeperFeatureSchema {
+    static let outcomeLabel = "outcome_label"
+    static let trainingMetadataNames: [String] = [
+        "event_id", "group_id", "feature_schema_version", "active_choice"
+    ]
+    static let modelInputNames: [String] = [
+        "bucket", "group_type", "confidence", "suggested_action",
+        "pixel_width", "pixel_height", "is_favorite", "is_edited",
+        "is_screenshot", "burst_present", "ranking_score",
+        "similarity_to_keeper", "aspect_ratio", "file_size_bytes"
+    ]
+    static let exportHeaders = [outcomeLabel] + trainingMetadataNames + modelInputNames
+}
+
 struct KeeperPredictionOutput: Sendable {
     let predictedLabel: String       // "keeper", "suggested_keeper", "candidate"
     let keeperProbability: Double    // probability of being the keeper
@@ -48,7 +58,6 @@ struct GroupActionPredictionInput: Sendable {
     let groupType: String
     let confidence: String
     let suggestedAction: String
-    let recommendationAccepted: Int  // -1 = unknown, 0 = false, 1 = true
     let assetCount: Int
     let avgRanking: Double
     let screenshotCount: Int
@@ -56,63 +65,65 @@ struct GroupActionPredictionInput: Sendable {
     let editedCount: Int
 }
 
+enum GroupActionFeatureSchema {
+    static let outcomeLabel = "outcome_label"
+    static let trainingMetadataNames: [String] = [
+        "event_id", "group_id", "feature_schema_version"
+    ]
+    static let modelInputNames: [String] = [
+        "bucket", "group_type", "confidence", "suggested_action",
+        "asset_count", "avg_ranking", "screenshot_count",
+        "favorite_count", "edited_count"
+    ]
+    static let exportHeaders = [outcomeLabel] + trainingMetadataNames + modelInputNames
+}
+
 struct GroupActionPredictionOutput: Sendable {
     let predictedLabel: String       // "keep_best_keeper", "deleted", "skipped", etc.
     let labelProbabilities: [String: Double]
 }
 
-// MARK: - Bundled CoreML Similarity Classifier (original, still used for pairwise)
-
-struct BundledCoreMLSimilarityClassifier: SimilarityClassificationService {
-    private let modelURL: URL?
-
-    init(modelName: String = "PhotoDuckSimilarity") {
-        modelURL = Bundle.main.url(forResource: modelName, withExtension: "mlmodelc")
-    }
-
-    var isAvailable: Bool {
-        modelURL != nil
-    }
-
-    func similarityScore(lhs: PHAsset, rhs: PHAsset) async -> Double? {
-        guard modelURL != nil else { return nil }
-        return nil
-    }
+enum OptionalMLModelLoadStatus: Sendable, Equatable {
+    case notBundled
+    case notLoaded
+    case available
+    case failed(String)
 }
 
 // MARK: - ML Keeper Ranking Service
 
-final class MLKeeperRankingService: KeeperPredictionService, @unchecked Sendable {
+actor MLKeeperRankingService: KeeperPredictionService {
     static let shared = MLKeeperRankingService()
 
+    private static let logger = Logger(
+        subsystem: "com.photoduck.iOSCleanup",
+        category: "MLKeeperModel"
+    )
+
+    private let modelURL: URL?
     private var model: MLModel?
-    private let lock = NSLock()
-    private var didAttemptLoad = false
+    private var loadStatusValue: OptionalMLModelLoadStatus
+    nonisolated let isAvailable: Bool
 
     init(modelName: String = "PhotoDuckKeeper") {
-        if let url = Bundle.main.url(forResource: modelName, withExtension: "mlmodelc") {
-            let config = MLModelConfiguration()
-            config.computeUnits = .cpuOnly // Keep it fast and predictable
-            model = try? MLModel(contentsOf: url, configuration: config)
-        }
-    }
-
-    var isAvailable: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return model != nil
+        let url = Bundle.main.url(forResource: modelName, withExtension: "mlmodelc")
+        modelURL = url
+        model = nil
+        isAvailable = url != nil
+        loadStatusValue = url == nil ? .notBundled : .notLoaded
     }
 
     func predictKeeper(features: KeeperPredictionInput) async -> KeeperPredictionOutput? {
-        lock.lock()
-        guard let model else {
-            lock.unlock()
-            return nil
-        }
-        lock.unlock()
+        guard let model = loadModelIfNeeded() else { return nil }
 
         let provider = KeeperFeatureProvider(input: features)
-        guard let prediction = try? model.prediction(from: provider) else {
+        let prediction: MLFeatureProvider
+        do {
+            prediction = try model.prediction(from: provider)
+        } catch {
+            Self.logger.error(
+                "Keeper inference failed: \(error.localizedDescription, privacy: .public)"
+            )
             return nil
         }
 
@@ -125,40 +136,71 @@ final class MLKeeperRankingService: KeeperPredictionService, @unchecked Sendable
             candidateProbability: probsDict["candidate"] ?? 0
         )
     }
+
+    func loadStatus() -> OptionalMLModelLoadStatus {
+        loadStatusValue
+    }
+
+    private func loadModelIfNeeded() -> MLModel? {
+        if let model {
+            return model
+        }
+        guard case .notLoaded = loadStatusValue, let modelURL else {
+            return nil
+        }
+
+        do {
+            let config = MLModelConfiguration()
+            config.computeUnits = .cpuOnly
+            let loadedModel = try MLModel(contentsOf: modelURL, configuration: config)
+            model = loadedModel
+            loadStatusValue = .available
+            return loadedModel
+        } catch {
+            let message = error.localizedDescription
+            loadStatusValue = .failed(message)
+            Self.logger.error(
+                "Keeper model exists but failed to load: \(message, privacy: .public)"
+            )
+            return nil
+        }
+    }
 }
 
 // MARK: - ML Group Action Service
 
-final class MLGroupActionService: GroupActionPredictionService, @unchecked Sendable {
+actor MLGroupActionService: GroupActionPredictionService {
     static let shared = MLGroupActionService()
 
+    private static let logger = Logger(
+        subsystem: "com.photoduck.iOSCleanup",
+        category: "MLGroupActionModel"
+    )
+
+    private let modelURL: URL?
     private var model: MLModel?
-    private let lock = NSLock()
+    private var loadStatusValue: OptionalMLModelLoadStatus
+    nonisolated let isAvailable: Bool
 
     init(modelName: String = "PhotoDuckGroupAction") {
-        if let url = Bundle.main.url(forResource: modelName, withExtension: "mlmodelc") {
-            let config = MLModelConfiguration()
-            config.computeUnits = .cpuOnly
-            model = try? MLModel(contentsOf: url, configuration: config)
-        }
-    }
-
-    var isAvailable: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return model != nil
+        let url = Bundle.main.url(forResource: modelName, withExtension: "mlmodelc")
+        modelURL = url
+        model = nil
+        isAvailable = url != nil
+        loadStatusValue = url == nil ? .notBundled : .notLoaded
     }
 
     func predictAction(features: GroupActionPredictionInput) async -> GroupActionPredictionOutput? {
-        lock.lock()
-        guard let model else {
-            lock.unlock()
-            return nil
-        }
-        lock.unlock()
+        guard let model = loadModelIfNeeded() else { return nil }
 
         let provider = GroupActionFeatureProvider(input: features)
-        guard let prediction = try? model.prediction(from: provider) else {
+        let prediction: MLFeatureProvider
+        do {
+            prediction = try model.prediction(from: provider)
+        } catch {
+            Self.logger.error(
+                "Group-action inference failed: \(error.localizedDescription, privacy: .public)"
+            )
             return nil
         }
 
@@ -170,11 +212,40 @@ final class MLGroupActionService: GroupActionPredictionService, @unchecked Senda
             labelProbabilities: probsDict
         )
     }
+
+    func loadStatus() -> OptionalMLModelLoadStatus {
+        loadStatusValue
+    }
+
+    private func loadModelIfNeeded() -> MLModel? {
+        if let model {
+            return model
+        }
+        guard case .notLoaded = loadStatusValue, let modelURL else {
+            return nil
+        }
+
+        do {
+            let config = MLModelConfiguration()
+            config.computeUnits = .cpuOnly
+            let loadedModel = try MLModel(contentsOf: modelURL, configuration: config)
+            model = loadedModel
+            loadStatusValue = .available
+            return loadedModel
+        } catch {
+            let message = error.localizedDescription
+            loadStatusValue = .failed(message)
+            Self.logger.error(
+                "Group-action model exists but failed to load: \(message, privacy: .public)"
+            )
+            return nil
+        }
+    }
 }
 
 // MARK: - Feature Providers
 
-private class KeeperFeatureProvider: MLFeatureProvider {
+final class KeeperFeatureProvider: MLFeatureProvider {
     let input: KeeperPredictionInput
 
     init(input: KeeperPredictionInput) {
@@ -182,12 +253,7 @@ private class KeeperFeatureProvider: MLFeatureProvider {
     }
 
     var featureNames: Set<String> {
-        Set([
-            "bucket", "group_type", "confidence", "suggested_action",
-            "pixel_width", "pixel_height", "is_favorite", "is_edited",
-            "is_screenshot", "burst_present", "ranking_score",
-            "similarity_to_keeper", "aspect_ratio", "file_size_bytes"
-        ])
+        Set(KeeperFeatureSchema.modelInputNames)
     }
 
     func featureValue(for featureName: String) -> MLFeatureValue? {
@@ -211,7 +277,7 @@ private class KeeperFeatureProvider: MLFeatureProvider {
     }
 }
 
-private class GroupActionFeatureProvider: MLFeatureProvider {
+final class GroupActionFeatureProvider: MLFeatureProvider {
     let input: GroupActionPredictionInput
 
     init(input: GroupActionPredictionInput) {
@@ -219,11 +285,7 @@ private class GroupActionFeatureProvider: MLFeatureProvider {
     }
 
     var featureNames: Set<String> {
-        Set([
-            "bucket", "group_type", "confidence", "suggested_action",
-            "recommendation_accepted", "asset_count", "avg_ranking",
-            "screenshot_count", "favorite_count", "edited_count"
-        ])
+        Set(GroupActionFeatureSchema.modelInputNames)
     }
 
     func featureValue(for featureName: String) -> MLFeatureValue? {
@@ -232,7 +294,6 @@ private class GroupActionFeatureProvider: MLFeatureProvider {
         case "group_type": return MLFeatureValue(string: input.groupType)
         case "confidence": return MLFeatureValue(string: input.confidence)
         case "suggested_action": return MLFeatureValue(string: input.suggestedAction)
-        case "recommendation_accepted": return MLFeatureValue(int64: Int64(input.recommendationAccepted))
         case "asset_count": return MLFeatureValue(int64: Int64(input.assetCount))
         case "avg_ranking": return MLFeatureValue(double: input.avgRanking)
         case "screenshot_count": return MLFeatureValue(int64: Int64(input.screenshotCount))
@@ -245,15 +306,131 @@ private class GroupActionFeatureProvider: MLFeatureProvider {
 
 // MARK: - Convenience: Build prediction inputs from domain types
 
-extension KeeperPredictionInput {
-    init(asset: PHAsset, group: PhotoGroup) {
-        let isEdited: Bool
-        if let creationDate = asset.creationDate, let modificationDate = asset.modificationDate {
-            isEdited = abs(modificationDate.timeIntervalSince(creationDate)) > 1
+struct KeeperInferenceGroupContext: Sendable {
+    let bucket: String
+    let groupType: String
+    let confidence: String
+    let suggestedAction: String
+
+    init(cluster: SimilarityClusterInput) {
+        let descriptorsByID = Dictionary(
+            uniqueKeysWithValues: cluster.assets.map { ($0.id, $0) }
+        )
+        let pairClassifier = ConservativePairSimilarityClassifier()
+        let pairResults = cluster.pairwiseSignals.compactMap { key, signals -> PairEligibilityResult? in
+            guard let lhs = descriptorsByID[key.lhsID],
+                  let rhs = descriptorsByID[key.rhsID] else {
+                return nil
+            }
+            return pairClassifier.classifyPair(lhs: lhs, rhs: rhs, signals: signals)
+        }
+        let eligibleResults = pairResults.filter(\.eligible)
+        let burstIDs = Set(cluster.assets.compactMap(\.burstIdentifier))
+        let isSingleBurst = burstIDs.count == 1
+            && cluster.assets.allSatisfy { $0.burstIdentifier != nil }
+        let hasContextPenalty = cluster.pairwiseSignals.values.contains { signals in
+            signals.screenshotMixedWithCamera
+                || signals.aspectRatioMismatch
+                || signals.dimensionMismatch
+                || signals.editedStateDivergence
+        }
+        let minimumPairScore = eligibleResults.map(\.similarityScore).min() ?? 0
+
+        let resolvedBucket: SimilarityBucket
+        if isSingleBurst {
+            resolvedBucket = .burstShot
+        } else if !eligibleResults.isEmpty,
+                  eligibleResults.allSatisfy({ $0.provisionalBucket == .nearDuplicate }) {
+            resolvedBucket = .nearDuplicate
         } else {
-            isEdited = false
+            resolvedBucket = .visuallySimilar
         }
 
+        let resolvedConfidence: GroupConfidence
+        switch resolvedBucket {
+        case .burstShot:
+            resolvedConfidence = !hasContextPenalty
+                && minimumPairScore >= SimilarityThresholds.burstAutoDeleteScoreFloor
+                ? .high
+                : .medium
+        case .nearDuplicate:
+            resolvedConfidence = !hasContextPenalty
+                && minimumPairScore >= SimilarityThresholds.nearDuplicateAutoDeleteScoreFloor
+                ? .high
+                : .medium
+        case .visuallySimilar:
+            resolvedConfidence = eligibleResults.isEmpty || hasContextPenalty ? .low : .medium
+        case .notSimilar:
+            resolvedConfidence = .low
+        }
+
+        bucket = resolvedBucket.rawValue
+        switch resolvedBucket {
+        case .burstShot:
+            groupType = SimilarGroupType.burst.rawValue
+        case .nearDuplicate:
+            groupType = SimilarGroupType.nearDuplicate.rawValue
+        case .visuallySimilar:
+            groupType = SimilarGroupType.sameMoment.rawValue
+        case .notSimilar:
+            groupType = SimilarGroupType.unknown.rawValue
+        }
+        confidence = resolvedConfidence.rawValue
+        suggestedAction = resolvedConfidence == .high && resolvedBucket != .visuallySimilar
+            ? SimilarRecommendedAction.keepBestTrashRest.rawValue
+            : SimilarRecommendedAction.reviewManually.rawValue
+    }
+}
+
+extension KeeperPredictionInput {
+    init?(
+        asset: SimilarityAssetDescriptor,
+        cluster: SimilarityClusterInput,
+        groupContext: KeeperInferenceGroupContext,
+        heuristicResult: KeeperRankingResult
+    ) {
+        guard let heuristicKeeperID = heuristicResult.keeperAssetID,
+              let rankingScore = heuristicResult.scoreByAssetID[asset.id] else {
+            return nil
+        }
+
+        let similarityToKeeper: Double
+        if asset.id == heuristicKeeperID {
+            similarityToKeeper = 0
+        } else {
+            guard let featureDistance = cluster.pairwiseSignals[
+                SimilarityPairKey(asset.id, heuristicKeeperID)
+            ]?.featureDistance,
+            featureDistance.isFinite,
+            featureDistance >= 0 else {
+                // Missing visual context must not be replaced by a constant training feature.
+                return nil
+            }
+            similarityToKeeper = featureDistance
+        }
+
+        let pixelCount = Int64(asset.pixelWidth) * Int64(asset.pixelHeight)
+        self.init(
+            bucket: groupContext.bucket,
+            groupType: groupContext.groupType,
+            confidence: groupContext.confidence,
+            suggestedAction: groupContext.suggestedAction,
+            pixelWidth: asset.pixelWidth,
+            pixelHeight: asset.pixelHeight,
+            isFavorite: asset.isFavorite,
+            isEdited: asset.isEdited,
+            isScreenshot: asset.isScreenshot,
+            burstPresent: asset.burstIdentifier != nil,
+            rankingScore: rankingScore,
+            similarityToKeeper: similarityToKeeper,
+            aspectRatio: asset.aspectRatio,
+            // Candidate generation does not carry encoded bytes. Pixel count is a
+            // per-asset estimate rather than the previous constant-zero placeholder.
+            fileSizeBytes: max(pixelCount, 1)
+        )
+    }
+
+    init(asset: PHAsset, group: PhotoGroup) {
         let candidate = group.candidates.first(where: { $0.photoId == asset.localIdentifier })
 
         self.init(
@@ -264,7 +441,7 @@ extension KeeperPredictionInput {
             pixelWidth: asset.pixelWidth,
             pixelHeight: asset.pixelHeight,
             isFavorite: asset.isFavorite,
-            isEdited: isEdited,
+            isEdited: asset.isEdited,
             isScreenshot: asset.mediaSubtypes.contains(.photoScreenshot),
             burstPresent: asset.burstIdentifier != nil,
             rankingScore: candidate?.bestShotScore ?? 0.5,
@@ -291,7 +468,6 @@ extension GroupActionPredictionInput {
             groupType: group.groupType.rawValue,
             confidence: group.groupConfidence.rawValue,
             suggestedAction: group.recommendedAction?.rawValue ?? "reviewManually",
-            recommendationAccepted: -1,
             assetCount: group.assets.count,
             avgRanking: avgRanking,
             screenshotCount: screenshotCount,

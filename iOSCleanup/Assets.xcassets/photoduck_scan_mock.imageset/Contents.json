@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "photoduck_scan_mock.png",
+      "idiom" : "universal",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

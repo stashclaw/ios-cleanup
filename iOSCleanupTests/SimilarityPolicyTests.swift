@@ -1,4 +1,5 @@
 import XCTest
+import Photos
 @testable import iOSCleanup
 
 final class SimilarityPolicyTests: XCTestCase {
@@ -6,7 +7,7 @@ final class SimilarityPolicyTests: XCTestCase {
     private let policyEngine = ConservativeSimilarityPolicyEngine()
     private let keeperRanker = ConservativeKeeperRankingService()
 
-    func testExactDuplicatesClassifyAsNearDuplicateHighConfidence() {
+    func testExactDuplicatesClassifyAsNearDuplicateHighConfidence() async {
         let a = asset("a", seconds: 0)
         let b = asset("b", seconds: 4)
         let signals = pair(a, b, distance: 0.01)
@@ -19,7 +20,7 @@ final class SimilarityPolicyTests: XCTestCase {
         let cluster = clusterInput(assets: [a, b], pairs: [
             pairKey("a", "b"): signals
         ])
-        let group = policyEngine.classifyCluster(cluster)
+        let group = await policyEngine.classifyCluster(cluster)
 
         XCTAssertEqual(group.bucket, .nearDuplicate)
         XCTAssertEqual(group.confidence, .high)
@@ -28,7 +29,7 @@ final class SimilarityPolicyTests: XCTestCase {
         XCTAssertFalse(group.deleteCandidateIDs.contains(group.keeperAssetID ?? ""))
     }
 
-    func testBurstSequenceClassifiesAsBurstShot() {
+    func testBurstSequenceClassifiesAsBurstShot() async {
         let a = asset("a", seconds: 0, burst: "burst-1")
         let b = asset("b", seconds: 1, burst: "burst-1")
         let signals = pair(a, b, distance: 0.03)
@@ -37,7 +38,7 @@ final class SimilarityPolicyTests: XCTestCase {
         XCTAssertTrue(result.eligible)
         XCTAssertEqual(result.provisionalBucket, .burstShot)
 
-        let group = policyEngine.classifyCluster(clusterInput(assets: [a, b], pairs: [
+        let group = await policyEngine.classifyCluster(clusterInput(assets: [a, b], pairs: [
             pairKey("a", "b"): signals
         ]))
 
@@ -46,7 +47,7 @@ final class SimilarityPolicyTests: XCTestCase {
         XCTAssertEqual(group.action, .suggestDeleteOthers)
     }
 
-    func testBorderlineNearDuplicatesDowngradeToVisualSimilar() {
+    func testBorderlineNearDuplicatesDowngradeToVisualSimilar() async {
         let a = asset("a", seconds: 0, width: 4000, height: 3000)
         let b = asset("b", seconds: 12, width: 3000, height: 3000)
         let signals = pair(a, b, distance: 0.055)
@@ -56,7 +57,7 @@ final class SimilarityPolicyTests: XCTestCase {
         XCTAssertEqual(result.provisionalBucket, .visuallySimilar)
         XCTAssertTrue(result.softBlockers.contains(.aspectRatioMismatch))
 
-        let group = policyEngine.classifyCluster(clusterInput(assets: [a, b], pairs: [
+        let group = await policyEngine.classifyCluster(clusterInput(assets: [a, b], pairs: [
             pairKey("a", "b"): signals
         ]))
 
@@ -65,7 +66,7 @@ final class SimilarityPolicyTests: XCTestCase {
         XCTAssertEqual(group.confidence, .medium)
     }
 
-    func testScreenshotMixedWithCameraIsBlocked() {
+    func testScreenshotMixedWithCameraIsBlocked() async {
         let screenshot = asset("shot", seconds: 0, screenshot: true)
         let camera = asset("cam", seconds: 1)
         let signals = pair(screenshot, camera, distance: 0.02)
@@ -75,7 +76,7 @@ final class SimilarityPolicyTests: XCTestCase {
         XCTAssertTrue(result.hardBlockers.contains(.screenshotMixedWithCamera))
         XCTAssertEqual(result.provisionalBucket, .notSimilar)
 
-        let group = policyEngine.classifyCluster(clusterInput(assets: [screenshot, camera], pairs: [
+        let group = await policyEngine.classifyCluster(clusterInput(assets: [screenshot, camera], pairs: [
             pairKey("shot", "cam"): signals
         ]))
 
@@ -84,7 +85,23 @@ final class SimilarityPolicyTests: XCTestCase {
         XCTAssertTrue(group.blockerFlags.contains(.screenshotMixedWithCamera))
     }
 
-    func testEditedOriginalPairStaysReviewableButNotAutoDelete() {
+    func testMajorCompositionChangeIsHardBlocked() {
+        let landscape = asset("landscape", seconds: 0, width: 4_000, height: 3_000)
+        let portraitCrop = asset("portrait", seconds: 1, width: 1_000, height: 3_000)
+        let signals = pair(landscape, portraitCrop, distance: 0.001)
+
+        let result = pairClassifier.classifyPair(
+            lhs: landscape,
+            rhs: portraitCrop,
+            signals: signals
+        )
+
+        XCTAssertFalse(result.eligible)
+        XCTAssertEqual(result.provisionalBucket, .notSimilar)
+        XCTAssertTrue(result.hardBlockers.contains(.majorCompositionChange))
+    }
+
+    func testEditedOriginalPairStaysReviewableButNotAutoDelete() async {
         let original = asset("orig", seconds: 0)
         let edited = asset("edit", seconds: 8, edited: true)
         let signals = pair(original, edited, distance: 0.035)
@@ -94,7 +111,7 @@ final class SimilarityPolicyTests: XCTestCase {
         XCTAssertEqual(result.provisionalBucket, .visuallySimilar)
         XCTAssertTrue(result.softBlockers.contains(.editedStateDivergence))
 
-        let group = policyEngine.classifyCluster(clusterInput(assets: [original, edited], pairs: [
+        let group = await policyEngine.classifyCluster(clusterInput(assets: [original, edited], pairs: [
             pairKey("orig", "edit"): signals
         ]))
 
@@ -103,7 +120,7 @@ final class SimilarityPolicyTests: XCTestCase {
         XCTAssertEqual(group.confidence, .medium)
     }
 
-    func testKeeperSelectionPrefersScoreOverInputOrder() {
+    func testKeeperSelectionPrefersScoreOverInputOrder() async {
         let low = asset("low", seconds: 10, width: 1200, height: 800)
         let high = asset("high", seconds: 0, width: 4032, height: 3024, edited: true)
 
@@ -137,16 +154,16 @@ final class SimilarityPolicyTests: XCTestCase {
             ]
         )
 
-        let result = keeperRanker.rankKeeper(in: input)
+        let result = await keeperRanker.rankKeeper(in: input)
         XCTAssertEqual(result.keeperAssetID, "high")
         XCTAssertEqual(result.rankedAssetIDs.first, "high")
         XCTAssertNotEqual(result.rankedAssetIDs.first, "low")
     }
 
-    func testDeleteCandidateIDsNeverIncludeKeeperAssetID() {
+    func testDeleteCandidateIDsNeverIncludeKeeperAssetID() async {
         let a = asset("a", seconds: 0)
         let b = asset("b", seconds: 5)
-        let result = policyEngine.classifyCluster(clusterInput(assets: [a, b], pairs: [
+        let result = await policyEngine.classifyCluster(clusterInput(assets: [a, b], pairs: [
             pairKey("a", "b"): pair(a, b, distance: 0.02)
         ]))
 
@@ -157,12 +174,52 @@ final class SimilarityPolicyTests: XCTestCase {
         XCTAssertEqual(result.deleteCandidateIDs.count, 1)
     }
 
-    func testVisuallySimilarDefaultsToReviewOnly() {
-        let a = asset("a", seconds: 0, width: 4032, height: 3024)
-        let b = asset("b", seconds: 120, width: 3000, height: 3000)
-        let c = asset("c", seconds: 240, width: 3024, height: 4032)
+    func testAutomaticActionWithoutExplicitDeletePlanDowngradesToReview() {
+        let group = PhotoGroup(
+            assets: [],
+            similarity: 0.98,
+            reason: .nearDuplicate,
+            groupConfidence: .high,
+            recommendedAction: .keepBestTrashRest,
+            keeperAssetID: "keeper",
+            deleteCandidateIDs: [],
+            candidates: [
+                candidate("keeper", isBestShot: true),
+                candidate("other", isBestShot: false)
+            ]
+        )
 
-        let result = policyEngine.classifyCluster(clusterInput(assets: [a, b, c], pairs: [
+        XCTAssertEqual(group.recommendedAction, .reviewManually)
+        XCTAssertTrue(group.deleteCandidateIDs.isEmpty)
+        XCTAssertFalse(group.isAutoCleanEligible)
+    }
+
+    func testMalformedDeletePlanDowngradesInsteadOfSilentlyFiltering() {
+        let group = PhotoGroup(
+            assets: [],
+            similarity: 0.98,
+            reason: .nearDuplicate,
+            groupConfidence: .high,
+            recommendedAction: .keepBestTrashRest,
+            keeperAssetID: "keeper",
+            deleteCandidateIDs: ["other", "outside"],
+            candidates: [
+                candidate("keeper", isBestShot: true),
+                candidate("other", isBestShot: false)
+            ]
+        )
+
+        XCTAssertEqual(group.recommendedAction, .reviewManually)
+        XCTAssertTrue(group.deleteCandidateIDs.isEmpty)
+        XCTAssertFalse(group.isAutoCleanEligible)
+    }
+
+    func testVisuallySimilarDefaultsToReviewOnly() async {
+        let a = asset("a", seconds: 0, width: 4032, height: 3024)
+        let b = asset("b", seconds: 120, width: 4032, height: 3024)
+        let c = asset("c", seconds: 240, width: 4032, height: 3024)
+
+        let result = await policyEngine.classifyCluster(clusterInput(assets: [a, b, c], pairs: [
             pairKey("a", "b"): pair(a, b, distance: 0.09),
             pairKey("a", "c"): pair(a, c, distance: 0.11),
             pairKey("b", "c"): pair(b, c, distance: 0.10)
@@ -256,7 +313,7 @@ final class SimilarityPolicyTests: XCTestCase {
         }
     }
 
-    func testChainingSplitCaseRejectsNoisyCluster() {
+    func testChainingSplitCaseRejectsNoisyCluster() async {
         let a = asset("a", seconds: 0)
         let b = asset("b", seconds: 3)
         let c = asset("c", seconds: 360)
@@ -265,7 +322,7 @@ final class SimilarityPolicyTests: XCTestCase {
         let bc = pair(b, c, distance: 0.028)
         let ac = pair(a, c, distance: 0.18)
 
-        let group = policyEngine.classifyCluster(clusterInput(assets: [a, b, c], pairs: [
+        let group = await policyEngine.classifyCluster(clusterInput(assets: [a, b, c], pairs: [
             pairKey("a", "b"): ab,
             pairKey("b", "c"): bc,
             pairKey("a", "c"): ac
@@ -274,6 +331,220 @@ final class SimilarityPolicyTests: XCTestCase {
         XCTAssertEqual(group.bucket, .notSimilar)
         XCTAssertEqual(group.action, .doNotSuggestDeletion)
         XCTAssertTrue(group.blockerFlags.contains(.contentDivergence))
+    }
+
+    func testHDRVariantStaysReviewOnly() async {
+        let standard = SimilarityAssetDescriptor(
+            id: "standard",
+            captureTimestamp: Date(timeIntervalSinceReferenceDate: 0),
+            pixelWidth: 4_000,
+            pixelHeight: 3_000
+        )
+        let hdr = SimilarityAssetDescriptor(
+            id: "hdr",
+            captureTimestamp: Date(timeIntervalSinceReferenceDate: 1),
+            pixelWidth: 4_000,
+            pixelHeight: 3_000,
+            isHDR: true
+        )
+        let signals = pair(standard, hdr, distance: 0.02)
+
+        let pairResult = pairClassifier.classifyPair(
+            lhs: standard,
+            rhs: hdr,
+            signals: signals
+        )
+        let group = await policyEngine.classifyCluster(
+            clusterInput(
+                assets: [standard, hdr],
+                pairs: [pairKey("standard", "hdr"): signals]
+            )
+        )
+
+        XCTAssertEqual(pairResult.provisionalBucket, .visuallySimilar)
+        XCTAssertTrue(pairResult.softBlockers.contains(.hdrVariant))
+        XCTAssertEqual(group.bucket, .visuallySimilar)
+        XCTAssertEqual(group.action, .reviewTogetherOnly)
+        XCTAssertTrue(group.deleteCandidateIDs.isEmpty)
+    }
+
+    @MainActor
+    func testDuckModeUndoLastSwipeRestoresPendingDecision() async throws {
+        let deleteCandidate = TestPhotoAsset(localIdentifier: "delete-candidate")
+        let keeper = TestPhotoAsset(localIdentifier: "keeper")
+        let group = PhotoGroup(
+            assets: [deleteCandidate, keeper],
+            similarity: 0.98,
+            reason: .nearDuplicate,
+            groupConfidence: .high,
+            recommendedAction: .keepBestTrashRest,
+            keeperAssetID: keeper.localIdentifier,
+            deleteCandidateIDs: [deleteCandidate.localIdentifier]
+        )
+        XCTAssertTrue(group.isAutoCleanEligible)
+
+        let viewModel = SwipeModeViewModel(groups: [group])
+        XCTAssertEqual(viewModel.current?.id, deleteCandidate.localIdentifier)
+
+        viewModel.delete()
+        try await Task.sleep(nanoseconds: 350_000_000)
+
+        XCTAssertTrue(viewModel.isComplete)
+        XCTAssertTrue(viewModel.hasPendingDeletes)
+        XCTAssertTrue(viewModel.canUndoLastSwipe)
+
+        viewModel.undoLastSwipe()
+
+        XCTAssertFalse(viewModel.isComplete)
+        XCTAssertFalse(viewModel.hasPendingDeletes)
+        XCTAssertFalse(viewModel.canUndoLastSwipe)
+        XCTAssertEqual(viewModel.current?.id, deleteCandidate.localIdentifier)
+    }
+
+    func testDuplicateScreenshotsCanGroupWithoutCameraAssets() async {
+        let first = asset("first", seconds: 0, screenshot: true)
+        let second = asset("second", seconds: 86_400, screenshot: true)
+        let signals = pair(first, second, distance: 0.005)
+        let pairResult = pairClassifier.classifyPair(
+            lhs: first,
+            rhs: second,
+            signals: signals
+        )
+        let group = await policyEngine.classifyCluster(
+            clusterInput(
+                assets: [first, second],
+                pairs: [pairKey("first", "second"): signals]
+            )
+        )
+
+        XCTAssertTrue(pairResult.eligible)
+        XCTAssertEqual(pairResult.provisionalBucket, .nearDuplicate)
+        XCTAssertFalse(pairResult.softBlockers.contains(.largeTimeGap))
+        XCTAssertEqual(group.bucket, .nearDuplicate)
+        XCTAssertEqual(group.action, .suggestDeleteOthers)
+    }
+
+    func testStrongCameraMatchOnDifferentDayDoesNotGroup() async {
+        let first = asset("first", seconds: 0)
+        let second = asset("second", seconds: 86_400)
+        let signals = pair(first, second, distance: 0.005)
+        let pairResult = pairClassifier.classifyPair(
+            lhs: first,
+            rhs: second,
+            signals: signals
+        )
+        let group = await policyEngine.classifyCluster(
+            clusterInput(
+                assets: [first, second],
+                pairs: [pairKey("first", "second"): signals]
+            )
+        )
+
+        XCTAssertFalse(pairResult.eligible)
+        XCTAssertEqual(pairResult.provisionalBucket, .notSimilar)
+        XCTAssertEqual(group.bucket, .notSimilar)
+        XCTAssertEqual(group.action, .doNotSuggestDeletion)
+    }
+
+    func testDeletionGuardrailsRejectStaleKeeperAndForeignDeleteID() {
+        XCTAssertThrowsError(
+            try PhotoDeletionGuardrails.validate(
+                keeperAssetID: "stale",
+                deleteCandidateIDs: ["b"],
+                assetIDs: ["a", "b"],
+                recommendedAction: .keepBestTrashRest,
+                reason: .nearDuplicate,
+                confidence: .high,
+                blockerFlags: []
+            )
+        ) { error in
+            XCTAssertEqual(error as? PhotoDeletionGuardrailError, .keeperNotInGroup)
+        }
+
+        XCTAssertThrowsError(
+            try PhotoDeletionGuardrails.validate(
+                keeperAssetID: "a",
+                deleteCandidateIDs: ["outside"],
+                assetIDs: ["a", "b"],
+                recommendedAction: .keepBestTrashRest,
+                reason: .nearDuplicate,
+                confidence: .high,
+                blockerFlags: []
+            )
+        ) { error in
+            XCTAssertEqual(error as? PhotoDeletionGuardrailError, .deleteCandidateNotInGroup)
+        }
+    }
+
+    func testDeletionGuardrailsKeepVisualGroupsReviewOnly() {
+        XCTAssertThrowsError(
+            try PhotoDeletionGuardrails.validate(
+                keeperAssetID: "a",
+                deleteCandidateIDs: ["b"],
+                assetIDs: ["a", "b"],
+                recommendedAction: .keepBestTrashRest,
+                reason: .visuallySimilar,
+                confidence: .high,
+                blockerFlags: []
+            )
+        ) { error in
+            XCTAssertEqual(error as? PhotoDeletionGuardrailError, .visuallySimilarReviewOnly)
+        }
+    }
+
+    func testDeletionGuardrailsRejectMissingKeeperEvidence() {
+        XCTAssertThrowsError(
+            try PhotoDeletionGuardrails.validate(
+                keeperAssetID: "a",
+                deleteCandidateIDs: ["b"],
+                assetIDs: ["a", "b"],
+                recommendedAction: .keepBestTrashRest,
+                reason: .nearDuplicate,
+                confidence: .high,
+                blockerFlags: [.lowKeeperEvidence]
+            )
+        ) { error in
+            XCTAssertEqual(error as? PhotoDeletionGuardrailError, .blockerFlagsPresent)
+        }
+    }
+
+    func testDeletionGuardrailsRejectEntireGroupSelection() {
+        XCTAssertThrowsError(
+            try PhotoDeletionGuardrails.validateManualSelection(
+                assetIDs: ["a", "b"],
+                groupAssetIDs: ["a", "b"]
+            )
+        ) { error in
+            XCTAssertEqual(error as? PhotoDeletionGuardrailError, .invalidManualSelection)
+        }
+    }
+
+    func testDeletionGuardrailsRejectCrossGroupKeeperConflict() {
+        XCTAssertThrowsError(
+            try PhotoDeletionGuardrails.validateCrossGroup(
+                keeperAssetIDs: ["keeper-a", "keeper-b"],
+                deleteCandidateIDsByGroup: [
+                    ["trash-a"],
+                    ["keeper-a"]
+                ]
+            )
+        ) { error in
+            XCTAssertEqual(error as? PhotoDeletionGuardrailError, .crossGroupKeeperConflict)
+        }
+    }
+
+    func testDeletionGuardrailsRejectDuplicateDeleteAcrossGroups() {
+        XCTAssertThrowsError(
+            try PhotoDeletionGuardrails.validateCrossGroup(
+                keeperAssetIDs: ["keeper-a", "keeper-b"],
+                deleteCandidateIDsByGroup: [
+                    ["shared-trash"],
+                    ["shared-trash"]
+                ]
+            )
+        ) { error in
+            XCTAssertEqual(error as? PhotoDeletionGuardrailError, .duplicateDeleteAcrossGroups)
+        }
     }
 
     private func asset(
@@ -300,6 +571,23 @@ final class SimilarityPolicyTests: XCTestCase {
         SimilaritySignals.make(lhs: lhs, rhs: rhs, featureDistance: distance)
     }
 
+    private func candidate(_ id: String, isBestShot: Bool) -> SimilarPhotoCandidate {
+        SimilarPhotoCandidate(
+            photoId: id,
+            assetReference: id,
+            captureTimestamp: nil,
+            isBestShot: isBestShot,
+            bestShotScore: isBestShot ? 0.9 : 0.4,
+            bestShotReasons: [],
+            issueFlags: [],
+            isProtected: false,
+            isSelectedForTrash: !isBestShot,
+            isViewed: false,
+            selectionState: isBestShot ? .keep : .trash,
+            technicalScores: nil
+        )
+    }
+
     private func pairKey(_ a: String, _ b: String) -> SimilarityPairKey {
         SimilarityPairKey(a, b)
     }
@@ -309,5 +597,18 @@ final class SimilarityPolicyTests: XCTestCase {
         pairs: [SimilarityPairKey: SimilaritySignals]
     ) -> SimilarityClusterInput {
         SimilarityClusterInput(assets: assets, pairwiseSignals: pairs)
+    }
+}
+
+private final class TestPhotoAsset: PHAsset, @unchecked Sendable {
+    private let testLocalIdentifier: String
+
+    init(localIdentifier: String) {
+        testLocalIdentifier = localIdentifier
+        super.init()
+    }
+
+    override var localIdentifier: String {
+        testLocalIdentifier
     }
 }

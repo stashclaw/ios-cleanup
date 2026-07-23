@@ -9,11 +9,14 @@ protocol PairSimilarityClassifying: Sendable {
 }
 
 protocol KeeperRankingService: Sendable {
-    func rankKeeper(in input: SimilarityClusterInput) -> KeeperRankingResult
+    func rankKeeper(in input: SimilarityClusterInput) async -> KeeperRankingResult
 }
 
 protocol SimilarityClusterClassifying: Sendable {
-    func classifyCluster(_ input: SimilarityClusterInput) -> SimilarityGroupResult
+    func classifyCluster(
+        _ input: SimilarityClusterInput,
+        keeperResult: KeeperRankingResult
+    ) -> SimilarityGroupResult
 }
 
 struct ConservativePairSimilarityClassifier: PairSimilarityClassifying {
@@ -39,9 +42,27 @@ struct ConservativePairSimilarityClassifier: PairSimilarityClassifying {
             )
         }
 
+        if abs(lhs.aspectRatio - rhs.aspectRatio)
+            > SimilarityThresholds.majorAspectRatioMismatch
+        {
+            hardBlockers.append(.majorCompositionChange)
+            reasons.append("Major composition change")
+            return PairEligibilityResult(
+                eligible: false,
+                provisionalBucket: .notSimilar,
+                hardBlockers: hardBlockers,
+                softBlockers: softBlockers,
+                similarityScore: 0,
+                reasonStrings: reasons
+            )
+        }
+
         let timeDelta = signals.captureTimeDeltaSeconds ?? .greatestFiniteMagnitude
-        let featureDistance = signals.featureDistance ?? Double.greatestFiniteMagnitude
-        let visualEvidenceAvailable = signals.featureDistance != nil
+        let validFeatureDistance = signals.featureDistance.flatMap {
+            $0.isFinite && $0 >= 0 ? $0 : nil
+        }
+        let featureDistance = validFeatureDistance ?? Double.greatestFiniteMagnitude
+        let visualEvidenceAvailable = validFeatureDistance != nil
 
         if !visualEvidenceAvailable && !signals.isBurstPair {
             softBlockers.append(.lowVisualEvidence)
@@ -81,15 +102,21 @@ struct ConservativePairSimilarityClassifier: PairSimilarityClassifying {
             softBlockers.append(.originalVsEditedVariant)
             reasons.append("Original and edited variant")
         case .hdrVariant:
+            softBlockers.append(.hdrVariant)
             reasons.append("HDR variant")
         case .portraitDepthVariant:
+            softBlockers.append(.portraitDepthVariant)
             reasons.append("Portrait/depth variant")
         case .screenshotToSavedImage:
             hardBlockers.append(.screenshotMixedWithCamera)
             reasons.append("Screenshot and saved image should not be mixed")
         }
 
-        if timeDelta > SimilarityThresholds.largeTimeGapPenaltyAfterSeconds {
+        let isExtremeScreenshotMatch = signals.bothScreenshots
+            && featureDistance <= SimilarityThresholds.maxScreenshotDuplicateFeatureDistance
+        if timeDelta > SimilarityThresholds.largeTimeGapPenaltyAfterSeconds
+            && !isExtremeScreenshotMatch
+        {
             softBlockers.append(.largeTimeGap)
             reasons.append("Large time gap")
         }
@@ -100,10 +127,12 @@ struct ConservativePairSimilarityClassifier: PairSimilarityClassifying {
         let variantScore = variantScore(for: signals.variantRelationship)
         let aspectPenalty = signals.aspectRatioMismatch ? SimilarityThresholds.aspectRatioMismatchPenalty : 0
         let dimensionPenalty = signals.dimensionMismatch ? SimilarityThresholds.dimensionMismatchPenalty : 0
-        let lowEvidencePenalty = signals.featureDistance == nil ? 0.20 : 0
+        let lowEvidencePenalty = visualEvidenceAvailable
+            ? 0
+            : SimilarityThresholds.missingVisualEvidencePenalty
 
         let similarityScore = clamp(
-            visualScore * 0.55
+            visualScore * SimilarityThresholds.featureScoreWeight
                 + timeScore
                 + burstScore
                 + variantScore
@@ -119,7 +148,9 @@ struct ConservativePairSimilarityClassifier: PairSimilarityClassifying {
 
         let burstEligible = signals.isBurstPair
             && timeDelta <= SimilarityThresholds.burstWindowSeconds
-            && (visualEvidenceAvailable ? similarityScore >= 0.35 : true)
+            && (visualEvidenceAvailable
+                ? similarityScore >= SimilarityThresholds.burstPairEligibilityScoreFloor
+                : true)
 
         let nearDuplicateEligible = visualEvidenceAvailable
             && featureDistance <= SimilarityThresholds.maxNearDuplicateFeatureDistance
@@ -131,8 +162,15 @@ struct ConservativePairSimilarityClassifier: PairSimilarityClassifying {
             && featureDistance <= SimilarityThresholds.maxVisualSimilarFeatureDistance
             && timeDelta <= SimilarityThresholds.visualSessionWindowSeconds
 
+        let screenshotDuplicateEligible = signals.bothScreenshots
+            && visualEvidenceAvailable
+            && featureDistance <= SimilarityThresholds.maxScreenshotDuplicateFeatureDistance
+
         if burstEligible {
             provisionalBucket = .burstShot
+            eligible = true
+        } else if screenshotDuplicateEligible {
+            provisionalBucket = .nearDuplicate
             eligible = true
         } else if nearDuplicateEligible {
             provisionalBucket = .nearDuplicate
@@ -143,23 +181,23 @@ struct ConservativePairSimilarityClassifier: PairSimilarityClassifying {
         }
 
         if provisionalBucket == .nearDuplicate {
-            if signals.editedStateDivergence {
+            if signals.variantRelationship != .none && !signals.bothScreenshots {
                 provisionalBucket = .visuallySimilar
-                reasons.append("Downgraded due to edited state divergence")
+                reasons.append("Variant pair stays review-only")
             }
-            if timeDelta > SimilarityThresholds.nearDuplicateWindowSeconds || signals.aspectRatioMismatch || signals.dimensionMismatch {
+            if !isExtremeScreenshotMatch
+                && (timeDelta > SimilarityThresholds.nearDuplicateWindowSeconds
+                    || signals.aspectRatioMismatch
+                    || signals.dimensionMismatch)
+            {
                 provisionalBucket = .visuallySimilar
                 reasons.append("Downgraded from near-duplicate")
-            }
-            if featureDistance > SimilarityThresholds.nearDuplicateDowngradeDistanceFloor {
-                provisionalBucket = .visuallySimilar
-                reasons.append("Borderline visual distance")
             }
         }
 
         if provisionalBucket == .visuallySimilar
             && timeDelta > SimilarityThresholds.visualSessionWindowSeconds
-            && similarityScore < 0.45
+            && similarityScore < SimilarityThresholds.timeGapVisualScoreFloor
         {
             eligible = false
             provisionalBucket = .notSimilar
@@ -176,7 +214,7 @@ struct ConservativePairSimilarityClassifier: PairSimilarityClassifying {
 
         if !eligible {
             provisionalBucket = .notSimilar
-            if similarityScore < 0.25 {
+            if similarityScore < SimilarityThresholds.visualClusterFloor {
                 reasons.append("Low visual evidence")
             }
             if hardBlockers.isEmpty {
@@ -190,7 +228,7 @@ struct ConservativePairSimilarityClassifier: PairSimilarityClassifying {
             hardBlockers: hardBlockers,
             softBlockers: softBlockers,
             similarityScore: similarityScore,
-            reasonStrings: uniqueStrings(reasons)
+            reasonStrings: reasons.uniquePreservingOrder()
         )
     }
 
@@ -202,11 +240,7 @@ struct ConservativePairSimilarityClassifier: PairSimilarityClassifying {
     }
 
     private func timeScore(for delta: Double) -> Double {
-        if delta <= SimilarityThresholds.burstWindowSeconds { return 0.18 }
-        if delta <= SimilarityThresholds.nearDuplicateWindowSeconds { return 0.15 }
-        if delta <= SimilarityThresholds.visualSessionWindowSeconds { return 0.08 }
-        if delta <= SimilarityThresholds.extendedSessionWindowSeconds { return 0.03 }
-        return 0
+        sharedTimeScore(for: delta)
     }
 
     private func variantScore(for variant: VariantRelationship) -> Double {
@@ -220,7 +254,7 @@ struct ConservativePairSimilarityClassifier: PairSimilarityClassifying {
 }
 
 struct ConservativeKeeperRankingService: KeeperRankingService {
-    func rankKeeper(in input: SimilarityClusterInput) -> KeeperRankingResult {
+    func rankKeeper(in input: SimilarityClusterInput) async -> KeeperRankingResult {
         var scoresByID: [String: Double] = [:]
         var reasonsByID: [String: [String]] = [:]
         var signalsByID: [String: KeeperSignals] = [:]
@@ -271,7 +305,7 @@ struct ConservativeKeeperRankingService: KeeperRankingService {
             if signals.resolutionTiebreaker > 0.12 { reasons.append("Higher resolution") }
 
             scoresByID[asset.id] = score
-            reasonsByID[asset.id] = uniqueStrings(reasons)
+            reasonsByID[asset.id] = reasons.uniquePreservingOrder()
         }
 
         let ranked = scoresByID.sorted { lhs, rhs in
@@ -291,17 +325,15 @@ struct ConservativeKeeperRankingService: KeeperRankingService {
 
 struct ConservativeSimilarityClusterClassifier: SimilarityClusterClassifying {
     let pairClassifier: ConservativePairSimilarityClassifier
-    let keeperRankingService: ConservativeKeeperRankingService
 
-    init(
-        pairClassifier: ConservativePairSimilarityClassifier = ConservativePairSimilarityClassifier(),
-        keeperRankingService: ConservativeKeeperRankingService = ConservativeKeeperRankingService()
-    ) {
+    init(pairClassifier: ConservativePairSimilarityClassifier = ConservativePairSimilarityClassifier()) {
         self.pairClassifier = pairClassifier
-        self.keeperRankingService = keeperRankingService
     }
 
-    func classifyCluster(_ input: SimilarityClusterInput) -> SimilarityGroupResult {
+    func classifyCluster(
+        _ input: SimilarityClusterInput,
+        keeperResult: KeeperRankingResult
+    ) -> SimilarityGroupResult {
         let assetCount = input.assets.count
         guard assetCount >= 2 else {
             return SimilarityGroupResult(
@@ -346,7 +378,6 @@ struct ConservativeSimilarityClusterClassifier: SimilarityClusterClassifying {
         }
 
         if hardBlockers.contains(.screenshotMixedWithCamera) {
-            let keeperResult = keeperRankingService.rankKeeper(in: input)
             return makeResult(
                 bucket: .notSimilar,
                 confidence: .low,
@@ -356,7 +387,7 @@ struct ConservativeSimilarityClusterClassifier: SimilarityClusterClassifying {
                 pairResults: pairResults,
                 hardBlockers: hardBlockers,
                 softBlockers: softBlockers,
-                reasons: uniqueStrings(reasons + ["Screenshots should not mix with camera photos"])
+                reasons: (reasons + ["Screenshots should not mix with camera photos"]).uniquePreservingOrder()
             )
         }
 
@@ -368,9 +399,12 @@ struct ConservativeSimilarityClusterClassifier: SimilarityClusterClassifying {
         let maxTimeSpan = maxTimeSpan(in: input.assets)
         let burstCoverage = input.assets.filter { $0.burstIdentifier != nil }.count
         let sameBurst = burstCoverage == input.assets.count && input.assets.map(\.burstIdentifier).allSatisfy { $0 == input.assets.first?.burstIdentifier }
+        let exactScreenshotGroup = input.assets.allSatisfy(\.isScreenshot)
+            && pairResults.values.allSatisfy {
+                $0.eligible && $0.provisionalBucket == .nearDuplicate
+            }
 
         if assetCount > 2 && minPairScore < SimilarityThresholds.splitConsistencyFloor && !sameBurst {
-            let keeperResult = keeperRankingService.rankKeeper(in: input)
             return makeResult(
                 bucket: .notSimilar,
                 confidence: .low,
@@ -380,7 +414,7 @@ struct ConservativeSimilarityClusterClassifier: SimilarityClusterClassifying {
                 pairResults: pairResults,
                 hardBlockers: hardBlockers,
                 softBlockers: softBlockers,
-                reasons: uniqueStrings(reasons + ["Cluster is not stable enough to trust"])
+                reasons: (reasons + ["Cluster is not stable enough to trust"]).uniquePreservingOrder()
             )
         }
 
@@ -392,9 +426,25 @@ struct ConservativeSimilarityClusterClassifier: SimilarityClusterClassifying {
         var confidence: GroupConfidence = .low
         var action: SuggestedAction = .doNotSuggestDeletion
 
-        if hasBurstSupport && maxTimeSpan <= SimilarityThresholds.burstWindowSeconds {
+        if exactScreenshotGroup {
+            bucket = .nearDuplicate
+            if minEligibleScore >= SimilarityThresholds.screenshotAutoDeleteScoreFloor
+                && softBlockers.isEmpty
+            {
+                confidence = .high
+                action = .suggestDeleteOthers
+            } else {
+                confidence = .medium
+                action = .reviewTogetherOnly
+            }
+            reasons.append("Duplicate screenshots of the same content")
+        } else if hasBurstSupport && maxTimeSpan <= SimilarityThresholds.burstWindowSeconds {
             bucket = .burstShot
-            if minEligibleScore >= 0.55 && !burstDivergence {
+            if minEligibleScore >= SimilarityThresholds.burstAutoDeleteScoreFloor
+                && !burstDivergence
+                && softBlockers.isEmpty
+                && pairResults.values.allSatisfy(\.eligible)
+            {
                 confidence = .high
                 action = .suggestDeleteOthers
             } else if minEligibleScore >= SimilarityThresholds.visualClusterFloor {
@@ -405,14 +455,19 @@ struct ConservativeSimilarityClusterClassifier: SimilarityClusterClassifying {
                 action = .reviewTogetherOnly
             }
             reasons.append("Burst sequence detected")
-        } else if minEligibleScore >= SimilarityThresholds.nearDuplicateClusterFloor
+        } else if pairResults.values.allSatisfy({
+            $0.eligible && $0.provisionalBucket == .nearDuplicate
+        })
+            && minEligibleScore >= SimilarityThresholds.nearDuplicateClusterFloor
             && maxTimeSpan <= SimilarityThresholds.nearDuplicateWindowSeconds
         {
             bucket = .nearDuplicate
-            if minEligibleScore >= 0.60 && softBlockers.isEmpty {
+            if minEligibleScore >= SimilarityThresholds.nearDuplicateAutoDeleteScoreFloor
+                && softBlockers.isEmpty
+            {
                 confidence = .high
                 action = .suggestDeleteOthers
-            } else if minEligibleScore >= 0.45 {
+            } else if minEligibleScore >= SimilarityThresholds.nearDuplicateClusterFloor {
                 confidence = softBlockers.isEmpty ? .medium : .low
                 action = .reviewTogetherOnly
             } else {
@@ -424,7 +479,9 @@ struct ConservativeSimilarityClusterClassifier: SimilarityClusterClassifying {
             && maxTimeSpan <= SimilarityThresholds.visualSessionWindowSeconds
         {
             bucket = .visuallySimilar
-            confidence = averagePairScore >= 0.25 ? .medium : .low
+            confidence = averagePairScore >= SimilarityThresholds.visualClusterFloor
+                ? .medium
+                : .low
             action = .reviewTogetherOnly
             reasons.append("Review together, but do not auto-delete")
         } else if hasBurstSupport {
@@ -440,6 +497,7 @@ struct ConservativeSimilarityClusterClassifier: SimilarityClusterClassifying {
         }
 
         if bucket == .nearDuplicate
+            && !exactScreenshotGroup
             && (maxTimeSpan > SimilarityThresholds.nearDuplicateWindowSeconds
                 || hardBlockers.contains(.majorCompositionChange)
                 || hardBlockers.contains(.differentIntent))
@@ -459,7 +517,6 @@ struct ConservativeSimilarityClusterClassifier: SimilarityClusterClassifying {
             reasons.append("Downgraded out of similar range")
         }
 
-        let keeperResult = keeperRankingService.rankKeeper(in: input)
         return makeResult(
             bucket: bucket,
             confidence: confidence,
@@ -469,13 +526,13 @@ struct ConservativeSimilarityClusterClassifier: SimilarityClusterClassifying {
             pairResults: pairResults,
             hardBlockers: hardBlockers,
             softBlockers: softBlockers,
-            reasons: uniqueStrings(reasons + clusterSummaryReasons(
+            reasons: (reasons + clusterSummaryReasons(
                 bucket: bucket,
                 confidence: confidence,
                 timeSpan: maxTimeSpan,
                 minPairScore: minPairScore,
                 averagePairScore: averagePairScore
-            ))
+            )).uniquePreservingOrder()
         )
     }
 
@@ -579,11 +636,7 @@ struct ConservativeSimilarityClusterClassifier: SimilarityClusterClassifying {
     }
 
     private func timeScore(for span: Double) -> Double {
-        if span <= SimilarityThresholds.burstWindowSeconds { return 0.18 }
-        if span <= SimilarityThresholds.nearDuplicateWindowSeconds { return 0.15 }
-        if span <= SimilarityThresholds.visualSessionWindowSeconds { return 0.08 }
-        if span <= SimilarityThresholds.extendedSessionWindowSeconds { return 0.03 }
-        return 0
+        sharedTimeScore(for: span)
     }
 
     private func maxTimeSpan(in assets: [SimilarityAssetDescriptor]) -> Double {
@@ -595,33 +648,208 @@ struct ConservativeSimilarityClusterClassifier: SimilarityClusterClassifying {
 
 struct ConservativeSimilarityPolicyEngine: Sendable {
     let pairClassifier: ConservativePairSimilarityClassifier
-    let keeperRankingService: ConservativeKeeperRankingService
+    let keeperRankingService: any KeeperRankingService
     let clusterClassifier: ConservativeSimilarityClusterClassifier
 
     init(
         pairClassifier: ConservativePairSimilarityClassifier = ConservativePairSimilarityClassifier(),
-        keeperRankingService: ConservativeKeeperRankingService = ConservativeKeeperRankingService()
+        keeperRankingService: any KeeperRankingService = ConservativeKeeperRankingService()
     ) {
         self.pairClassifier = pairClassifier
         self.keeperRankingService = keeperRankingService
-        self.clusterClassifier = ConservativeSimilarityClusterClassifier(
-            pairClassifier: pairClassifier,
-            keeperRankingService: keeperRankingService
+        self.clusterClassifier = ConservativeSimilarityClusterClassifier(pairClassifier: pairClassifier)
+    }
+
+    func evaluateCluster(_ input: SimilarityClusterInput) async -> SimilarityEvaluation {
+        let keeperResult = await keeperRankingService.rankKeeper(in: input)
+        let groupResult = clusterClassifier.classifyCluster(input, keeperResult: keeperResult)
+        return SimilarityEvaluation(
+            groupResult: groupResult,
+            keeperRankingResult: keeperResult
         )
     }
 
-    func classifyCluster(_ input: SimilarityClusterInput) -> SimilarityGroupResult {
-        clusterClassifier.classifyCluster(input)
+    func classifyCluster(_ input: SimilarityClusterInput) async -> SimilarityGroupResult {
+        (await evaluateCluster(input)).groupResult
+    }
+}
+
+struct SimilarityCandidateGraph: Sendable {
+    func formClusters(
+        descriptors: [SimilarityAssetDescriptor],
+        pairResults: [SimilarityPairKey: PairEligibilityResult]
+    ) -> [[String]] {
+        let descriptorsByID = Dictionary(uniqueKeysWithValues: descriptors.map { ($0.id, $0) })
+        var assignedIDs = Set<String>()
+        var clusters: [[String]] = []
+
+        // Photos explicitly marked as one burst remain a burst review unit even
+        // when visual evidence diverges. Divergence affects action/confidence later.
+        let burstBuckets = Dictionary(
+            grouping: descriptors.filter { $0.burstIdentifier != nil },
+            by: { $0.burstIdentifier ?? "" }
+        )
+        for burst in burstBuckets.values.sorted(by: burstSort) {
+            let ordered = burst.sorted(by: descriptorSort)
+            guard ordered.count >= 2 else { continue }
+
+            for range in SimilarityBurstChunker.ranges(
+                assetCount: ordered.count,
+                maximumChunkSize: SimilarityThresholds.maxBurstAssetsPerCluster
+            ) {
+                let ids = ordered[range].map(\.id)
+                clusters.append(ids)
+                assignedIDs.formUnion(ids)
+            }
+        }
+
+        let eligibleEdges = pairResults
+            .filter { key, result in
+                result.eligible
+                    && result.provisionalBucket != .burstShot
+                    && descriptorsByID[key.lhsID] != nil
+                    && descriptorsByID[key.rhsID] != nil
+                    && !assignedIDs.contains(key.lhsID)
+                    && !assignedIDs.contains(key.rhsID)
+            }
+            .sorted { lhs, rhs in
+                if lhs.value.similarityScore != rhs.value.similarityScore {
+                    return lhs.value.similarityScore > rhs.value.similarityScore
+                }
+                if lhs.key.lhsID != rhs.key.lhsID {
+                    return lhs.key.lhsID < rhs.key.lhsID
+                }
+                return lhs.key.rhsID < rhs.key.rhsID
+            }
+
+        var strongAdjacency: [String: Set<String>] = [:]
+        for (key, result) in eligibleEdges
+            where result.similarityScore >= SimilarityThresholds.splitConsistencyFloor
+        {
+            strongAdjacency[key.lhsID, default: []].insert(key.rhsID)
+            strongAdjacency[key.rhsID, default: []].insert(key.lhsID)
+        }
+
+        for (seedKey, _) in eligibleEdges {
+            guard !assignedIDs.contains(seedKey.lhsID),
+                  !assignedIDs.contains(seedKey.rhsID) else {
+                continue
+            }
+
+            var cluster = [seedKey.lhsID, seedKey.rhsID]
+            var completeLinkCandidates = strongAdjacency[seedKey.lhsID, default: []]
+                .intersection(strongAdjacency[seedKey.rhsID, default: []])
+                .subtracting(assignedIDs)
+                .subtracting(cluster)
+
+            while let nextID = bestCompleteLinkCandidate(
+                for: cluster,
+                candidates: completeLinkCandidates,
+                pairResults: pairResults
+            ) {
+                cluster.append(nextID)
+                completeLinkCandidates.formIntersection(
+                    strongAdjacency[nextID, default: []]
+                )
+                completeLinkCandidates.subtract(assignedIDs)
+                completeLinkCandidates.subtract(cluster)
+            }
+
+            let orderedCluster = cluster.sorted { lhs, rhs in
+                guard let lhsDescriptor = descriptorsByID[lhs],
+                      let rhsDescriptor = descriptorsByID[rhs] else {
+                    return lhs < rhs
+                }
+                return descriptorSort(lhsDescriptor, rhsDescriptor)
+            }
+            clusters.append(orderedCluster)
+            assignedIDs.formUnion(orderedCluster)
+        }
+
+        return clusters
     }
 
-    func classifyGroup(_ group: PhotoGroup) -> SimilarityGroupResult {
-        classifyCluster(group.similarityClusterInput(baseFeatureDistance: Double(group.similarity)))
+    private func bestCompleteLinkCandidate(
+        for cluster: [String],
+        candidates: Set<String>,
+        pairResults: [SimilarityPairKey: PairEligibilityResult]
+    ) -> String? {
+        let scored = candidates.compactMap { candidateID -> (String, Double)? in
+            let links = cluster.compactMap {
+                pairResults[SimilarityPairKey(candidateID, $0)]
+            }
+            guard links.count == cluster.count,
+                  links.allSatisfy({
+                      $0.eligible
+                          && $0.similarityScore >= SimilarityThresholds.splitConsistencyFloor
+                  }) else {
+                return nil
+            }
+            let averageScore = links.map(\.similarityScore).reduce(0, +) / Double(links.count)
+            return (candidateID, averageScore)
+        }
+
+        return scored.sorted { lhs, rhs in
+            if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
+            return lhs.0 < rhs.0
+        }.first?.0
+    }
+
+    private func burstSort(
+        _ lhs: [SimilarityAssetDescriptor],
+        _ rhs: [SimilarityAssetDescriptor]
+    ) -> Bool {
+        let lhsDate = lhs.compactMap(\.captureTimestamp).min() ?? .distantPast
+        let rhsDate = rhs.compactMap(\.captureTimestamp).min() ?? .distantPast
+        if lhsDate != rhsDate { return lhsDate < rhsDate }
+        return (lhs.first?.burstIdentifier ?? "") < (rhs.first?.burstIdentifier ?? "")
+    }
+
+    private func descriptorSort(
+        _ lhs: SimilarityAssetDescriptor,
+        _ rhs: SimilarityAssetDescriptor
+    ) -> Bool {
+        let lhsDate = lhs.captureTimestamp ?? .distantPast
+        let rhsDate = rhs.captureTimestamp ?? .distantPast
+        if lhsDate != rhsDate { return lhsDate < rhsDate }
+        return lhs.id < rhs.id
+    }
+}
+
+enum SimilarityBurstChunker {
+    static func ranges(
+        assetCount: Int,
+        maximumChunkSize: Int
+    ) -> [Range<Int>] {
+        guard assetCount >= 2, maximumChunkSize >= 2 else { return [] }
+
+        var chunkSizes = Array(
+            repeating: maximumChunkSize,
+            count: assetCount / maximumChunkSize
+        )
+        let remainder = assetCount % maximumChunkSize
+
+        if remainder == 1, let lastIndex = chunkSizes.indices.last {
+            // A one-photo review group is not useful. Borrow one asset from the
+            // preceding chunk so every burst asset remains reviewable.
+            chunkSizes[lastIndex] -= 1
+            chunkSizes.append(2)
+        } else if remainder > 0 {
+            chunkSizes.append(remainder)
+        }
+
+        var start = 0
+        return chunkSizes.map { size in
+            defer { start += size }
+            return start..<(start + size)
+        }
     }
 }
 
 extension KeeperSignals {
     static func conservativeFallback(for descriptor: SimilarityAssetDescriptor) -> KeeperSignals {
-        let pixels = Double(max(descriptor.pixelWidth * descriptor.pixelHeight, 1))
+        let pixels = Double(max(descriptor.pixelWidth, 1))
+            * Double(max(descriptor.pixelHeight, 1))
         let resolutionScore = min(log10(pixels) / 8.0, 1.0)
         let aspectDistance = min(abs(descriptor.aspectRatio - 1.0), abs(descriptor.aspectRatio - 4.0 / 3.0), abs(descriptor.aspectRatio - 3.0 / 4.0))
         let framingScore = max(0.0, 1.0 - min(aspectDistance, 1.0))
@@ -634,18 +862,21 @@ extension KeeperSignals {
             expressionScore: nil,
             exposureScore: descriptor.isScreenshot ? 0.90 : 0.72,
             favoriteBonus: descriptor.isFavorite ? 0.08 : 0.0,
-            editedBonusOrPenalty: descriptor.isEdited ? -0.02 : 0.0,
+            editedBonusOrPenalty: descriptor.isEdited ? 0.04 : 0.0,
             framingScore: framingScore,
             resolutionTiebreaker: resolutionScore * 0.2
         )
     }
 }
 
-private func clamp(_ value: Double, lower: Double, upper: Double) -> Double {
-    min(max(value, lower), upper)
+// MARK: - Shared Helpers
+
+/// Shared time-proximity score used by both pair and cluster classifiers.
+private func sharedTimeScore(for delta: Double) -> Double {
+    if delta <= SimilarityThresholds.burstWindowSeconds { return 0.18 }
+    if delta <= SimilarityThresholds.nearDuplicateWindowSeconds { return 0.15 }
+    if delta <= SimilarityThresholds.visualSessionWindowSeconds { return 0.08 }
+    return 0
 }
 
-private func uniqueStrings(_ strings: [String]) -> [String] {
-    var seen = Set<String>()
-    return strings.filter { seen.insert($0).inserted }
-}
+// clamp() and uniqueStrings() consolidated into SharedHelpers.swift

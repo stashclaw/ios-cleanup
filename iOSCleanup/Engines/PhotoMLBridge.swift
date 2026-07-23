@@ -1,6 +1,13 @@
 import Foundation
+import OSLog
 import Photos
 @preconcurrency import Vision
+
+struct MLPersistenceHealth: Sendable, Equatable {
+    let isHealthy: Bool
+    let lastErrorDescription: String?
+    let hasUnconsumedFailureNotice: Bool
+}
 
 // MARK: - PhotoMLBridge
 // Bridges existing domain types to/from PhotoMLStore records.
@@ -8,108 +15,91 @@ import Photos
 
 actor PhotoMLBridge {
     static let shared = PhotoMLBridge()
+    static let pinnedFeaturePrintRevision = VNGenerateImageFeaturePrintRequestRevision1
 
+    private static let logger = Logger(
+        subsystem: "com.photoduck.iOSCleanup",
+        category: "MLPersistence"
+    )
     private let store: PhotoMLStore
+    private var persistenceHealthy = true
+    private var lastPersistenceError: String?
+    private var hasUnconsumedFailureNotice = false
 
     init(store: PhotoMLStore = .shared) {
         self.store = store
     }
 
-    // MARK: - Embedding Extraction
-
-    /// Extract VNFeaturePrintObservation and return as raw Data (Float array).
-    nonisolated func extractEmbedding(from observation: VNFeaturePrintObservation) -> Data? {
-        // VNFeaturePrintObservation stores floats internally.
-        // We use computeDistance to verify dimensions, then extract via Mirror or direct copy.
-        let elementCount = observation.elementCount
-        guard elementCount > 0 else { return nil }
-
-        // VNFeaturePrintObservation.data contains the raw float buffer
-        let data = observation.data
-        guard data.count == elementCount * MemoryLayout<Float>.size else { return nil }
-        return data
+    nonisolated static func makePinnedFeaturePrintRequest() -> VNGenerateImageFeaturePrintRequest {
+        let request = VNGenerateImageFeaturePrintRequest()
+        request.revision = pinnedFeaturePrintRevision
+        return request
     }
 
-    // MARK: - Persist features during scan
-
-    /// Called during PhotoScanEngine scan to persist features + embeddings.
-    func persistFeatures(
+    nonisolated func makeFeatureRecords(
         for assets: [PHAsset],
-        prints: [String: VNFeaturePrintObservation]
-    ) async {
-        var records: [PhotoFeatureRecord] = []
-
-        for asset in assets {
-            let embedding: Data?
-            if let observation = prints[asset.localIdentifier] {
-                embedding = extractEmbedding(from: observation)
-            } else {
-                embedding = nil
-            }
-
-            let isEdited: Bool
-            if let creationDate = asset.creationDate, let modificationDate = asset.modificationDate {
-                isEdited = abs(modificationDate.timeIntervalSince(creationDate)) > 1
-            } else {
-                isEdited = false
-            }
-
-            records.append(PhotoFeatureRecord(
+        embeddings: [String: Data]
+    ) -> [PhotoFeatureRecord] {
+        assets.map { asset in
+            PhotoFeatureRecord(
                 assetID: asset.localIdentifier,
-                embedding: embedding,
-                embeddingVersion: 1,
+                embedding: embeddings[asset.localIdentifier],
+                embeddingVersion: PhotoEmbeddingContract.embeddingVersion,
                 pixelWidth: asset.pixelWidth,
                 pixelHeight: asset.pixelHeight,
                 creationDate: asset.creationDate,
                 isFavorite: asset.isFavorite,
-                isEdited: isEdited,
+                isEdited: asset.isEdited,
                 isScreenshot: asset.mediaSubtypes.contains(.photoScreenshot),
                 isLivePhoto: asset.mediaSubtypes.contains(.photoLive),
                 isHDR: asset.mediaSubtypes.contains(.photoHDR),
                 burstIdentifier: asset.burstIdentifier,
                 aspectRatio: Double(asset.pixelWidth) / Double(max(asset.pixelHeight, 1)),
                 fileSizeBytes: asset.estimatedFileSize
-            ))
-        }
-
-        do {
-            try await store.open()
-            try await store.upsertFeatures(records)
-        } catch {
-            // Non-fatal: ML store write failure should not block scan
-            #if DEBUG
-            print("[PhotoMLBridge] Failed to persist features: \(error)")
-            #endif
+            )
         }
     }
 
-    /// Persist pairwise similarity results during scan.
-    func persistPairSimilarity(
-        lhsID: String,
-        rhsID: String,
-        distance: Float,
-        timeDelta: Double?,
-        isBurstPair: Bool,
-        bucket: SimilarityBucket,
-        similarityScore: Double
-    ) async {
-        let record = PairSimilarityRecord(
-            lhsAssetID: lhsID,
-            rhsAssetID: rhsID,
-            featureDistance: Double(distance),
-            timeDeltaSeconds: timeDelta,
-            isBurstPair: isBurstPair,
-            bucket: bucket.rawValue,
-            similarityScore: similarityScore
-        )
+    // MARK: - Persist features during scan
 
+    func persistFeatureRecords(_ records: [PhotoFeatureRecord]) async {
+        guard !records.isEmpty else { return }
         do {
             try await store.open()
-            try await store.upsertPairSimilarity(record)
+            try await store.upsertFeatures(records)
+            recordPersistenceSuccess()
         } catch {
-            #if DEBUG
-            print("[PhotoMLBridge] Failed to persist pair similarity: \(error)")
-            #endif
+            recordPersistenceFailure(error, operation: "persist features")
+        }
+    }
+
+    func persistPairSimilarities(_ records: [PairSimilarityRecord]) async {
+        guard !records.isEmpty else { return }
+        do {
+            try await store.open()
+            try await store.upsertPairSimilarities(records)
+            recordPersistenceSuccess()
+        } catch {
+            recordPersistenceFailure(error, operation: "persist pair similarities")
+        }
+    }
+
+    func cachedPairSimilarities(
+        for keys: [SimilarityPairKey],
+        embeddingVersion: Int = PhotoEmbeddingContract.embeddingVersion
+    ) async -> [SimilarityPairKey: PairSimilarityRecord] {
+        guard !keys.isEmpty else { return [:] }
+        do {
+            try await store.open()
+            let records = try await store.loadPairSimilarities(
+                for: keys,
+                embeddingVersion: embeddingVersion
+            )
+            recordPersistenceSuccess()
+            return records
+        } catch {
+            recordPersistenceFailure(error, operation: "read pair similarity cache")
+            return [:]
         }
     }
 
@@ -148,10 +138,9 @@ actor PhotoMLBridge {
             let trainingRows = PhotoTrainingExampleBuilder.makeRows(from: event)
             let rowRecords = trainingRows.map { makeTrainingRowRecord(from: $0) }
             try await store.insertTrainingRows(rowRecords)
+            recordPersistenceSuccess()
         } catch {
-            #if DEBUG
-            print("[PhotoMLBridge] Failed to persist feedback: \(error)")
-            #endif
+            recordPersistenceFailure(error, operation: "persist feedback")
         }
     }
 
@@ -164,13 +153,27 @@ actor PhotoMLBridge {
     // MARK: - Training Export
 
     func exportKeeperTrainingCSV() async throws -> String {
-        try await store.open()
-        return try await store.exportKeeperTrainingCSV()
+        do {
+            try await store.open()
+            let csv = try await store.exportKeeperTrainingCSV()
+            recordPersistenceSuccess()
+            return csv
+        } catch {
+            recordPersistenceFailure(error, operation: "export keeper CSV")
+            throw error
+        }
     }
 
     func exportGroupOutcomeCSV() async throws -> String {
-        try await store.open()
-        return try await store.exportGroupOutcomeCSV()
+        do {
+            try await store.open()
+            let csv = try await store.exportGroupOutcomeCSV()
+            recordPersistenceSuccess()
+            return csv
+        } catch {
+            recordPersistenceFailure(error, operation: "export group-outcome CSV")
+            throw error
+        }
     }
 
     /// Export both CSVs to files in the Documents directory for AirDrop / Finder access.
@@ -179,33 +182,26 @@ actor PhotoMLBridge {
         let mlExportDir = documentsURL.appendingPathComponent("PhotoDuck-ML-Export", isDirectory: true)
         try FileManager.default.createDirectory(at: mlExportDir, withIntermediateDirectories: true)
 
-        let keeperCSV = try await exportKeeperTrainingCSV()
-        let groupCSV = try await exportGroupOutcomeCSV()
-        let stats = try await store.stats()
-
         let keeperURL = mlExportDir.appendingPathComponent("keeper_ranking_training.csv")
         let groupURL = mlExportDir.appendingPathComponent("group_outcome_training.csv")
         let statsURL = mlExportDir.appendingPathComponent("training_stats.json")
 
-        try keeperCSV.write(to: keeperURL, atomically: true, encoding: .utf8)
-        try groupCSV.write(to: groupURL, atomically: true, encoding: .utf8)
-
-        let statsJSON = """
-        {
-            "exportDate": "\(ISO8601DateFormatter().string(from: Date()))",
-            "featureCount": \(stats.featureCount),
-            "embeddingCount": \(stats.embeddingCount),
-            "pairCount": \(stats.pairCount),
-            "feedbackEventCount": \(stats.feedbackEventCount),
-            "trainingRowCount": \(stats.trainingRowCount),
-            "keeperRowCount": \(stats.keeperRowCount),
-            "groupOutcomeRowCount": \(stats.groupOutcomeRowCount),
-            "databaseSizeBytes": \(stats.databaseSizeBytes)
+        do {
+            try await store.open()
+            _ = try await store.performRetention()
+            try await store.exportKeeperTrainingCSV(to: keeperURL)
+            try await store.exportGroupOutcomeCSV(to: groupURL)
+            let stats = try await store.stats()
+            let statsData = try JSONEncoder.mlExportEncoder.encode(
+                MLExportStats(stats: stats)
+            )
+            try statsData.write(to: statsURL, options: .atomic)
+            recordPersistenceSuccess()
+            return [keeperURL, groupURL, statsURL]
+        } catch {
+            recordPersistenceFailure(error, operation: "export training data")
+            throw error
         }
-        """
-        try statsJSON.write(to: statsURL, atomically: true, encoding: .utf8)
-
-        return [keeperURL, groupURL, statsURL]
     }
 
     /// Export the raw SQLite database for Mac-side training.
@@ -216,25 +212,79 @@ actor PhotoMLBridge {
         try FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
         let destURL = exportDir.appendingPathComponent("photoduck-ml.sqlite")
 
-        // Copy the database file
-        let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let srcURL = baseURL.appendingPathComponent("PhotoDuck/ml/photoduck-ml.sqlite")
-
-        if FileManager.default.fileExists(atPath: destURL.path) {
-            try FileManager.default.removeItem(at: destURL)
+        do {
+            try await store.open()
+            _ = try await store.performRetention()
+            // Store serialization prevents writes between the checkpoint and copy.
+            try await store.exportDatabase(to: destURL)
+            recordPersistenceSuccess()
+            return destURL
+        } catch {
+            recordPersistenceFailure(error, operation: "export SQLite database")
+            throw error
         }
-        try FileManager.default.copyItem(at: srcURL, to: destURL)
-        return destURL
     }
 
     // MARK: - Stats
 
     func stats() async throws -> MLStoreStats {
-        try await store.open()
-        return try await store.stats()
+        do {
+            try await store.open()
+            let value = try await store.stats()
+            recordPersistenceSuccess()
+            return value
+        } catch {
+            recordPersistenceFailure(error, operation: "read ML store stats")
+            throw error
+        }
+    }
+
+    @discardableResult
+    func performRetention(
+        activeAssetIDs: Set<String>? = nil,
+        vacuumAfterward: Bool = false
+    ) async throws -> MLStoreRetentionResult {
+        do {
+            try await store.open()
+            let result = try await store.performRetention(
+                activeAssetIDs: activeAssetIDs,
+                vacuumAfterward: vacuumAfterward
+            )
+            recordPersistenceSuccess()
+            return result
+        } catch {
+            recordPersistenceFailure(error, operation: "perform ML store retention")
+            throw error
+        }
+    }
+
+    func persistenceHealth() -> MLPersistenceHealth {
+        MLPersistenceHealth(
+            isHealthy: persistenceHealthy,
+            lastErrorDescription: lastPersistenceError,
+            hasUnconsumedFailureNotice: hasUnconsumedFailureNotice
+        )
+    }
+
+    func consumePersistenceFailureNotice() -> String? {
+        guard hasUnconsumedFailureNotice else { return nil }
+        hasUnconsumedFailureNotice = false
+        return lastPersistenceError
     }
 
     // MARK: - Helpers
+
+    private func recordPersistenceSuccess() {
+        persistenceHealthy = true
+    }
+
+    private func recordPersistenceFailure(_ error: Error, operation: String) {
+        let description = "\(operation): \(error.localizedDescription)"
+        persistenceHealthy = false
+        lastPersistenceError = description
+        hasUnconsumedFailureNotice = true
+        Self.logger.error("\(description, privacy: .public)")
+    }
 
     private func makeTrainingRowRecord(from row: PhotoTrainingExportRow) -> TrainingRowRecord {
         TrainingRowRecord(
@@ -258,6 +308,7 @@ actor PhotoMLBridge {
             policyVersion: row.policyVersion,
             modelVersion: row.modelVersion,
             featureSchemaVersion: row.featureSchemaVersion,
+            activeChoice: row.activeChoice,
             featurePixelWidth: row.featureVector?.pixelWidth,
             featurePixelHeight: row.featureVector?.pixelHeight,
             featureIsFavorite: row.featureVector?.isFavorite,
@@ -267,5 +318,38 @@ actor PhotoMLBridge {
             featureRankingScore: row.featureVector?.rankingScore,
             featureSimilarityToKeeper: row.featureVector?.similarityToKeeper
         )
+    }
+}
+
+private struct MLExportStats: Codable {
+    let exportDate: Date
+    let featureCount: Int
+    let embeddingCount: Int
+    let pairCount: Int
+    let feedbackEventCount: Int
+    let trainingRowCount: Int
+    let keeperRowCount: Int
+    let groupOutcomeRowCount: Int
+    let databaseSizeBytes: Int64
+
+    init(stats: MLStoreStats) {
+        exportDate = Date()
+        featureCount = stats.featureCount
+        embeddingCount = stats.embeddingCount
+        pairCount = stats.pairCount
+        feedbackEventCount = stats.feedbackEventCount
+        trainingRowCount = stats.trainingRowCount
+        keeperRowCount = stats.keeperRowCount
+        groupOutcomeRowCount = stats.groupOutcomeRowCount
+        databaseSizeBytes = stats.databaseSizeBytes
+    }
+}
+
+private extension JSONEncoder {
+    static var mlExportEncoder: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
     }
 }

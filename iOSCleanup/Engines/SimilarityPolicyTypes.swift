@@ -30,9 +30,12 @@ enum BlockerFlag: String, Codable, Sendable, CaseIterable, Equatable {
     case dimensionMismatch
     case livePhotoVariant
     case originalVsEditedVariant
+    case hdrVariant
+    case portraitDepthVariant
     case contentDivergence
     case burstContentDivergence
     case lowVisualEvidence
+    case lowKeeperEvidence
 }
 
 enum VariantRelationship: String, Codable, Sendable, CaseIterable, Equatable {
@@ -220,32 +223,47 @@ struct SimilarityGroupResult: Codable, Sendable, Hashable {
     let scoreBreakdown: ScoreBreakdown
 }
 
+struct SimilarityEvaluation: Sendable, Hashable {
+    let groupResult: SimilarityGroupResult
+    let keeperRankingResult: KeeperRankingResult
+}
+
 enum SimilarityThresholds {
+    // Tuning constants. Defaults intentionally favor precision over recall.
     static let burstWindowSeconds: Double = 3
     static let nearDuplicateWindowSeconds: Double = 20
     static let visualSessionWindowSeconds: Double = 15 * 60
-    static let extendedSessionWindowSeconds: Double = 60 * 60
 
     static let maxNearDuplicateFeatureDistance: Double = 0.05
     static let maxVisualSimilarFeatureDistance: Double = 0.12
     static let maxBurstFeatureDistance: Double = 0.16
+    static let maxScreenshotDuplicateFeatureDistance: Double = 0.025
 
     static let aspectRatioMismatchPenalty: Double = 0.08
     static let dimensionMismatchPenalty: Double = 0.05
     static let largeTimeGapPenaltyAfterSeconds: Double = 120
 
-    static let hardDeleteRecommendationConfidenceFloor: Double = 0.80
-    static let nearDuplicateDowngradeDistanceFloor: Double = 0.06
-    static let visualSimilarityDowngradeDistanceFloor: Double = 0.14
-
     static let burstConfidenceBonus: Double = 0.10
     static let screenshotPenalty: Double = 0.20
     static let variantSoftPenalty: Double = 0.06
+    static let missingVisualEvidencePenalty: Double = 0.20
+    static let featureScoreWeight: Double = 0.55
 
-    static let strongLinkFloor: Double = 0.55
+    static let burstPairEligibilityScoreFloor: Double = 0.35
+    static let timeGapVisualScoreFloor: Double = 0.45
+    static let screenshotAutoDeleteScoreFloor: Double = 0.50
+    static let burstAutoDeleteScoreFloor: Double = 0.55
+    static let nearDuplicateAutoDeleteScoreFloor: Double = 0.60
     static let nearDuplicateClusterFloor: Double = 0.45
     static let visualClusterFloor: Double = 0.25
     static let splitConsistencyFloor: Double = 0.30
+
+    static let majorAspectRatioMismatch: Double = 0.35
+    static let maxCandidateAssetsInspected = 240
+    static let maxFeatureComparisonsPerAsset = 80
+    static let maxRetainedGenericPairEdgesPerAsset = 16
+    static let maxBurstAssetsPerCluster = 40
+    static let maxRetainedScreenshotFeaturePrints = 1_000
 }
 
 extension SimilarityBucket {
@@ -300,6 +318,18 @@ extension SuggestedAction {
 
 extension VariantRelationship {
     static func make(lhs: SimilarityAssetDescriptor, rhs: SimilarityAssetDescriptor) -> VariantRelationship {
+        if lhs.variantRelationshipHint == rhs.variantRelationshipHint,
+           lhs.variantRelationshipHint != .none {
+            return lhs.variantRelationshipHint
+        }
+        if lhs.variantRelationshipHint != .none,
+           rhs.variantRelationshipHint == .none {
+            return lhs.variantRelationshipHint
+        }
+        if rhs.variantRelationshipHint != .none,
+           lhs.variantRelationshipHint == .none {
+            return rhs.variantRelationshipHint
+        }
         if lhs.isScreenshot != rhs.isScreenshot {
             return .screenshotToSavedImage
         }
@@ -344,7 +374,8 @@ enum SimilaritySignalBuilder {
     }
 
     static func keeperSignals(for asset: PHAsset) -> KeeperSignals {
-        let pixels = Double(max(asset.pixelWidth * asset.pixelHeight, 1))
+        let pixels = Double(max(asset.pixelWidth, 1))
+            * Double(max(asset.pixelHeight, 1))
         let resolutionScore = min(log10(pixels) / 8.0, 1.0)
         let aspect = Double(asset.pixelWidth) / max(Double(asset.pixelHeight), 1)
         let aspectDistance = min(abs(aspect - 1.0), abs(aspect - 4.0 / 3.0), abs(aspect - 3.0 / 4.0))
@@ -367,7 +398,7 @@ enum SimilaritySignalBuilder {
             expressionScore: nil,
             exposureScore: 0.72 + (favoriteBonus > 0 ? 0.08 : 0.0) + screenshotBonus * 0.25,
             favoriteBonus: favoriteBonus,
-            editedBonusOrPenalty: isEdited ? -0.02 : 0.0,
+            editedBonusOrPenalty: isEdited ? 0.04 : 0.0,
             framingScore: framingScore,
             resolutionTiebreaker: resolutionScore * 0.2
         )
@@ -387,33 +418,5 @@ extension SimilaritySignals {
 
     var captureTimeDelta: Double {
         captureTimeDeltaSeconds ?? .greatestFiniteMagnitude
-    }
-}
-
-extension PhotoGroup {
-    func similarityClusterInput(baseFeatureDistance: Double? = nil) -> SimilarityClusterInput {
-        let descriptors = assets.map { SimilaritySignalBuilder.descriptor(for: $0) }
-        let keeperSignals = Dictionary(
-            uniqueKeysWithValues: assets.map { ($0.localIdentifier, SimilaritySignalBuilder.keeperSignals(for: $0)) }
-        )
-
-        var pairwiseSignals: [SimilarityPairKey: SimilaritySignals] = [:]
-        for lhsIndex in descriptors.indices {
-            for rhsIndex in descriptors.indices where rhsIndex > lhsIndex {
-                let lhs = descriptors[lhsIndex]
-                let rhs = descriptors[rhsIndex]
-                pairwiseSignals[SimilarityPairKey(lhs.id, rhs.id)] = SimilaritySignals.make(
-                    lhs: lhs,
-                    rhs: rhs,
-                    featureDistance: baseFeatureDistance ?? Double(similarity)
-                )
-            }
-        }
-
-        return SimilarityClusterInput(
-            assets: descriptors,
-            pairwiseSignals: pairwiseSignals,
-            keeperSignalsByAssetID: keeperSignals
-        )
     }
 }

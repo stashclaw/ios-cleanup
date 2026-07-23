@@ -31,12 +31,12 @@ All engines conform to the actor model — no shared mutable state across thread
 
 | Engine | What it does |
 |--------|-------------|
-| `PhotoScanEngine` | Vision `VNFeaturePrintObservation` + union-find clustering to group similar photos. Emits progress via `AsyncThrowingStream<PhotoScanUpdate>`. |
+| `PhotoScanEngine` | Candidate generation only: bounded time/burst/screenshot buckets, cached pinned-revision Vision distances, and complete-link cluster formation. Emits progress via `AsyncThrowingStream<PhotoScanUpdate>`. |
 | `ContactScanEngine` | `CNContactStore` + phone normalization + Levenshtein name matching to find duplicate contacts. |
-| `FileScanEngine` | `PHAsset` video enumeration + `FileManager` to surface large files (>50 MB). |
-| `VideoCompressionEngine` | `AVAssetExportSession` actor; emits `AsyncStream<CompressionEvent>`. |
-| `DeletionManager` | Wraps `PHPhotoLibrary.performChanges`. Provides 5-second undo window before committing. |
-| `SimilarReviewServices` | Heuristic best-shot ranking (resolution 34%, framing 22%, recency/favorites/burst bonuses). Heuristic baseline, enhanced by ML when model is bundled. |
+| `FileScanEngine` | `PHAsset` video enumeration with public-API representative-file sizing and typed permission errors. |
+| `VideoCompressionEngine` | Cancellable `AVAssetExportSession` actor with disk/output validation, metadata-preserving save, and separate save/delete outcomes. |
+| `DeletionManager` | The only normal photo-deletion gateway. Applies explicit-ID guardrails, optimistic UI, and a 10-second undo window before committing. |
+| `SimilarityPolicyServices` | Authoritative pair classifier, cluster classifier, split/downgrade rules, and conservative keeper ranking. |
 | `PhotoMLStore` | SQLite-backed (`libsqlite3`) feature store for ML training data. Tables: `photo_features`, `pairwise_similarity`, `feedback_events`, `training_rows`. CSV export for CreateML. Located at `Application Support/PhotoDuck/ml/photoduck-ml.sqlite`. |
 | `PhotoMLBridge` | Bridges domain types ↔ SQLite records. Extracts VNFeaturePrintObservation as raw `Data`. Exports training CSVs + raw DB to Documents for AirDrop/Finder. |
 | `MLEnhancedKeeperRankingService` | Wraps `ConservativeKeeperRankingService` with CoreML predictions (60% heuristic / 40% ML blend). Auto-falls back to heuristics when no model is bundled. |
@@ -44,8 +44,7 @@ All engines conform to the actor model — no shared mutable state across thread
 
 ### ViewModel layer (`Views/`)
 - **`HomeViewModel`** (`@MainActor ObservableObject`) — owns all three engines and the cleanup dashboard. Persists scan state to `UserDefaults` under key `photoduck.cleanup-state.v2` as JSON. Tracks freshness with `CleanupResultsFreshnessState` (`.live` / `.lastKnown` / `.stale`).
-- **`SimilarGroupReviewViewModel`** — manages per-group culling state (keep/trash/undecided per photo), best-shot overrides, and undo.
-- **`SwipeModeViewModel`** — card-stack swipe queue with month headers.
+- **`SwipeModeViewModel`** — explicit delete-candidate card queue with month headers, transition debouncing, and last-swipe undo.
 
 ### Data model (`Models/PhotoGroup.swift`)
 `PhotoGroup` is the central struct: holds `[PHAsset]`, `SimilarityReason` (`.nearDuplicate` / `.visuallySimilar` / `.burstShot`), confidence, best-shot ID, and per-photo `SimilarPhotoCandidate` scoring.
@@ -61,16 +60,21 @@ ContentView (@AppStorage hasOnboarded)
 ```
 
 ### Paywall (`Store/PurchaseManager.swift`)
-StoreKit 2, non-consumable ID `com.yourname.iOSCleanup.unlock`. Stored in `@AppStorage("isPurchased")`. Gated features: bulk photo delete, contact merge write, video compression, swipe-mode bulk confirm. **Free:** Keep Best in group detail, individual file delete, individual swipe-deletes.
+StoreKit 2, non-consumable ID `com.photoduck.app.unlock` for app bundle `com.photoduck.app`. A verified entitlement is cached under the legacy `isPurchased` key for offline continuity, but inconclusive launch checks never revoke cached access; only verified revocation or a successful explicit restore with no purchase history may downgrade it. Transaction updates post `.purchaseDidSucceed`, including Ask to Buy approvals.
+
+**Paid:** Auto-clean all groups, custom multi-select photo deletion, contact merge writes, and video compression. **Free:** classifier-selected Keep Best for one eligible group, individual file deletion, and user-authored Duck Mode swipe commits. Never collect review effort and then paywall its commit. `visuallySimilar` groups remain review-only and never expose automatic deletion.
+
+The shared `iOSCleanup` scheme attaches `iOSCleanup/Configuration/iOSCleanup.storekit`; the StoreKit configuration is not bundled as an app resource. Family Sharing is intentionally enabled in the local StoreKit configuration and must match the irreversible App Store Connect choice. The paywall includes an in-app privacy policy and links to Apple's standard EULA. App Store Connect still requires a hosted public privacy-policy URL before submission.
 
 ## Key constraints
 
 - **Engines are actors** — do not add `nonisolated` to methods that touch actor state. Methods that only use their arguments and no actor state can be `nonisolated`.
 - **No external packages** — zero Swift Package Manager dependencies by design.
-- **`PHImageManager.requestImage` with `.fastFormat`** can fire the completion handler twice (degraded first, then final). Always guard with `PHImageResultIsDegradedKey` before resuming a `CheckedContinuation`.
-- **Phase 1 engine files must not be modified** — only `Models/` may be extended. The seam for future AI best-shot is in `SimilarReviewServices`.
-- **Similarity threshold** is `PhotoScanEngine.similarityThreshold = 0.16` (distance, not score). Near-duplicate cutoff is `0.05`.
-- Tests cover clustering logic, threshold boundaries, and ML store operations — no live `PHAsset` tests exist.
+- **Photo thumbnails** must use the shared `PHAsset.loadImage` helper, which owns degraded-result, cancellation, timeout, and iCloud behavior. Do not create one-off continuations.
+- **Similarity policy** lives in `SimilarityPolicyTypes.swift` and `SimilarityPolicyServices.swift`; thresholds are tuning constants, not UI behavior. Shared subject alone is never sufficient.
+- **Deletion safety** requires explicit `keeperAssetID` and `deleteCandidateIDs`; never infer destructive intent from array order. `visuallySimilar` is always review-only.
+- **Keeper ranking** has one authoritative path: `ConservativeKeeperRankingService`, optionally wrapped by `MLEnhancedKeeperRankingService`. Core ML must remain optional and fallback-safe.
+- Tests cover clustering, split/chaining prevention, deletion guardrails, ML schemas and persistence, file sizing, video failure paths, and cancellation. Real-device PhotoKit behavior still needs device QA.
 - **Build simulator**: `iPhone 17 Pro` (iPhone 16 not available on this machine).
 
 ## ML Training Pipeline

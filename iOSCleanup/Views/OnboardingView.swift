@@ -35,12 +35,14 @@ private struct WelcomeStep: View {
     var body: some View {
         VStack(spacing: 28) {
             Spacer()
-            RoundedRectangle(cornerRadius: 28)
-                .fill(Color.duckSoftPink)
-                .frame(width: 180, height: 180)
+            VStack(spacing: 18) {
+                PhotoDuckIconMark(size: 180)
+                    .shadow(color: Color.duckPink.opacity(0.24), radius: 22, x: 0, y: 12)
+                PhotoDuckBrandLockup(wordmarkHeight: 38, showsIcon: false)
+            }
 
             VStack(spacing: 10) {
-                Text("Welcome to PhotoDuck!")
+                Text("Keep the best. Duck the rest.")
                     .font(.duckDisplay)
                     .foregroundStyle(Color.duckBerry)
                     .multilineTextAlignment(.center)
@@ -68,16 +70,15 @@ private struct PhotoPermissionStep: View {
     var body: some View {
         VStack(spacing: 28) {
             Spacer()
-            RoundedRectangle(cornerRadius: 28)
-                .fill(Color.duckSoftPink)
-                .frame(width: 180, height: 180)
+            PhotoDuckMascotArt(size: 180)
+                .shadow(color: Color.duckPink.opacity(0.18), radius: 20, x: 0, y: 12)
 
             VStack(spacing: 10) {
-                Text("Duplicates Found!")
+                Text("Find Photos to Review")
                     .font(.duckDisplay)
                     .foregroundStyle(Color.duckBerry)
                     .multilineTextAlignment(.center)
-                Text("We'll find similar photos for you to review.")
+                Text("Allow access so PhotoDuck can compare photos and prepare review groups on your device.")
                     .font(.duckCaption)
                     .foregroundStyle(Color.duckRose)
                     .multilineTextAlignment(.center)
@@ -103,6 +104,7 @@ private struct PhotoPermissionStep: View {
                 Button("Skip for now", action: onNext)
                     .font(.duckCaption)
                     .foregroundStyle(Color.duckRose)
+                    .frame(minHeight: 44)
             }
             .padding(.horizontal, 32)
             .padding(.bottom, 60)
@@ -120,16 +122,15 @@ private struct ContactPermissionStep: View {
     var body: some View {
         VStack(spacing: 28) {
             Spacer()
-            RoundedRectangle(cornerRadius: 28)
-                .fill(Color.duckSoftPink)
-                .frame(width: 180, height: 180)
+            PhotoDuckMascotArt(size: 180)
+                .shadow(color: Color.duckYellow.opacity(0.24), radius: 20, x: 0, y: 12)
 
             VStack(spacing: 10) {
-                Text("All Set!")
+                Text("Clean Up Contacts Too")
                     .font(.duckDisplay)
                     .foregroundStyle(Color.duckBerry)
                     .multilineTextAlignment(.center)
-                Text("PhotoDuck is ready to clean.")
+                Text("Contact access lets PhotoDuck find possible duplicates. You can skip this step.")
                     .font(.duckCaption)
                     .foregroundStyle(Color.duckRose)
                     .multilineTextAlignment(.center)
@@ -157,6 +158,7 @@ private struct ContactPermissionStep: View {
                 Button("Skip for now", action: onDone)
                     .font(.duckCaption)
                     .foregroundStyle(Color.duckRose)
+                    .frame(minHeight: 44)
             }
             .padding(.horizontal, 32)
             .padding(.bottom, 60)

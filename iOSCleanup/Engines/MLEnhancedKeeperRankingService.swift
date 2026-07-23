@@ -6,63 +6,67 @@ import Photos
 // Falls back to heuristics when the model is unavailable or low-confidence.
 
 struct MLEnhancedKeeperRankingService: KeeperRankingService {
-    private let heuristicService = ConservativeKeeperRankingService()
-    private let mlKeeperService = MLKeeperRankingService.shared
-    private let mlGroupActionService = MLGroupActionService.shared
+    private let heuristicService: any KeeperRankingService
+    private let mlKeeperService: any KeeperPredictionService
+    private let mlGroupActionService: any GroupActionPredictionService
 
     /// Minimum ML confidence to override heuristics.
-    private let keeperConfidenceThreshold = 0.55
+    private let keeperConfidenceThreshold = 0.85
+    /// The ML candidate must clearly beat the heuristic keeper before replacing it.
+    private let keeperOverrideMargin = 0.15
     /// Minimum ML confidence for group action predictions.
     private let groupActionConfidenceThreshold = 0.50
 
+    init(
+        heuristicService: any KeeperRankingService = ConservativeKeeperRankingService(),
+        mlKeeperService: any KeeperPredictionService = MLKeeperRankingService.shared,
+        mlGroupActionService: any GroupActionPredictionService = MLGroupActionService.shared
+    ) {
+        self.heuristicService = heuristicService
+        self.mlKeeperService = mlKeeperService
+        self.mlGroupActionService = mlGroupActionService
+    }
+
     // MARK: - Keeper Ranking (conforms to KeeperRankingService)
 
-    func rankKeeper(in input: SimilarityClusterInput) -> KeeperRankingResult {
-        // Always run heuristics first — they're the safety net
-        let heuristicResult = heuristicService.rankKeeper(in: input)
+    func rankKeeper(in input: SimilarityClusterInput) async -> KeeperRankingResult {
+        // Heuristics remain the safety net and always produce a usable result.
+        let heuristicResult = await heuristicService.rankKeeper(in: input)
 
         guard mlKeeperService.isAvailable else {
             return heuristicResult
         }
 
-        // ML enhancement is async, but KeeperRankingService is sync.
-        // We use a blocking semaphore here since this runs on a utility thread
-        // during scan, not on the main thread.
+        let groupContext = KeeperInferenceGroupContext(cluster: input)
         var mlScoresByID: [String: Double] = [:]
-        let semaphore = DispatchSemaphore(value: 0)
+        for asset in input.assets {
+            guard !Task.isCancelled else { return heuristicResult }
+            guard let predictionInput = KeeperPredictionInput(
+                asset: asset,
+                cluster: input,
+                groupContext: groupContext,
+                heuristicResult: heuristicResult
+            ) else {
+                continue
+            }
+            let prediction = await mlKeeperService.predictKeeper(
+                features: predictionInput
+            )
 
-        Task.detached(priority: .utility) { [mlKeeperService, keeperConfidenceThreshold] in
-            defer { semaphore.signal() }
-
-            for asset in input.assets {
-                let prediction = await mlKeeperService.predictKeeper(
-                    features: KeeperPredictionInput(
-                        bucket: "",
-                        groupType: "",
-                        confidence: "",
-                        suggestedAction: "",
-                        pixelWidth: asset.pixelWidth,
-                        pixelHeight: asset.pixelHeight,
-                        isFavorite: asset.isFavorite,
-                        isEdited: asset.isEdited,
-                        isScreenshot: asset.isScreenshot,
-                        burstPresent: asset.burstIdentifier != nil,
-                        rankingScore: heuristicResult.scoreByAssetID[asset.id] ?? 0.5,
-                        similarityToKeeper: 0,
-                        aspectRatio: asset.aspectRatio,
-                        fileSizeBytes: Int64(asset.pixelWidth * asset.pixelHeight)
-                    )
-                )
-
-                if let prediction, prediction.keeperProbability > keeperConfidenceThreshold {
-                    mlScoresByID[asset.id] = prediction.keeperProbability
-                }
+            if let prediction {
+                mlScoresByID[asset.id] = prediction.keeperProbability
             }
         }
 
-        // Wait with a 500ms timeout — don't block scan if ML is slow
-        let waitResult = semaphore.wait(timeout: .now() + .milliseconds(500))
-        guard waitResult == .success, !mlScoresByID.isEmpty else {
+        guard let heuristicKeeperID = heuristicResult.keeperAssetID,
+              let heuristicKeeperMLScore = mlScoresByID[heuristicKeeperID],
+              let mlWinner = mlScoresByID.max(by: { lhs, rhs in
+                  if lhs.value != rhs.value { return lhs.value < rhs.value }
+                  return lhs.key > rhs.key
+              }),
+              mlWinner.key != heuristicKeeperID,
+              mlWinner.value >= keeperConfidenceThreshold,
+              mlWinner.value - heuristicKeeperMLScore >= keeperOverrideMargin else {
             return heuristicResult
         }
 
@@ -83,6 +87,9 @@ struct MLEnhancedKeeperRankingService: KeeperRankingService {
         }
 
         let newKeeperID = ranked.first?.key
+        guard newKeeperID == mlWinner.key else {
+            return heuristicResult
+        }
         var reasonsByID = heuristicResult.reasonsByAssetID
 
         // If ML changed the keeper, annotate
@@ -116,8 +123,13 @@ struct MLEnhancedKeeperRankingService: KeeperRankingService {
         let maxProb = output.labelProbabilities.values.max() ?? 0
         guard maxProb >= groupActionConfidenceThreshold else { return nil }
 
+        let mappedAction = mapLabelToAction(output.predictedLabel)
+        let safeAction = mappedAction == .keepBestTrashRest && !group.isAutoCleanEligible
+            ? SimilarRecommendedAction.reviewManually
+            : mappedAction
+
         return MLGroupActionRecommendation(
-            predictedAction: mapLabelToAction(output.predictedLabel),
+            predictedAction: safeAction,
             confidence: maxProb,
             rawLabel: output.predictedLabel,
             allProbabilities: output.labelProbabilities

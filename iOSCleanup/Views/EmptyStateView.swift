@@ -9,38 +9,42 @@ struct EmptyStateView: View {
     var body: some View {
         DuckCard {
             VStack(spacing: 16) {
-                StatusBadge(title: "Clean outcome", accent: .duckPink)
+                StatusBadge(title: "Clean outcome", accent: .duckBerry)
+                    .accessibilityHidden(true)
 
-                PhotoDuckAssetImage(
-                    assetNames: ["photoduck_mascot", "photoduck_logo"],
-                    fallback: { PhotoDuckMascotFallback(size: 88) }
-                )
-                .frame(width: 120, height: 120)
-                .shadow(color: .duckPink.opacity(0.18), radius: 16, x: 0, y: 10)
+                PhotoDuckMascotArt(size: 120)
+                    .shadow(color: .duckPink.opacity(0.18), radius: 16, x: 0, y: 10)
 
                 VStack(spacing: 8) {
                     Text(title)
                         .font(.duckTitle)
                         .foregroundStyle(Color.duckBerry)
                         .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityAddTraits(.isHeader)
 
                     if !message.isEmpty {
                         Text(message)
-                            .font(.duckCaption)
-                            .foregroundStyle(Color.duckRose)
+                            .font(.duckBody)
+                            .foregroundStyle(Color.duckBerry)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 24)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 
                 Label("Ready", systemImage: icon)
-                    .font(.duckCaption)
-                    .foregroundStyle(Color.duckRose)
+                    .font(.duckCaption.weight(.semibold))
+                    .foregroundStyle(Color.duckBerry)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(Color.photoduckBlushBackground, in: Capsule())
+                    .background(Color.duckBlush, in: Capsule())
+                    .accessibilityLabel("Status: ready")
             }
             .padding(20)
         }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.duckBlush)
     }
 }

@@ -1,5 +1,107 @@
-import Photos
 import SwiftUI
+import UIKit
+
+// MARK: - Brand Assets
+
+struct PhotoDuckAssetImage<Fallback: View>: View {
+    let assetNames: [String]
+    let fallback: Fallback
+
+    init(assetNames: [String], @ViewBuilder fallback: () -> Fallback) {
+        self.assetNames = assetNames
+        self.fallback = fallback()
+    }
+
+    var body: some View {
+        if let assetName = assetNames.first(where: { UIImage(named: $0) != nil }) {
+            Image(assetName)
+                .resizable()
+                .scaledToFit()
+        } else {
+            fallback
+        }
+    }
+}
+
+struct PhotoDuckIconMark: View {
+    var size: CGFloat = 36
+
+    var body: some View {
+        PhotoDuckAssetImage(assetNames: ["photoduck_icon"]) {
+            PhotoDuckMascotFallback(size: size)
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+        .accessibilityHidden(true)
+    }
+}
+
+struct PhotoDuckBrandLockup: View {
+    var iconSize: CGFloat = 32
+    var wordmarkHeight: CGFloat = 24
+    var showsIcon = true
+
+    var body: some View {
+        HStack(spacing: max(8, iconSize * 0.22)) {
+            if showsIcon {
+                PhotoDuckIconMark(size: iconSize)
+            }
+
+            PhotoDuckAssetImage(assetNames: ["photoduck_wordmark"]) {
+                Text("PhotoDuck")
+                    .font(.duckDisplay(wordmarkHeight * 0.78))
+                    .foregroundStyle(Color.duckPink)
+            }
+            .frame(width: wordmarkHeight * 3.15, height: wordmarkHeight)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("PhotoDuck")
+    }
+}
+
+struct PhotoDuckMascotArt: View {
+    var size: CGFloat
+
+    var body: some View {
+        PhotoDuckAssetImage(assetNames: ["photoduck_mascot"]) {
+            PhotoDuckMascotFallback(size: size)
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+struct PhotoDuckMascotFallback: View {
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [Color.duckYellow, Color.duckPink.opacity(0.85)],
+                        center: .topLeading,
+                        startRadius: 4,
+                        endRadius: size * 0.8
+                    )
+                )
+            Circle()
+                .fill(Color.black.opacity(0.85))
+                .frame(width: size * 0.14, height: size * 0.14)
+                .offset(x: -size * 0.16, y: -size * 0.10)
+            Circle()
+                .fill(Color.black.opacity(0.85))
+                .frame(width: size * 0.14, height: size * 0.14)
+                .offset(x: size * 0.08, y: -size * 0.10)
+            Capsule(style: .continuous)
+                .fill(Color.duckOrange)
+                .frame(width: size * 0.34, height: size * 0.20)
+                .offset(x: size * 0.12, y: size * 0.10)
+        }
+        .frame(width: size, height: size)
+    }
+}
 
 // MARK: - DuckCard
 
@@ -28,7 +130,7 @@ struct DuckPrimaryButton: View {
                 .padding(.vertical, 15)
                 .background(
                     LinearGradient(
-                        colors: [Color.duckPink, Color(red: 0.831, green: 0.271, blue: 0.541)],
+                        colors: [Color.duckPink, Color.duckRose],
                         startPoint: .leading,
                         endPoint: .trailing
                     ),
@@ -189,7 +291,7 @@ struct StatPill: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.duckCaption.weight(.semibold))
                 .foregroundStyle(accent)
                 .frame(width: 24, height: 24)
                 .background(accent.opacity(0.12))
@@ -234,50 +336,6 @@ struct StatusBadge: View {
     }
 }
 
-// MARK: - ReviewDecisionHUD
-
-struct ReviewDecisionHUD: View {
-    let groupPosition: String
-    let photoCount: Int
-    let reclaimableBytes: Int64
-    let confidenceLabel: String
-    let contextLabel: String?
-
-    var body: some View {
-        DuckCard {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Group \(groupPosition)")
-                        .font(.duckCaption)
-                        .foregroundStyle(Color.duckRose)
-                    Text("\(photoCount) photos")
-                        .font(.duckHeading)
-                        .foregroundStyle(Color.duckBerry)
-                    if let contextLabel, !contextLabel.isEmpty {
-                        Text(contextLabel)
-                            .font(.duckLabel)
-                            .foregroundStyle(Color.duckRose)
-                    }
-                }
-
-                Spacer(minLength: 8)
-
-                VStack(alignment: .trailing, spacing: 6) {
-                    StatusBadge(
-                        title: confidenceLabel,
-                        accent: confidenceLabel.lowercased().contains("high") ? .duckPink : .duckOrange
-                    )
-                    Text(ByteCountFormatter.string(fromByteCount: reclaimableBytes, countStyle: .file))
-                        .font(.duckCaption.weight(.semibold))
-                        .foregroundStyle(Color.duckBerry)
-                        .monospacedDigit()
-                }
-            }
-            .padding(16)
-        }
-    }
-}
-
 // MARK: - BestShotBadge
 
 struct BestShotBadge: View {
@@ -287,7 +345,7 @@ struct BestShotBadge: View {
     var body: some View {
         HStack(spacing: 5) {
             Image(systemName: isRecommended ? "star.fill" : "exclamationmark.triangle.fill")
-                .font(.system(size: 10, weight: .bold))
+                .font(.duckMicro.weight(.bold))
             Text(isRecommended ? "Recommended Keeper" : "Needs Review")
         }
         .font(.duckLabel)
@@ -306,373 +364,5 @@ struct BestShotBadge: View {
         )
         .shadow(color: Color.duckPink.opacity(0.18), radius: 8, x: 0, y: 3)
         .accessibilityLabel(isRecommended ? "Recommended Keeper" : "Needs Review")
-    }
-}
-
-// MARK: - ReasonChipsRow
-
-struct ReasonChipsRow: View {
-    let reasons: [String]
-    let negativeReasons: [String]
-
-    init(reasons: [String], negativeReasons: [String] = []) {
-        self.reasons = reasons
-        self.negativeReasons = negativeReasons
-    }
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(reasons, id: \.self) { reason in
-                    reasonChip(title: reason, positive: true)
-                }
-                ForEach(negativeReasons, id: \.self) { reason in
-                    reasonChip(title: reason, positive: false)
-                }
-            }
-            .padding(.horizontal, 2)
-        }
-    }
-
-    private func reasonChip(title: String, positive: Bool) -> some View {
-        Text(title)
-            .font(.duckLabel)
-            .foregroundStyle(positive ? Color.duckRose : Color.duckBerry)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                (positive ? Color.duckSoftPink : Color.duckCream)
-                    .opacity(positive ? 0.8 : 1.0),
-                in: Capsule(style: .continuous)
-            )
-            .overlay(
-                Capsule(style: .continuous)
-                    .stroke(positive ? Color.duckPink.opacity(0.12) : Color.duckSoftPink.opacity(0.9), lineWidth: 1)
-            )
-    }
-}
-
-// MARK: - ThumbnailRail
-
-struct ThumbnailRail: View {
-    let candidates: [SimilarPhotoCandidate]
-    let currentIndex: Int
-    let selectedKeeperID: String?
-    let onSelect: (Int) -> Void
-
-    @State private var thumbnails: [String: UIImage] = [:]
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-                ForEach(Array(candidates.enumerated()), id: \.element.photoId) { index, candidate in
-                    ThumbnailRailCell(
-                        candidate: candidate,
-                        image: thumbnails[candidate.photoId],
-                        isCurrent: index == currentIndex,
-                        isSelectedKeeper: selectedKeeperID == candidate.photoId,
-                        onTap: { onSelect(index) }
-                    )
-                }
-            }
-            .padding(.horizontal, 2)
-        }
-        .task(id: candidates.map(\.photoId).joined(separator: ",")) {
-            await loadThumbnails()
-        }
-    }
-
-    private func loadThumbnails() async {
-        let missing = candidates.filter { thumbnails[$0.photoId] == nil }
-        guard !missing.isEmpty else { return }
-
-        // One batch fetch for all missing asset IDs instead of N separate DB queries.
-        let ids = missing.map(\.assetReference)
-        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
-        var assetMap: [String: PHAsset] = [:]
-        fetchResult.enumerateObjects { asset, _, _ in assetMap[asset.localIdentifier] = asset }
-
-        // Load all thumbnails in parallel, then assign once to trigger one re-render.
-        var loaded: [String: UIImage] = [:]
-        await withTaskGroup(of: (String, UIImage?).self) { group in
-            for candidate in missing {
-                guard let asset = assetMap[candidate.assetReference] else { continue }
-                let photoId = candidate.photoId
-                group.addTask {
-                    let image = await withCheckedContinuation { (continuation: CheckedContinuation<UIImage?, Never>) in
-                        let options = PHImageRequestOptions()
-                        options.deliveryMode = .fastFormat
-                        options.isNetworkAccessAllowed = true
-                        PHImageManager.default().requestImage(
-                            for: asset,
-                            targetSize: CGSize(width: 180, height: 180),
-                            contentMode: .aspectFill,
-                            options: options
-                        ) { result, info in
-                            // .fastFormat fires twice (degraded then final).
-                            // Without this guard the continuation resumes twice → fatal crash.
-                            let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) == true
-                            guard !isDegraded else { return }
-                            continuation.resume(returning: result)
-                        }
-                    }
-                    return (photoId, image)
-                }
-            }
-            for await (id, image) in group {
-                if let image { loaded[id] = image }
-            }
-        }
-        for (id, image) in loaded { thumbnails[id] = image }
-    }
-}
-
-private struct ThumbnailRailCell: View {
-    let candidate: SimilarPhotoCandidate
-    let image: UIImage?
-    let isCurrent: Bool
-    let isSelectedKeeper: Bool
-    let onTap: () -> Void
-
-    var body: some View {
-        Button(action: onTap) {
-            ZStack(alignment: .topLeading) {
-                Group {
-                    if let image {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFill()
-                    } else {
-                        LinearGradient(
-                            colors: [Color.duckSoftPink.opacity(0.55), Color.duckCream],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                        .overlay(ProgressView().tint(Color.duckPink))
-                    }
-                }
-                .frame(width: 74, height: 74)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                if candidate.isBestShot || isSelectedKeeper {
-                    BestShotBadge(isRecommended: true, needsReview: false)
-                        .padding(6)
-                }
-
-                if isSelectedKeeper {
-                    VStack {
-                        Spacer()
-                        HStack {
-                            Spacer()
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(Color.duckPink)
-                                .padding(6)
-                                .background(Color.white.opacity(0.95), in: Circle())
-                                .shadow(color: Color.duckPink.opacity(0.16), radius: 8, x: 0, y: 3)
-                        }
-                    }
-                    .frame(width: 74, height: 74)
-                }
-            }
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(
-                        isSelectedKeeper ? Color.duckPink : (isCurrent ? Color.white.opacity(0.85) : Color.clear),
-                        lineWidth: isSelectedKeeper ? 2.5 : 2
-                    )
-            )
-            .shadow(
-                color: isSelectedKeeper ? Color.duckPink.opacity(0.24) : Color.duckPink.opacity(isCurrent ? 0.16 : 0.06),
-                radius: isSelectedKeeper ? 14 : (isCurrent ? 10 : 6),
-                x: 0,
-                y: 4
-            )
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-// MARK: - ActionBar
-
-struct ActionBar: View {
-    let keepTitle: String
-    let neutralTitle: String
-    let destructiveTitle: String
-    let destructiveIsPaid: Bool
-    let onKeep: () -> Void
-    let onNeutral: () -> Void
-    let onDestructive: () -> Void
-    let onMore: (() -> Void)?
-
-    init(
-        keepTitle: String,
-        neutralTitle: String,
-        destructiveTitle: String,
-        destructiveIsPaid: Bool = true,
-        onKeep: @escaping () -> Void,
-        onNeutral: @escaping () -> Void,
-        onDestructive: @escaping () -> Void,
-        onMore: (() -> Void)? = nil
-    ) {
-        self.keepTitle = keepTitle
-        self.neutralTitle = neutralTitle
-        self.destructiveTitle = destructiveTitle
-        self.destructiveIsPaid = destructiveIsPaid
-        self.onKeep = onKeep
-        self.onNeutral = onNeutral
-        self.onDestructive = onDestructive
-        self.onMore = onMore
-    }
-
-    var body: some View {
-        VStack(spacing: 12) {
-            DuckPrimaryButton(title: keepTitle, action: onKeep)
-
-            HStack(spacing: 10) {
-                DuckOutlineButton(title: neutralTitle, color: .duckRose, action: onNeutral)
-                cautiousDestructiveButton
-            }
-
-            if let onMore {
-                Button(action: onMore) {
-                    Text("More")
-                        .font(.duckCaption.weight(.semibold))
-                        .foregroundStyle(Color.duckRose)
-                        .padding(.vertical, 2)
-                }
-            }
-        }
-    }
-
-    private var cautiousDestructiveButton: some View {
-        Button(action: onDestructive) {
-            HStack(spacing: 5) {
-                if destructiveIsPaid {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .accessibilityLabel("Pro feature")
-                }
-                Text(destructiveTitle)
-            }
-            .font(.duckButton)
-            .foregroundStyle(Color.duckRose)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 15)
-            .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 50))
-            .overlay(
-                RoundedRectangle(cornerRadius: 50)
-                    .strokeBorder(Color.duckRose.opacity(0.45), lineWidth: 1.2)
-            )
-        }
-    }
-}
-
-// MARK: - UndoFeedbackBar
-
-struct UndoFeedbackBar: View {
-    let movedCount: Int
-    let reclaimedBytes: Int64
-    let onUndo: () -> Void
-    let onReviewTrash: (() -> Void)?
-
-    private var countLabel: String {
-        "\(movedCount) photo\(movedCount == 1 ? "" : "s")"
-    }
-
-    private var bytesLabel: String {
-        ByteCountFormatter.string(fromByteCount: reclaimedBytes, countStyle: .file)
-    }
-
-    var body: some View {
-        DuckCard {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Moved \(countLabel)")
-                        .font(.duckCaption.weight(.semibold))
-                        .foregroundStyle(Color.duckBerry)
-                    Text("\(bytesLabel) reclaimed")
-                        .font(.duckLabel)
-                        .foregroundStyle(Color.duckRose)
-                }
-
-                Spacer(minLength: 12)
-
-                if let onReviewTrash {
-                    Button("Review Trash", action: onReviewTrash)
-                        .font(.duckLabel.weight(.semibold))
-                        .foregroundStyle(Color.duckPink)
-                }
-
-                Button("Undo", action: onUndo)
-                    .font(.duckLabel.weight(.semibold))
-                    .foregroundStyle(Color.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.duckPink, in: Capsule())
-            }
-            .padding(14)
-        }
-    }
-}
-
-// MARK: - BestShotExplanationSheet
-
-struct BestShotExplanationSheet: View {
-    let title: String
-    let reasons: [String]
-    let issueFlags: [IssueFlag]
-    let confidenceLabel: String
-
-    var body: some View {
-        VStack(spacing: 16) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color.duckSoftPink)
-                .frame(width: 38, height: 4)
-                .padding(.top, 10)
-
-            VStack(spacing: 8) {
-                Text(title)
-                    .font(.duckTitle)
-                    .foregroundStyle(Color.duckBerry)
-                StatusBadge(title: confidenceLabel, accent: confidenceLabel.lowercased().contains("high") ? .duckPink : .duckOrange)
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(reasons, id: \.self) { reason in
-                    labelRow(title: reason, systemImage: "checkmark.circle.fill", color: .duckPink)
-                }
-
-                if !issueFlags.isEmpty {
-                    ForEach(issueFlags.prefix(4), id: \.self) { flag in
-                        labelRow(title: flag.title, systemImage: flag.systemImage, color: .duckOrange)
-                    }
-                }
-            }
-            .padding(.horizontal, 8)
-
-            Text("AI recommends this shot, but you stay in control.")
-                .font(.duckCaption)
-                .foregroundStyle(Color.duckRose)
-                .multilineTextAlignment(.center)
-                .padding(.top, 4)
-
-            Spacer(minLength: 0)
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Color.duckCream.ignoresSafeArea())
-    }
-
-    private func labelRow(title: String, systemImage: String, color: Color) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: systemImage)
-                .foregroundStyle(color)
-                .frame(width: 18)
-            Text(title)
-                .font(.duckBody)
-                .foregroundStyle(Color.duckBerry)
-            Spacer(minLength: 0)
-        }
     }
 }

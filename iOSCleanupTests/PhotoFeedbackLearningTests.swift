@@ -1,6 +1,10 @@
 import XCTest
 @testable import iOSCleanup
 
+private actor NoopFeedbackPersistence: PhotoFeedbackPersisting {
+    func persistFeedbackEvents(_ events: [PhotoReviewFeedbackEvent]) async {}
+}
+
 final class PhotoFeedbackLearningTests: XCTestCase {
     func testRecommendationAcceptedHelper() {
         XCTAssertEqual(
@@ -112,6 +116,50 @@ final class PhotoFeedbackLearningTests: XCTestCase {
         XCTAssertEqual(profile.overall.acceptedRecommendationCount, 2)
     }
 
+    func testBatchDedupePersistsOnlySurvivorToSQLite() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "PhotoFeedbackLearningTests-batch-sqlite-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let mlStore = PhotoMLStore(directoryURL: base)
+        try await mlStore.open()
+        let profileStore = PhotoPreferenceProfileStore(directoryURL: base)
+        let feedbackStore = PhotoFeedbackStore(
+            directoryURL: base,
+            profileStore: profileStore,
+            persistence: PhotoMLBridge(store: mlStore)
+        )
+        let groupID = UUID()
+        let first = makeEvent(
+            id: UUID(),
+            kind: .keepBest,
+            stage: .committed,
+            source: .similarGroupReview,
+            groupID: groupID,
+            recommendationAccepted: true
+        )
+        let duplicate = makeEvent(
+            id: UUID(),
+            kind: .keepBest,
+            stage: .committed,
+            source: .similarGroupReview,
+            groupID: groupID,
+            recommendationAccepted: true
+        )
+
+        XCTAssertNotEqual(first.id, duplicate.id)
+        XCTAssertEqual(first.dedupeKey, duplicate.dedupeKey)
+
+        await feedbackStore.append([first, duplicate])
+
+        let rawEvents = await feedbackStore.loadAllEvents()
+        let sqliteEventCount = try await mlStore.feedbackEventCount()
+        XCTAssertEqual(rawEvents.count, 1)
+        XCTAssertEqual(sqliteEventCount, 1)
+    }
+
     func testProvisionalAndCommittedFlowDoesNotCorruptTrainingData() async throws {
         let (_, profileStore, directoryURL) = makeStores(uniqueDirectorySuffix: "provisional-committed")
         defer { try? FileManager.default.removeItem(at: directoryURL) }
@@ -141,6 +189,40 @@ final class PhotoFeedbackLearningTests: XCTestCase {
         XCTAssertEqual(profile.overall.keptCount, 1)
         XCTAssertEqual(profile.overall.acceptedRecommendationCount, 1)
         XCTAssertEqual(profile.lowConfidence.reviewedCount, 0)
+    }
+
+    func testProvisionalKeeperSelectionDoesNotInferDeletionOutcome() async throws {
+        let (feedbackStore, _, directoryURL) = makeStores(uniqueDirectorySuffix: "provisional-no-delete")
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let group = PhotoGroup(
+            assets: [],
+            similarity: 0.95,
+            reason: .nearDuplicate,
+            groupConfidence: .high,
+            recommendedAction: .keepBestTrashRest,
+            keeperAssetID: "keeper",
+            deleteCandidateIDs: ["delete"],
+            candidates: [
+                makeCandidate("keeper", isBestShot: true),
+                makeCandidate("delete", isBestShot: false)
+            ]
+        )
+
+        let recorded = await feedbackStore.recordSimilarGroupDecision(
+            group: group,
+            kind: .keepBest,
+            stage: .provisional,
+            selectedKeeperID: "keeper",
+            keptAssetIDs: ["keeper"]
+        )
+        let events = await feedbackStore.loadAllEvents()
+
+        XCTAssertTrue(recorded)
+        XCTAssertEqual(events.count, 1)
+        XCTAssertTrue(events[0].deletedAssetIDs.isEmpty)
+        XCTAssertEqual(events[0].keptAssetIDs, ["keeper"])
+        XCTAssertEqual(events[0].featureSchemaVersion, PhotoFeedbackStore.featureSchemaVersion)
     }
 
     func testEventsPersistAndReloadWithoutImagePayloads() async throws {
@@ -173,6 +255,7 @@ final class PhotoFeedbackLearningTests: XCTestCase {
         XCTAssertFalse(json.contains("thumbnail"))
         XCTAssertLessThan(data.count, 4096)
 
+        await feedbackStore.flushPendingWrites()
         let profile = await profileStore.snapshot()
         XCTAssertEqual(profile.totalRawEvents, 1)
         XCTAssertEqual(profile.totalCommittedEvents, 1)
@@ -214,6 +297,7 @@ final class PhotoFeedbackLearningTests: XCTestCase {
         ]
 
         await feedbackStore.append(events)
+        await feedbackStore.flushPendingWrites()
         let incremental = await profileStore.snapshot()
 
         let (_, rebuildProfileStore, rebuildDirectoryURL) = makeStores(uniqueDirectorySuffix: "rebuild-match-2")
@@ -297,6 +381,7 @@ final class PhotoFeedbackLearningTests: XCTestCase {
         XCTAssertTrue(keeperAppended)
         XCTAssertTrue(skipAppended)
 
+        await feedbackStore.flushPendingWrites()
         let profile = await profileStore.snapshot()
         XCTAssertEqual(profile.totalRawEvents, 2)
         XCTAssertEqual(profile.totalCommittedEvents, 2)
@@ -308,6 +393,91 @@ final class PhotoFeedbackLearningTests: XCTestCase {
         XCTAssertEqual(profile.edited.reviewedCount, 1)
         XCTAssertEqual(profile.favorites.reviewedCount, 1)
         XCTAssertEqual(profile.lowConfidence.reviewedCount, 1)
+    }
+
+    func testJournalRecoversEventBeforeDelayedArchiveFlush() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "PhotoFeedbackLearningTests-journal-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let persistence = NoopFeedbackPersistence()
+        let firstProfileStore = PhotoPreferenceProfileStore(directoryURL: base)
+        let firstStore = PhotoFeedbackStore(
+            directoryURL: base,
+            profileStore: firstProfileStore,
+            persistence: persistence,
+            flushDelayNanoseconds: 60_000_000_000
+        )
+        let event = makeEvent(
+            kind: .swipeDelete,
+            stage: .committed,
+            source: .swipeMode,
+            deletedAssetIDs: ["asset"],
+            recommendationAccepted: nil
+        )
+
+        let appended = await firstStore.append(event)
+        XCTAssertTrue(appended)
+
+        let learningDirectory = base.appendingPathComponent("PhotoDuck/learning", isDirectory: true)
+        let archiveURL = learningDirectory.appendingPathComponent("photo-feedback-events.json")
+        let journalURL = learningDirectory.appendingPathComponent("photo-feedback-events.journal")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: archiveURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: journalURL.path))
+
+        let recoveredStore = PhotoFeedbackStore(
+            directoryURL: base,
+            profileStore: PhotoPreferenceProfileStore(directoryURL: base),
+            persistence: persistence,
+            flushDelayNanoseconds: 60_000_000_000
+        )
+        let recoveredEvents = await recoveredStore.loadAllEvents()
+
+        XCTAssertEqual(recoveredEvents.map(\.id), [event.id])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: archiveURL.path))
+        await firstStore.flushPendingWrites()
+    }
+
+    func testDeleteUndoDeleteDecisionCyclesAreNotDeduped() async {
+        let (feedbackStore, _, directoryURL) = makeStores(uniqueDirectorySuffix: "delete-undo-delete")
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let group = PhotoGroup(
+            assets: [],
+            similarity: 0.99,
+            reason: .nearDuplicate,
+            groupConfidence: .high,
+            recommendedAction: .keepBestTrashRest,
+            keeperAssetID: "keeper",
+            deleteCandidateIDs: ["asset"],
+            candidates: []
+        )
+
+        let firstDelete = await feedbackStore.recordSimilarGroupDecision(
+            group: group,
+            kind: .deleteSelected,
+            selectedKeeperID: "keeper",
+            deletedAssetIDs: ["asset"],
+            keptAssetIDs: ["keeper"]
+        )
+        let undo = await feedbackStore.recordUndoRestore(assetIDs: ["asset"])
+        let secondDelete = await feedbackStore.recordSimilarGroupDecision(
+            group: group,
+            kind: .deleteSelected,
+            selectedKeeperID: "keeper",
+            deletedAssetIDs: ["asset"],
+            keptAssetIDs: ["keeper"]
+        )
+
+        let events = await feedbackStore.loadAllEvents()
+        XCTAssertTrue(firstDelete)
+        XCTAssertTrue(undo)
+        XCTAssertTrue(secondDelete)
+        XCTAssertEqual(events.count, 3)
+        XCTAssertEqual(events.map(\.kind), [.deleteSelected, .restoreUndo, .deleteSelected])
+        XCTAssertNotEqual(events[0].dedupeKey, events[2].dedupeKey)
     }
 
     func testExportRowsAreStableAndMetadataOnly() async throws {
@@ -345,6 +515,101 @@ final class PhotoFeedbackLearningTests: XCTestCase {
         XCTAssertEqual(rows[0].featureVector?.pixelWidth, 3000)
         XCTAssertTrue(rows[0].featureVector?.isScreenshot == false)
         XCTAssertEqual(rows[0].recommendationAccepted, false)
+        XCTAssertEqual(rows[0].featureSchemaVersion, PhotoTrainingExampleBuilder.featureSchemaVersion)
+        XCTAssertNil(rows[2].recommendationAccepted)
+    }
+
+    func testAcceptedDefaultDoesNotCreateKeeperTrainingRows() {
+        let acceptedDefault = makeEvent(
+            kind: .keepBest,
+            stage: .committed,
+            source: .similarGroupReview,
+            suggestedKeeperAssetID: "keeper",
+            finalKeeperAssetID: "keeper",
+            recommendationAccepted: true,
+            assets: [
+                makeAsset("keeper", role: .finalKeeper, rankingScore: 0.95),
+                makeAsset("candidate", role: .candidate, rankingScore: 0.40)
+            ]
+        )
+        let override = makeEvent(
+            kind: .keeperOverride,
+            stage: .committed,
+            source: .similarGroupReview,
+            suggestedKeeperAssetID: "suggested",
+            finalKeeperAssetID: "chosen",
+            recommendationAccepted: false,
+            assets: [
+                makeAsset("suggested", role: .suggestedKeeper, rankingScore: 0.95),
+                makeAsset("chosen", role: .finalKeeper, rankingScore: 0.80)
+            ]
+        )
+
+        let acceptedRows = PhotoTrainingExampleBuilder.makeRows(from: acceptedDefault)
+        let overrideRows = PhotoTrainingExampleBuilder.makeRows(from: override)
+
+        XCTAssertFalse(PhotoTrainingExampleBuilder.isActiveChoice(acceptedDefault))
+        XCTAssertTrue(PhotoTrainingExampleBuilder.isActiveChoice(override))
+        XCTAssertTrue(acceptedRows.filter { $0.kind == .keeperRanking }.isEmpty)
+        XCTAssertEqual(overrideRows.filter { $0.kind == .keeperRanking }.count, 2)
+    }
+
+    func testActualFinalKeeperRoleWinsAcrossDecisionKinds() {
+        for kind in PhotoReviewDecisionKind.allCases {
+            XCTAssertEqual(
+                PhotoFeedbackStore.assetRole(
+                    assetID: "actual",
+                    kind: kind,
+                    suggestedKeeperID: "suggested",
+                    finalKeeperID: "actual",
+                    deletedAssetIDs: [],
+                    keptAssetIDs: ["actual"],
+                    skipped: false
+                ),
+                .finalKeeper,
+                "\(kind) must label only the actual final keeper as finalKeeper"
+            )
+            XCTAssertEqual(
+                PhotoFeedbackStore.assetRole(
+                    assetID: "suggested",
+                    kind: kind,
+                    suggestedKeeperID: "suggested",
+                    finalKeeperID: "actual",
+                    deletedAssetIDs: [],
+                    keptAssetIDs: [],
+                    skipped: false
+                ),
+                .suggestedKeeper,
+                "\(kind) must not promote the system suggestion to finalKeeper"
+            )
+        }
+    }
+
+    func testRoleAssignmentUsesOutcomeSetsWithoutArrayOrdering() {
+        XCTAssertEqual(
+            PhotoFeedbackStore.assetRole(
+                assetID: "deleted",
+                kind: .deleteSelected,
+                suggestedKeeperID: "suggested",
+                finalKeeperID: "actual",
+                deletedAssetIDs: ["deleted"],
+                keptAssetIDs: [],
+                skipped: false
+            ),
+            .deleted
+        )
+        XCTAssertEqual(
+            PhotoFeedbackStore.assetRole(
+                assetID: "kept",
+                kind: .deleteSelected,
+                suggestedKeeperID: "suggested",
+                finalKeeperID: "actual",
+                deletedAssetIDs: [],
+                keptAssetIDs: ["kept"],
+                skipped: false
+            ),
+            .kept
+        )
     }
 
     func testNoOrderingBasedAssumptionsInExportBuilder() {
@@ -388,11 +653,72 @@ final class PhotoFeedbackLearningTests: XCTestCase {
         XCTAssertEqual(event.keptAssetIDs, ["keeper-1"])
     }
 
+    func testConcurrentInitialLoadAndAppendPreservesEveryUniqueEvent() async throws {
+        let (feedbackStore, _, baseURL) = makeStores(
+            uniqueDirectorySuffix: "concurrent-load-append"
+        )
+        defer { try? FileManager.default.removeItem(at: baseURL) }
+        let events = (0..<40).map { index in
+            makeEvent(
+                id: UUID(),
+                timestamp: Date(
+                    timeIntervalSinceReferenceDate: TimeInterval(index)
+                ),
+                kind: .swipeKeep,
+                stage: .committed,
+                source: .swipeMode,
+                groupID: nil,
+                suggestedKeeperAssetID: nil,
+                finalKeeperAssetID: "asset-\(index)",
+                keptAssetIDs: ["asset-\(index)"],
+                recommendationAccepted: nil,
+                dedupeKey: "concurrent-\(index)"
+            )
+        }
+
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                _ = await feedbackStore.loadAllEvents()
+            }
+            for event in events {
+                group.addTask {
+                    _ = await feedbackStore.append(event)
+                }
+            }
+        }
+        await feedbackStore.flushPendingWrites()
+
+        let loaded = await feedbackStore.loadAllEvents()
+        XCTAssertEqual(Set(loaded.map(\.id)), Set(events.map(\.id)))
+        XCTAssertEqual(Set(loaded.map(\.dedupeKey)).count, events.count)
+    }
+
     private func makeStores(uniqueDirectorySuffix: String = UUID().uuidString) -> (PhotoFeedbackStore, PhotoPreferenceProfileStore, URL) {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent("PhotoFeedbackLearningTests-\(uniqueDirectorySuffix)-\(UUID().uuidString)", isDirectory: true)
         let profileStore = PhotoPreferenceProfileStore(directoryURL: base)
-        let feedbackStore = PhotoFeedbackStore(directoryURL: base, profileStore: profileStore)
+        let feedbackStore = PhotoFeedbackStore(
+            directoryURL: base,
+            profileStore: profileStore,
+            persistence: NoopFeedbackPersistence()
+        )
         return (feedbackStore, profileStore, base)
+    }
+
+    private func makeCandidate(_ id: String, isBestShot: Bool) -> SimilarPhotoCandidate {
+        SimilarPhotoCandidate(
+            photoId: id,
+            assetReference: id,
+            captureTimestamp: nil,
+            isBestShot: isBestShot,
+            bestShotScore: isBestShot ? 0.9 : 0.4,
+            bestShotReasons: [],
+            issueFlags: [],
+            isProtected: false,
+            isSelectedForTrash: !isBestShot,
+            isViewed: false,
+            selectionState: isBestShot ? .keep : .trash,
+            technicalScores: nil
+        )
     }
 
     private func makeEvent(
@@ -415,22 +741,26 @@ final class PhotoFeedbackLearningTests: XCTestCase {
         policyVersion: Int = PhotoReviewFeedbackVersions.policyVersion,
         modelVersion: Int = PhotoReviewFeedbackVersions.modelVersion,
         featureSchemaVersion: Int = PhotoReviewFeedbackVersions.featureSchemaVersion,
-        assets: [PhotoReviewFeedbackAsset] = []
+        assets: [PhotoReviewFeedbackAsset] = [],
+        dedupeKey: String? = nil
     ) -> PhotoReviewFeedbackEvent {
-        PhotoReviewFeedbackEvent(
+        let resolvedFinalKeeperAssetID = finalKeeperAssetID
+            ?? (keptAssetIDs.count == 1 ? keptAssetIDs[0] : suggestedKeeperAssetID)
+        return PhotoReviewFeedbackEvent(
             id: id,
             timestamp: timestamp,
             source: source,
             kind: kind,
             stage: stage,
-            dedupeKey: "\(source.rawValue)|\(kind.rawValue)|\(stage.rawValue)|\(groupID?.uuidString ?? "none")|\(finalKeeperAssetID ?? "none")",
+            dedupeKey: dedupeKey
+                ?? "\(source.rawValue)|\(kind.rawValue)|\(stage.rawValue)|\(groupID?.uuidString ?? "none")|\(resolvedFinalKeeperAssetID ?? "none")",
             groupID: groupID,
             groupType: groupType,
             bucket: bucket,
             confidence: confidence,
             suggestedAction: suggestedAction,
             suggestedKeeperAssetID: suggestedKeeperAssetID,
-            finalKeeperAssetID: finalKeeperAssetID ?? suggestedKeeperAssetID,
+            finalKeeperAssetID: resolvedFinalKeeperAssetID,
             deletedAssetIDs: deletedAssetIDs,
             keptAssetIDs: keptAssetIDs,
             skipped: skipped,

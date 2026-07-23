@@ -46,15 +46,6 @@ actor PhotoPreferenceProfileStore {
         save()
     }
 
-    /// Legacy incremental helper. The production path uses `rebuild(from:)`
-    /// so the live aggregate always matches the canonical raw history.
-    @available(*, deprecated, message: "Use rebuild(from:) so aggregates stay deterministic and bounded.")
-    func apply(_ event: PhotoReviewFeedbackEvent) async {
-        await loadIfNeeded()
-        ingest(event)
-        save()
-    }
-
     func approximateDiskFootprintBytes() async -> Int64 {
         await loadIfNeeded()
         guard let data = try? JSONEncoder.photoDuck.encode(profile) else { return 0 }

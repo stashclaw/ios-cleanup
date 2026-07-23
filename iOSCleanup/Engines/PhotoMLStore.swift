@@ -1,6 +1,49 @@
 import Foundation
 import SQLite3
 
+enum PhotoEmbeddingContract {
+    // Vision revision 1 produces 128 Float values. Keep the storage version tied
+    // to that revision so threshold/cache changes cannot silently mix scales.
+    static let pinnedVisionRevision = 1
+    static let embeddingVersion = pinnedVisionRevision
+    static let elementCount = 128
+    static let byteCount = elementCount * MemoryLayout<Float>.size
+
+    static func expectedByteCount(for version: Int) -> Int? {
+        switch version {
+        case 1:
+            return byteCount
+        case 2:
+            // Kept only as a validated migration/future-model seam. Inference and
+            // feature generation remain pinned to revision/version 1.
+            return 2_048 * MemoryLayout<Float>.size
+        default:
+            return nil
+        }
+    }
+}
+
+enum MLStoreRetentionPolicy {
+    static let maximumTrainingRows = 50_000
+    static let maximumPairRows = 250_000
+}
+
+struct MLStoreRetentionResult: Sendable, Equatable {
+    let deletedTrainingRows: Int
+    let deletedPairRows: Int
+    let deletedFeatureRows: Int
+}
+
+private final class SQLiteConnection: @unchecked Sendable {
+    var handle: OpaquePointer?
+
+    deinit {
+        if let handle {
+            sqlite3_close(handle)
+        }
+    }
+}
+
 // MARK: - PhotoMLStore
 // SQLite-backed feature store for ML training data.
 // Stores Vision embeddings, feedback events, and pre-built training rows.
@@ -9,44 +52,63 @@ import SQLite3
 actor PhotoMLStore {
     static let shared = PhotoMLStore()
 
-    static let schemaVersion = 1
-    static let embeddingDimension = 128 // VNFeaturePrintObservation float count (Vision v1 = 128, v2 = 2048)
+    static let schemaVersion = 3
+    static let embeddingDimension = PhotoEmbeddingContract.elementCount
+    static let keeperTrainingCSVHeaders = KeeperFeatureSchema.exportHeaders
+    static let groupOutcomeCSVHeaders = GroupActionFeatureSchema.exportHeaders
 
-    private var db: OpaquePointer?
+    private let connection = SQLiteConnection()
+    private let dbDirectoryURL: URL
     private let dbPath: String
     private var isOpen = false
+
+    private var db: OpaquePointer? {
+        connection.handle
+    }
 
     init(directoryURL: URL? = nil) {
         let baseURL = directoryURL
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         let directory = baseURL.appendingPathComponent("PhotoDuck/ml", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        dbDirectoryURL = directory
         dbPath = directory.appendingPathComponent("photoduck-ml.sqlite").path
-    }
-
-    deinit {
-        if let db { sqlite3_close(db) }
     }
 
     // MARK: - Open / Migrate
 
     func open() throws {
         guard !isOpen else { return }
+        try FileManager.default.createDirectory(
+            at: dbDirectoryURL,
+            withIntermediateDirectories: true
+        )
+
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(dbPath, &handle, flags, nil) == SQLITE_OK else {
-            throw MLStoreError.cannotOpen(String(cString: sqlite3_errmsg(handle)))
+            let message = handle.map { String(cString: sqlite3_errmsg($0)) }
+                ?? "SQLite did not return a database handle"
+            if let handle {
+                sqlite3_close(handle)
+            }
+            throw MLStoreError.cannotOpen(message)
         }
-        db = handle
+        connection.handle = handle
         isOpen = true
 
-        // WAL mode for concurrent reads during scan
-        exec("PRAGMA journal_mode = WAL")
-        exec("PRAGMA synchronous = NORMAL")
-        exec("PRAGMA foreign_keys = ON")
-
-        try createTables()
+        do {
+            // WAL mode allows scan writes and cache reads without blocking each other.
+            try execOrThrow("PRAGMA journal_mode = WAL")
+            try execOrThrow("PRAGMA synchronous = NORMAL")
+            try execOrThrow("PRAGMA foreign_keys = ON")
+            try createTables()
+        } catch {
+            sqlite3_close(handle)
+            connection.handle = nil
+            isOpen = false
+            throw error
+        }
     }
 
     private func createTables() throws {
@@ -76,15 +138,17 @@ actor PhotoMLStore {
             CREATE TABLE IF NOT EXISTS pairwise_similarity (
                 lhs_asset_id TEXT NOT NULL,
                 rhs_asset_id TEXT NOT NULL,
+                embedding_version INT NOT NULL,
                 feature_distance REAL NOT NULL,
                 time_delta_seconds REAL,
                 is_burst_pair INT NOT NULL DEFAULT 0,
                 bucket TEXT NOT NULL,
                 similarity_score REAL NOT NULL,
                 computed_at REAL NOT NULL,
-                PRIMARY KEY (lhs_asset_id, rhs_asset_id)
+                PRIMARY KEY (lhs_asset_id, rhs_asset_id, embedding_version)
             )
         """)
+        try migratePairwiseSimilarityTableIfNeeded()
 
         // Feedback events (mirrors PhotoReviewFeedbackEvent)
         try execOrThrow("""
@@ -164,9 +228,11 @@ actor PhotoMLStore {
                 feature_burst_present INT NOT NULL DEFAULT 0,
                 feature_ranking_score REAL,
                 feature_similarity_to_keeper REAL,
+                active_choice INT NOT NULL DEFAULT 0,
                 FOREIGN KEY (event_id) REFERENCES feedback_events(id) ON DELETE CASCADE
             )
         """)
+        try migrateTrainingRowsTableIfNeeded()
 
         // Schema version tracking
         try execOrThrow("""
@@ -176,22 +242,27 @@ actor PhotoMLStore {
             )
         """)
 
-        exec("INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('version', '\(Self.schemaVersion)')")
+        try execOrThrow("""
+            INSERT INTO schema_meta (key, value) VALUES ('version', '\(Self.schemaVersion)')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """)
 
         // Indexes for common queries
-        exec("CREATE INDEX IF NOT EXISTS idx_feedback_timestamp ON feedback_events(timestamp)")
-        exec("CREATE INDEX IF NOT EXISTS idx_feedback_kind ON feedback_events(kind)")
-        exec("CREATE INDEX IF NOT EXISTS idx_feedback_dedupe ON feedback_events(dedupe_key)")
-        exec("CREATE INDEX IF NOT EXISTS idx_training_kind ON training_rows(kind)")
-        exec("CREATE INDEX IF NOT EXISTS idx_training_outcome ON training_rows(outcome_label)")
-        exec("CREATE INDEX IF NOT EXISTS idx_pairwise_bucket ON pairwise_similarity(bucket)")
-        exec("CREATE INDEX IF NOT EXISTS idx_features_screenshot ON photo_features(is_screenshot)")
+        try execOrThrow("CREATE INDEX IF NOT EXISTS idx_feedback_timestamp ON feedback_events(timestamp)")
+        try execOrThrow("CREATE INDEX IF NOT EXISTS idx_feedback_kind ON feedback_events(kind)")
+        try execOrThrow("CREATE INDEX IF NOT EXISTS idx_feedback_dedupe ON feedback_events(dedupe_key)")
+        try execOrThrow("CREATE INDEX IF NOT EXISTS idx_training_kind ON training_rows(kind)")
+        try execOrThrow("CREATE INDEX IF NOT EXISTS idx_training_outcome ON training_rows(outcome_label)")
+        try execOrThrow("CREATE INDEX IF NOT EXISTS idx_pairwise_bucket ON pairwise_similarity(bucket)")
+        try execOrThrow("CREATE INDEX IF NOT EXISTS idx_pairwise_computed ON pairwise_similarity(computed_at)")
+        try execOrThrow("CREATE INDEX IF NOT EXISTS idx_features_screenshot ON photo_features(is_screenshot)")
     }
 
     // MARK: - Photo Features
 
     func upsertFeature(_ feature: PhotoFeatureRecord) throws {
         try ensureOpen()
+        try validateEmbedding(feature.embedding, version: feature.embeddingVersion)
         let sql = """
             INSERT INTO photo_features
                 (asset_id, embedding, embedding_version, pixel_width, pixel_height,
@@ -199,8 +270,11 @@ actor PhotoMLStore {
                  is_hdr, burst_identifier, aspect_ratio, file_size_bytes, updated_at)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(asset_id) DO UPDATE SET
-                embedding = excluded.embedding,
-                embedding_version = excluded.embedding_version,
+                embedding = COALESCE(excluded.embedding, photo_features.embedding),
+                embedding_version = CASE
+                    WHEN excluded.embedding IS NULL THEN photo_features.embedding_version
+                    ELSE excluded.embedding_version
+                END,
                 pixel_width = excluded.pixel_width,
                 pixel_height = excluded.pixel_height,
                 creation_date = excluded.creation_date,
@@ -222,7 +296,7 @@ actor PhotoMLStore {
 
         sqlite3_bind_text(stmt, 1, feature.assetID, -1, SQLITE_TRANSIENT_PTR)
         if let embedding = feature.embedding {
-            embedding.withUnsafeBytes { ptr in
+            _ = embedding.withUnsafeBytes { ptr in
                 sqlite3_bind_blob(stmt, 2, ptr.baseAddress, Int32(ptr.count), SQLITE_TRANSIENT_PTR)
             }
         } else {
@@ -253,14 +327,14 @@ actor PhotoMLStore {
 
     func upsertFeatures(_ features: [PhotoFeatureRecord]) throws {
         try ensureOpen()
-        exec("BEGIN TRANSACTION")
+        try execOrThrow("BEGIN TRANSACTION")
         do {
             for feature in features {
                 try upsertFeature(feature)
             }
-            exec("COMMIT")
+            try execOrThrow("COMMIT")
         } catch {
-            exec("ROLLBACK")
+            rollbackIgnoringSecondaryFailure()
             throw error
         }
     }
@@ -272,7 +346,11 @@ actor PhotoMLStore {
 
     func loadEmbedding(for assetID: String) throws -> Data? {
         try ensureOpen()
-        let sql = "SELECT embedding FROM photo_features WHERE asset_id = ?"
+        let sql = """
+            SELECT embedding, embedding_version
+            FROM photo_features
+            WHERE asset_id = ?
+        """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw sqlError()
@@ -283,24 +361,39 @@ actor PhotoMLStore {
         guard sqlite3_column_type(stmt, 0) != SQLITE_NULL else { return nil }
         let count = Int(sqlite3_column_bytes(stmt, 0))
         guard count > 0, let ptr = sqlite3_column_blob(stmt, 0) else { return nil }
-        return Data(bytes: ptr, count: count)
+        let data = Data(bytes: ptr, count: count)
+        let version = Int(sqlite3_column_int(stmt, 1))
+        try validateEmbedding(data, version: version)
+        return data
     }
 
-    func loadAllEmbeddings() throws -> [String: Data] {
+    func loadAllEmbeddings(
+        embeddingVersion: Int = PhotoEmbeddingContract.embeddingVersion
+    ) throws -> [String: Data] {
         try ensureOpen()
-        let sql = "SELECT asset_id, embedding FROM photo_features WHERE embedding IS NOT NULL"
+        guard PhotoEmbeddingContract.expectedByteCount(for: embeddingVersion) != nil else {
+            throw MLStoreError.unsupportedEmbeddingVersion(embeddingVersion)
+        }
+        let sql = """
+            SELECT asset_id, embedding
+            FROM photo_features
+            WHERE embedding IS NOT NULL AND embedding_version = ?
+        """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw sqlError()
         }
         defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(embeddingVersion))
         var result: [String: Data] = [:]
         while sqlite3_step(stmt) == SQLITE_ROW {
             guard let idPtr = sqlite3_column_text(stmt, 0) else { continue }
             let id = String(cString: idPtr)
             let count = Int(sqlite3_column_bytes(stmt, 1))
             guard count > 0, let ptr = sqlite3_column_blob(stmt, 1) else { continue }
-            result[id] = Data(bytes: ptr, count: count)
+            let data = Data(bytes: ptr, count: count)
+            try validateEmbedding(data, version: embeddingVersion)
+            result[id] = data
         }
         return result
     }
@@ -309,12 +402,13 @@ actor PhotoMLStore {
 
     func upsertPairSimilarity(_ pair: PairSimilarityRecord) throws {
         try ensureOpen()
+        try validatePairEmbeddingVersions(pair)
         let sql = """
             INSERT INTO pairwise_similarity
-                (lhs_asset_id, rhs_asset_id, feature_distance, time_delta_seconds,
+                (lhs_asset_id, rhs_asset_id, embedding_version, feature_distance, time_delta_seconds,
                  is_burst_pair, bucket, similarity_score, computed_at)
-            VALUES (?,?,?,?,?,?,?,?)
-            ON CONFLICT(lhs_asset_id, rhs_asset_id) DO UPDATE SET
+            VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(lhs_asset_id, rhs_asset_id, embedding_version) DO UPDATE SET
                 feature_distance = excluded.feature_distance,
                 time_delta_seconds = excluded.time_delta_seconds,
                 is_burst_pair = excluded.is_burst_pair,
@@ -334,20 +428,113 @@ actor PhotoMLStore {
 
         sqlite3_bind_text(stmt, 1, lhs, -1, SQLITE_TRANSIENT_PTR)
         sqlite3_bind_text(stmt, 2, rhs, -1, SQLITE_TRANSIENT_PTR)
-        sqlite3_bind_double(stmt, 3, pair.featureDistance)
+        sqlite3_bind_int(stmt, 3, Int32(pair.embeddingVersion))
+        sqlite3_bind_double(stmt, 4, pair.featureDistance)
         if let delta = pair.timeDeltaSeconds {
-            sqlite3_bind_double(stmt, 4, delta)
+            sqlite3_bind_double(stmt, 5, delta)
         } else {
-            sqlite3_bind_null(stmt, 4)
+            sqlite3_bind_null(stmt, 5)
         }
-        sqlite3_bind_int(stmt, 5, pair.isBurstPair ? 1 : 0)
-        sqlite3_bind_text(stmt, 6, pair.bucket, -1, SQLITE_TRANSIENT_PTR)
-        sqlite3_bind_double(stmt, 7, pair.similarityScore)
-        sqlite3_bind_double(stmt, 8, Date().timeIntervalSince1970)
+        sqlite3_bind_int(stmt, 6, pair.isBurstPair ? 1 : 0)
+        sqlite3_bind_text(stmt, 7, pair.bucket, -1, SQLITE_TRANSIENT_PTR)
+        sqlite3_bind_double(stmt, 8, pair.similarityScore)
+        sqlite3_bind_double(stmt, 9, Date().timeIntervalSince1970)
 
         guard sqlite3_step(stmt) == SQLITE_DONE else {
             throw sqlError()
         }
+    }
+
+    func upsertPairSimilarities(_ pairs: [PairSimilarityRecord]) throws {
+        try ensureOpen()
+        guard !pairs.isEmpty else { return }
+        try execOrThrow("BEGIN TRANSACTION")
+        do {
+            for pair in pairs {
+                try upsertPairSimilarity(pair)
+            }
+            try execOrThrow("COMMIT")
+        } catch {
+            rollbackIgnoringSecondaryFailure()
+            throw error
+        }
+    }
+
+    func loadPairSimilarity(
+        lhsAssetID: String,
+        rhsAssetID: String,
+        embeddingVersion: Int = PhotoEmbeddingContract.embeddingVersion
+    ) throws -> PairSimilarityRecord? {
+        let key = SimilarityPairKey(lhsAssetID, rhsAssetID)
+        return try loadPairSimilarities(
+            for: [key],
+            embeddingVersion: embeddingVersion
+        )[key]
+    }
+
+    func loadPairSimilarities(
+        for keys: [SimilarityPairKey],
+        embeddingVersion: Int = PhotoEmbeddingContract.embeddingVersion
+    ) throws -> [SimilarityPairKey: PairSimilarityRecord] {
+        try ensureOpen()
+        guard PhotoEmbeddingContract.expectedByteCount(for: embeddingVersion) != nil else {
+            throw MLStoreError.unsupportedEmbeddingVersion(embeddingVersion)
+        }
+        let sql = """
+            SELECT
+                cached_pair.feature_distance,
+                cached_pair.time_delta_seconds,
+                cached_pair.is_burst_pair,
+                cached_pair.bucket,
+                cached_pair.similarity_score
+            FROM pairwise_similarity cached_pair
+            JOIN photo_features lhs ON lhs.asset_id = cached_pair.lhs_asset_id
+            JOIN photo_features rhs ON rhs.asset_id = cached_pair.rhs_asset_id
+            WHERE cached_pair.lhs_asset_id = ?
+              AND cached_pair.rhs_asset_id = ?
+              AND cached_pair.embedding_version = ?
+              AND lhs.embedding_version = cached_pair.embedding_version
+              AND rhs.embedding_version = cached_pair.embedding_version
+              AND lhs.embedding IS NOT NULL
+              AND rhs.embedding IS NOT NULL
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw sqlError()
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var result: [SimilarityPairKey: PairSimilarityRecord] = [:]
+        result.reserveCapacity(keys.count)
+        for key in Set(keys) {
+            sqlite3_reset(stmt)
+            sqlite3_clear_bindings(stmt)
+            sqlite3_bind_text(stmt, 1, key.lhsID, -1, SQLITE_TRANSIENT_PTR)
+            sqlite3_bind_text(stmt, 2, key.rhsID, -1, SQLITE_TRANSIENT_PTR)
+            sqlite3_bind_int(stmt, 3, Int32(embeddingVersion))
+
+            let stepResult = sqlite3_step(stmt)
+            if stepResult == SQLITE_DONE {
+                continue
+            }
+            guard stepResult == SQLITE_ROW else { throw sqlError() }
+            let timeDelta: Double? = sqlite3_column_type(stmt, 1) == SQLITE_NULL
+                ? nil
+                : sqlite3_column_double(stmt, 1)
+            let bucket = sqlite3_column_text(stmt, 3).map { String(cString: $0) } ?? ""
+            result[key] = PairSimilarityRecord(
+                lhsAssetID: key.lhsID,
+                rhsAssetID: key.rhsID,
+                embeddingVersion: embeddingVersion,
+                featureDistance: sqlite3_column_double(stmt, 0),
+                timeDeltaSeconds: timeDelta,
+                isBurstPair: sqlite3_column_int(stmt, 2) != 0,
+                bucket: bucket,
+                similarityScore: sqlite3_column_double(stmt, 4)
+            )
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw sqlError() }
+        }
+        return result
     }
 
     func pairSimilarityCount() throws -> Int {
@@ -421,8 +608,8 @@ actor PhotoMLStore {
                  policy_version, model_version, feature_schema_version,
                  feature_pixel_width, feature_pixel_height, feature_is_favorite,
                  feature_is_edited, feature_is_screenshot, feature_burst_present,
-                 feature_ranking_score, feature_similarity_to_keeper)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 feature_ranking_score, feature_similarity_to_keeper, active_choice)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
@@ -462,6 +649,7 @@ actor PhotoMLStore {
         sqlite3_bind_int(stmt, 26, row.featureBurstPresent ? 1 : 0)
         bindOptionalDouble(stmt, 27, row.featureRankingScore)
         bindOptionalDouble(stmt, 28, row.featureSimilarityToKeeper)
+        sqlite3_bind_int(stmt, 29, row.activeChoice ? 1 : 0)
 
         guard sqlite3_step(stmt) == SQLITE_DONE else {
             throw sqlError()
@@ -470,14 +658,14 @@ actor PhotoMLStore {
 
     func insertTrainingRows(_ rows: [TrainingRowRecord]) throws {
         try ensureOpen()
-        exec("BEGIN TRANSACTION")
+        try execOrThrow("BEGIN TRANSACTION")
         do {
             for row in rows {
                 try insertTrainingRow(row)
             }
-            exec("COMMIT")
+            try execOrThrow("COMMIT")
         } catch {
-            exec("ROLLBACK")
+            rollbackIgnoringSecondaryFailure()
             throw error
         }
     }
@@ -502,70 +690,93 @@ actor PhotoMLStore {
 
     // MARK: - Export for CreateML
 
+    private static let keeperTrainingSQL = """
+        SELECT
+            tr.outcome_label,
+            tr.event_id,
+            tr.group_id,
+            tr.feature_schema_version,
+            tr.active_choice,
+            tr.bucket,
+            tr.group_type,
+            tr.confidence,
+            tr.suggested_action,
+            tr.feature_pixel_width,
+            tr.feature_pixel_height,
+            tr.feature_is_favorite,
+            tr.feature_is_edited,
+            tr.feature_is_screenshot,
+            tr.feature_burst_present,
+            tr.feature_ranking_score,
+            tr.feature_similarity_to_keeper,
+            pf.aspect_ratio,
+            pf.file_size_bytes
+        FROM training_rows tr
+        LEFT JOIN photo_features pf ON tr.asset_id = pf.asset_id
+        WHERE tr.kind = 'keeperRanking' AND tr.stage = 'committed'
+        ORDER BY tr.timestamp
+    """
+
+    private static let groupOutcomeSQL = """
+        SELECT
+            tr.outcome_label,
+            tr.event_id,
+            tr.group_id,
+            tr.feature_schema_version,
+            tr.bucket,
+            tr.group_type,
+            tr.confidence,
+            tr.suggested_action,
+            (SELECT COUNT(*) FROM feedback_assets fa WHERE fa.event_id = tr.event_id) as asset_count,
+            (SELECT AVG(fa.ranking_score) FROM feedback_assets fa WHERE fa.event_id = tr.event_id) as avg_ranking,
+            (SELECT COUNT(CASE WHEN fa.is_screenshot = 1 THEN 1 END) FROM feedback_assets fa WHERE fa.event_id = tr.event_id) as screenshot_count,
+            (SELECT COUNT(CASE WHEN fa.is_favorite = 1 THEN 1 END) FROM feedback_assets fa WHERE fa.event_id = tr.event_id) as favorite_count,
+            (SELECT COUNT(CASE WHEN fa.is_edited = 1 THEN 1 END) FROM feedback_assets fa WHERE fa.event_id = tr.event_id) as edited_count
+        FROM training_rows tr
+        WHERE tr.kind = 'groupOutcome' AND tr.stage = 'committed'
+        ORDER BY tr.timestamp
+    """
+
     func exportKeeperTrainingCSV() throws -> String {
         try ensureOpen()
-        let sql = """
-            SELECT
-                tr.outcome_label,
-                tr.bucket,
-                tr.group_type,
-                tr.confidence,
-                tr.suggested_action,
-                COALESCE(tr.recommendation_accepted, -1),
-                tr.feature_pixel_width,
-                tr.feature_pixel_height,
-                tr.feature_is_favorite,
-                tr.feature_is_edited,
-                tr.feature_is_screenshot,
-                tr.feature_burst_present,
-                tr.feature_ranking_score,
-                tr.feature_similarity_to_keeper,
-                pf.aspect_ratio,
-                pf.file_size_bytes
-            FROM training_rows tr
-            LEFT JOIN photo_features pf ON tr.asset_id = pf.asset_id
-            WHERE tr.kind = 'keeperRanking' AND tr.stage = 'committed'
-            ORDER BY tr.timestamp
-        """
-        return try exportCSV(sql: sql, headers: [
-            "outcome_label", "bucket", "group_type", "confidence", "suggested_action",
-            "recommendation_accepted", "pixel_width", "pixel_height", "is_favorite",
-            "is_edited", "is_screenshot", "burst_present", "ranking_score",
-            "similarity_to_keeper", "aspect_ratio", "file_size_bytes"
-        ])
+        return try exportCSVToString(
+            sql: Self.keeperTrainingSQL,
+            headers: Self.keeperTrainingCSVHeaders
+        )
     }
 
     func exportGroupOutcomeCSV() throws -> String {
         try ensureOpen()
-        let sql = """
-            SELECT
-                tr.outcome_label,
-                tr.bucket,
-                tr.group_type,
-                tr.confidence,
-                tr.suggested_action,
-                COALESCE(tr.recommendation_accepted, -1),
-                (SELECT COUNT(*) FROM feedback_assets fa WHERE fa.event_id = tr.event_id) as asset_count,
-                (SELECT AVG(fa.ranking_score) FROM feedback_assets fa WHERE fa.event_id = tr.event_id) as avg_ranking,
-                (SELECT COUNT(CASE WHEN fa.is_screenshot = 1 THEN 1 END) FROM feedback_assets fa WHERE fa.event_id = tr.event_id) as screenshot_count,
-                (SELECT COUNT(CASE WHEN fa.is_favorite = 1 THEN 1 END) FROM feedback_assets fa WHERE fa.event_id = tr.event_id) as favorite_count,
-                (SELECT COUNT(CASE WHEN fa.is_edited = 1 THEN 1 END) FROM feedback_assets fa WHERE fa.event_id = tr.event_id) as edited_count
-            FROM training_rows tr
-            WHERE tr.kind = 'groupOutcome' AND tr.stage = 'committed'
-            ORDER BY tr.timestamp
-        """
-        return try exportCSV(sql: sql, headers: [
-            "outcome_label", "bucket", "group_type", "confidence", "suggested_action",
-            "recommendation_accepted", "asset_count", "avg_ranking", "screenshot_count",
-            "favorite_count", "edited_count"
-        ])
+        return try exportCSVToString(
+            sql: Self.groupOutcomeSQL,
+            headers: Self.groupOutcomeCSVHeaders
+        )
+    }
+
+    func exportKeeperTrainingCSV(to destinationURL: URL) throws {
+        try ensureOpen()
+        try exportCSV(
+            sql: Self.keeperTrainingSQL,
+            headers: Self.keeperTrainingCSVHeaders,
+            to: destinationURL
+        )
+    }
+
+    func exportGroupOutcomeCSV(to destinationURL: URL) throws {
+        try ensureOpen()
+        try exportCSV(
+            sql: Self.groupOutcomeSQL,
+            headers: Self.groupOutcomeCSVHeaders,
+            to: destinationURL
+        )
     }
 
     // MARK: - Stats
 
     func databaseSizeBytes() throws -> Int64 {
-        let attrs = try? FileManager.default.attributesOfItem(atPath: dbPath)
-        return (attrs?[.size] as? Int64) ?? 0
+        guard FileManager.default.fileExists(atPath: dbPath) else { return 0 }
+        let attrs = try FileManager.default.attributesOfItem(atPath: dbPath)
+        return (attrs[.size] as? NSNumber)?.int64Value ?? 0
     }
 
     func stats() throws -> MLStoreStats {
@@ -584,9 +795,87 @@ actor PhotoMLStore {
 
     // MARK: - Maintenance
 
+    func checkpointWAL() throws {
+        try ensureOpen()
+        let sql = "PRAGMA wal_checkpoint(TRUNCATE)"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw sqlError()
+        }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else {
+            throw sqlError()
+        }
+        let busyConnections = Int(sqlite3_column_int(stmt, 0))
+        guard busyConnections == 0 else {
+            throw MLStoreError.walCheckpointBusy(busyConnections)
+        }
+    }
+
+    func exportDatabase(to destinationURL: URL) throws {
+        try ensureOpen()
+        try checkpointWAL()
+        try FileManager.default.createDirectory(
+            at: destinationURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let temporaryURL = destinationURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(".\(destinationURL.lastPathComponent).\(UUID().uuidString).tmp")
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        try FileManager.default.copyItem(
+            at: URL(fileURLWithPath: dbPath),
+            to: temporaryURL
+        )
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+        try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
+    }
+
+    @discardableResult
+    func performRetention(
+        activeAssetIDs: Set<String>? = nil,
+        maximumTrainingRows: Int = MLStoreRetentionPolicy.maximumTrainingRows,
+        maximumPairRows: Int = MLStoreRetentionPolicy.maximumPairRows,
+        allowEmptyActiveLibrary: Bool = false,
+        vacuumAfterward: Bool = false
+    ) throws -> MLStoreRetentionResult {
+        try ensureOpen()
+        let deletedTrainingRows = try deleteRowsBeyondLimit(
+            table: "training_rows",
+            orderColumn: "timestamp",
+            keepingNewest: maximumTrainingRows
+        )
+        let deletedPairRowsForLimit = try deleteRowsBeyondLimit(
+            table: "pairwise_similarity",
+            orderColumn: "computed_at",
+            keepingNewest: maximumPairRows
+        )
+
+        var deletedFeatureRows = 0
+        var deletedInactivePairRows = 0
+        if let activeAssetIDs,
+           !activeAssetIDs.isEmpty || allowEmptyActiveLibrary {
+            let result = try deleteRecordsForInactiveAssets(activeAssetIDs)
+            deletedFeatureRows = result.features
+            deletedInactivePairRows = result.pairs
+        }
+
+        if vacuumAfterward {
+            try vacuum()
+        }
+        return MLStoreRetentionResult(
+            deletedTrainingRows: deletedTrainingRows,
+            deletedPairRows: deletedPairRowsForLimit + deletedInactivePairRows,
+            deletedFeatureRows: deletedFeatureRows
+        )
+    }
+
     func vacuum() throws {
         try ensureOpen()
-        exec("VACUUM")
+        try execOrThrow("VACUUM")
     }
 
     func deleteOldFeatures(olderThan date: Date) throws -> Int {
@@ -604,11 +893,18 @@ actor PhotoMLStore {
 
     func deleteAllData() throws {
         try ensureOpen()
-        exec("DELETE FROM training_rows")
-        exec("DELETE FROM feedback_assets")
-        exec("DELETE FROM feedback_events")
-        exec("DELETE FROM pairwise_similarity")
-        exec("DELETE FROM photo_features")
+        try execOrThrow("BEGIN TRANSACTION")
+        do {
+            try execOrThrow("DELETE FROM training_rows")
+            try execOrThrow("DELETE FROM feedback_assets")
+            try execOrThrow("DELETE FROM feedback_events")
+            try execOrThrow("DELETE FROM pairwise_similarity")
+            try execOrThrow("DELETE FROM photo_features")
+            try execOrThrow("COMMIT")
+        } catch {
+            rollbackIgnoringSecondaryFailure()
+            throw error
+        }
     }
 
     // MARK: - Helpers
@@ -617,8 +913,255 @@ actor PhotoMLStore {
         if !isOpen { try open() }
     }
 
-    private func exec(_ sql: String) {
-        sqlite3_exec(db, sql, nil, nil, nil)
+    private func migratePairwiseSimilarityTableIfNeeded() throws {
+        let columns = try tableColumnInfo("pairwise_similarity")
+        let hasVersionedPrimaryKey = columns.contains {
+            $0.name == "embedding_version" && $0.primaryKeyPosition > 0
+        }
+        guard !hasVersionedPrimaryKey else { return }
+
+        let legacyHasVersion = columns.contains { $0.name == "embedding_version" }
+        try execOrThrow("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try execOrThrow(
+                "ALTER TABLE pairwise_similarity RENAME TO pairwise_similarity_legacy"
+            )
+            try execOrThrow("""
+                CREATE TABLE pairwise_similarity (
+                    lhs_asset_id TEXT NOT NULL,
+                    rhs_asset_id TEXT NOT NULL,
+                    embedding_version INT NOT NULL,
+                    feature_distance REAL NOT NULL,
+                    time_delta_seconds REAL,
+                    is_burst_pair INT NOT NULL DEFAULT 0,
+                    bucket TEXT NOT NULL,
+                    similarity_score REAL NOT NULL,
+                    computed_at REAL NOT NULL,
+                    PRIMARY KEY (lhs_asset_id, rhs_asset_id, embedding_version)
+                )
+            """)
+            let versionExpression = legacyHasVersion
+                ? "embedding_version"
+                : "\(PhotoEmbeddingContract.embeddingVersion)"
+            try execOrThrow("""
+                INSERT INTO pairwise_similarity (
+                    lhs_asset_id, rhs_asset_id, embedding_version, feature_distance,
+                    time_delta_seconds, is_burst_pair, bucket, similarity_score, computed_at
+                )
+                SELECT
+                    lhs_asset_id, rhs_asset_id, \(versionExpression), feature_distance,
+                    time_delta_seconds, is_burst_pair, bucket, similarity_score, computed_at
+                FROM pairwise_similarity_legacy
+            """)
+            try execOrThrow("DROP TABLE pairwise_similarity_legacy")
+            try execOrThrow("COMMIT")
+        } catch {
+            rollbackIgnoringSecondaryFailure()
+            throw error
+        }
+    }
+
+    private func migrateTrainingRowsTableIfNeeded() throws {
+        let columns = try tableColumnInfo("training_rows")
+        guard !columns.contains(where: { $0.name == "active_choice" }) else {
+            return
+        }
+
+        // Existing keeper rows predate an explicit human-choice signal. Default
+        // them to inactive so legacy accepted defaults cannot train the model.
+        try execOrThrow(
+            "ALTER TABLE training_rows ADD COLUMN active_choice INT NOT NULL DEFAULT 0"
+        )
+    }
+
+    private func tableColumnInfo(_ table: String) throws -> [SQLiteColumnInfo] {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(\(table))", -1, &stmt, nil) == SQLITE_OK else {
+            throw sqlError()
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var columns: [SQLiteColumnInfo] = []
+        var stepResult = sqlite3_step(stmt)
+        while stepResult == SQLITE_ROW {
+            if let namePointer = sqlite3_column_text(stmt, 1) {
+                columns.append(
+                    SQLiteColumnInfo(
+                        name: String(cString: namePointer),
+                        primaryKeyPosition: Int(sqlite3_column_int(stmt, 5))
+                    )
+                )
+            }
+            stepResult = sqlite3_step(stmt)
+        }
+        guard stepResult == SQLITE_DONE else { throw sqlError() }
+        return columns
+    }
+
+    private func validateEmbedding(_ embedding: Data?, version: Int) throws {
+        guard let embedding else { return }
+        guard let expectedByteCount = PhotoEmbeddingContract.expectedByteCount(for: version) else {
+            throw MLStoreError.unsupportedEmbeddingVersion(version)
+        }
+        guard embedding.count == expectedByteCount else {
+            throw MLStoreError.invalidEmbeddingByteCount(
+                version: version,
+                expected: expectedByteCount,
+                actual: embedding.count
+            )
+        }
+    }
+
+    private func validatePairEmbeddingVersions(_ pair: PairSimilarityRecord) throws {
+        guard pair.lhsAssetID != pair.rhsAssetID else {
+            throw MLStoreError.invalidPair("Pair assets must be distinct")
+        }
+        guard PhotoEmbeddingContract.expectedByteCount(for: pair.embeddingVersion) != nil else {
+            throw MLStoreError.unsupportedEmbeddingVersion(pair.embeddingVersion)
+        }
+
+        let sql = """
+            SELECT asset_id, embedding, embedding_version
+            FROM photo_features
+            WHERE asset_id IN (?, ?)
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw sqlError()
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, pair.lhsAssetID, -1, SQLITE_TRANSIENT_PTR)
+        sqlite3_bind_text(stmt, 2, pair.rhsAssetID, -1, SQLITE_TRANSIENT_PTR)
+
+        var validatedIDs = Set<String>()
+        var stepResult = sqlite3_step(stmt)
+        while stepResult == SQLITE_ROW {
+            guard let idPointer = sqlite3_column_text(stmt, 0) else {
+                throw MLStoreError.invalidPair("Stored feature row has no asset ID")
+            }
+            let assetID = String(cString: idPointer)
+            let version = Int(sqlite3_column_int(stmt, 2))
+            guard version == pair.embeddingVersion else {
+                throw MLStoreError.pairEmbeddingVersionMismatch(
+                    assetID: assetID,
+                    expected: pair.embeddingVersion,
+                    actual: version
+                )
+            }
+            guard sqlite3_column_type(stmt, 1) != SQLITE_NULL else {
+                throw MLStoreError.missingEmbedding(assetID)
+            }
+            let byteCount = Int(sqlite3_column_bytes(stmt, 1))
+            guard let expectedByteCount = PhotoEmbeddingContract.expectedByteCount(for: version) else {
+                throw MLStoreError.unsupportedEmbeddingVersion(version)
+            }
+            guard byteCount == expectedByteCount else {
+                throw MLStoreError.invalidEmbeddingByteCount(
+                    version: version,
+                    expected: expectedByteCount,
+                    actual: byteCount
+                )
+            }
+            validatedIDs.insert(assetID)
+            stepResult = sqlite3_step(stmt)
+        }
+        guard stepResult == SQLITE_DONE else { throw sqlError() }
+        let expectedIDs = Set([pair.lhsAssetID, pair.rhsAssetID])
+        guard validatedIDs == expectedIDs else {
+            let missingID = expectedIDs.subtracting(validatedIDs).sorted().first ?? "unknown"
+            throw MLStoreError.missingEmbedding(missingID)
+        }
+    }
+
+    private func deleteRowsBeyondLimit(
+        table: String,
+        orderColumn: String,
+        keepingNewest limit: Int
+    ) throws -> Int {
+        let allowedTargets: Set<String> = [
+            "training_rows.timestamp",
+            "pairwise_similarity.computed_at"
+        ]
+        guard allowedTargets.contains("\(table).\(orderColumn)") else {
+            throw MLStoreError.invalidMaintenanceTarget("\(table).\(orderColumn)")
+        }
+
+        let sql = """
+            DELETE FROM \(table)
+            WHERE rowid IN (
+                SELECT rowid FROM \(table)
+                ORDER BY \(orderColumn) DESC, rowid DESC
+                LIMIT -1 OFFSET ?
+            )
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw sqlError()
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, sqlite3_int64(max(limit, 0)))
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw sqlError() }
+        return Int(sqlite3_changes(db))
+    }
+
+    private func deleteRecordsForInactiveAssets(
+        _ activeAssetIDs: Set<String>
+    ) throws -> (features: Int, pairs: Int) {
+        try execOrThrow("DROP TABLE IF EXISTS temp.active_photo_asset_ids")
+        try execOrThrow(
+            "CREATE TEMP TABLE active_photo_asset_ids (asset_id TEXT PRIMARY KEY)"
+        )
+        try execOrThrow("BEGIN TRANSACTION")
+        do {
+            let insertSQL = "INSERT OR IGNORE INTO active_photo_asset_ids (asset_id) VALUES (?)"
+            var insertStatement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, insertSQL, -1, &insertStatement, nil) == SQLITE_OK else {
+                throw sqlError()
+            }
+            defer {
+                if insertStatement != nil {
+                    sqlite3_finalize(insertStatement)
+                }
+            }
+
+            for assetID in activeAssetIDs {
+                sqlite3_reset(insertStatement)
+                sqlite3_clear_bindings(insertStatement)
+                sqlite3_bind_text(insertStatement, 1, assetID, -1, SQLITE_TRANSIENT_PTR)
+                guard sqlite3_step(insertStatement) == SQLITE_DONE else {
+                    throw sqlError()
+                }
+            }
+            sqlite3_finalize(insertStatement)
+            insertStatement = nil
+
+            try execOrThrow("""
+                DELETE FROM pairwise_similarity
+                WHERE lhs_asset_id NOT IN (SELECT asset_id FROM active_photo_asset_ids)
+                   OR rhs_asset_id NOT IN (SELECT asset_id FROM active_photo_asset_ids)
+            """)
+            let deletedPairs = Int(sqlite3_changes(db))
+            try execOrThrow("""
+                DELETE FROM photo_features
+                WHERE asset_id NOT IN (SELECT asset_id FROM active_photo_asset_ids)
+            """)
+            let deletedFeatures = Int(sqlite3_changes(db))
+            try execOrThrow("COMMIT")
+            try execOrThrow("DROP TABLE active_photo_asset_ids")
+            return (deletedFeatures, deletedPairs)
+        } catch {
+            rollbackIgnoringSecondaryFailure()
+            try? execOrThrow("DROP TABLE IF EXISTS active_photo_asset_ids")
+            throw error
+        }
+    }
+
+    private func rollbackIgnoringSecondaryFailure() {
+        var errorMessage: UnsafeMutablePointer<CChar>?
+        sqlite3_exec(db, "ROLLBACK", nil, nil, &errorMessage)
+        if let errorMessage {
+            sqlite3_free(errorMessage)
+        }
     }
 
     private func execOrThrow(_ sql: String) throws {
@@ -640,18 +1183,49 @@ actor PhotoMLStore {
         return Int(sqlite3_column_int(stmt, 0))
     }
 
-    private func exportCSV(sql: String, headers: [String]) throws -> String {
+    private func exportCSVToString(sql: String, headers: [String]) throws -> String {
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("photoduck-export-\(UUID().uuidString).csv")
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        try exportCSV(sql: sql, headers: headers, to: temporaryURL)
+        return try String(contentsOf: temporaryURL, encoding: .utf8)
+    }
+
+    private func exportCSV(sql: String, headers: [String], to destinationURL: URL) throws {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw sqlError()
         }
         defer { sqlite3_finalize(stmt) }
 
-        var lines: [String] = [headers.joined(separator: ",")]
-        let columnCount = Int(sqlite3_column_count(stmt))
+        try FileManager.default.createDirectory(
+            at: destinationURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let temporaryURL = destinationURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(".\(destinationURL.lastPathComponent).\(UUID().uuidString).tmp")
+        guard FileManager.default.createFile(atPath: temporaryURL.path, contents: nil) else {
+            throw MLStoreError.cannotCreateExport(temporaryURL.path)
+        }
+        let handle = try FileHandle(forWritingTo: temporaryURL)
+        var shouldDeleteTemporaryFile = true
+        var handleIsOpen = true
+        defer {
+            if handleIsOpen {
+                try? handle.close()
+            }
+            if shouldDeleteTemporaryFile {
+                try? FileManager.default.removeItem(at: temporaryURL)
+            }
+        }
 
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        try writeCSVLine(headers, to: handle, prependNewline: false)
+        let columnCount = Int(sqlite3_column_count(stmt))
+        var stepResult = sqlite3_step(stmt)
+        while stepResult == SQLITE_ROW {
             var values: [String] = []
+            values.reserveCapacity(columnCount)
             for col in 0..<columnCount {
                 let type = sqlite3_column_type(stmt, Int32(col))
                 switch type {
@@ -663,20 +1237,47 @@ actor PhotoMLStore {
                     values.append(String(sqlite3_column_double(stmt, Int32(col))))
                 default:
                     if let text = sqlite3_column_text(stmt, Int32(col)) {
-                        let str = String(cString: text)
-                        if str.contains(",") || str.contains("\"") {
-                            values.append("\"\(str.replacingOccurrences(of: "\"", with: "\"\""))\"")
-                        } else {
-                            values.append(str)
-                        }
+                        values.append(csvEscaped(String(cString: text)))
                     } else {
                         values.append("")
                     }
                 }
             }
-            lines.append(values.joined(separator: ","))
+            try writeCSVLine(values, to: handle, prependNewline: true)
+            stepResult = sqlite3_step(stmt)
         }
-        return lines.joined(separator: "\n")
+        guard stepResult == SQLITE_DONE else { throw sqlError() }
+        try handle.synchronize()
+        try handle.close()
+        handleIsOpen = false
+
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+        try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
+        shouldDeleteTemporaryFile = false
+    }
+
+    private func writeCSVLine(
+        _ values: [String],
+        to handle: FileHandle,
+        prependNewline: Bool
+    ) throws {
+        let prefix = prependNewline ? "\n" : ""
+        guard let data = "\(prefix)\(values.joined(separator: ","))".data(using: .utf8) else {
+            throw MLStoreError.cannotEncodeCSV
+        }
+        try handle.write(contentsOf: data)
+    }
+
+    private func csvEscaped(_ value: String) -> String {
+        guard value.contains(",")
+                || value.contains("\"")
+                || value.contains("\n")
+                || value.contains("\r") else {
+            return value
+        }
+        return "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
     }
 
     private func sqlError() -> MLStoreError {
@@ -723,6 +1324,11 @@ private let SQLITE_TRANSIENT_PTR = unsafeBitCast(-1, to: sqlite3_destructor_type
 
 // MARK: - Record Types
 
+private struct SQLiteColumnInfo {
+    let name: String
+    let primaryKeyPosition: Int
+}
+
 struct PhotoFeatureRecord: Sendable {
     let assetID: String
     let embedding: Data?
@@ -743,11 +1349,32 @@ struct PhotoFeatureRecord: Sendable {
 struct PairSimilarityRecord: Sendable {
     let lhsAssetID: String
     let rhsAssetID: String
+    let embeddingVersion: Int
     let featureDistance: Double
     let timeDeltaSeconds: Double?
     let isBurstPair: Bool
     let bucket: String
     let similarityScore: Double
+
+    init(
+        lhsAssetID: String,
+        rhsAssetID: String,
+        embeddingVersion: Int = PhotoEmbeddingContract.embeddingVersion,
+        featureDistance: Double,
+        timeDeltaSeconds: Double?,
+        isBurstPair: Bool,
+        bucket: String,
+        similarityScore: Double
+    ) {
+        self.lhsAssetID = lhsAssetID
+        self.rhsAssetID = rhsAssetID
+        self.embeddingVersion = embeddingVersion
+        self.featureDistance = featureDistance
+        self.timeDeltaSeconds = timeDeltaSeconds
+        self.isBurstPair = isBurstPair
+        self.bucket = bucket
+        self.similarityScore = similarityScore
+    }
 }
 
 struct FeedbackEventRecord: Sendable {
@@ -795,6 +1422,7 @@ struct TrainingRowRecord: Sendable {
     let policyVersion: Int
     let modelVersion: Int
     let featureSchemaVersion: Int
+    let activeChoice: Bool
     let featurePixelWidth: Int?
     let featurePixelHeight: Int?
     let featureIsFavorite: Bool?
@@ -823,11 +1451,38 @@ struct MLStoreStats: Sendable {
 enum MLStoreError: Error, LocalizedError {
     case cannotOpen(String)
     case sqlError(String)
+    case unsupportedEmbeddingVersion(Int)
+    case invalidEmbeddingByteCount(version: Int, expected: Int, actual: Int)
+    case missingEmbedding(String)
+    case pairEmbeddingVersionMismatch(assetID: String, expected: Int, actual: Int)
+    case invalidPair(String)
+    case walCheckpointBusy(Int)
+    case invalidMaintenanceTarget(String)
+    case cannotCreateExport(String)
+    case cannotEncodeCSV
 
     var errorDescription: String? {
         switch self {
         case .cannotOpen(let msg): return "Cannot open ML store: \(msg)"
         case .sqlError(let msg): return "ML store SQL error: \(msg)"
+        case .unsupportedEmbeddingVersion(let version):
+            return "Unsupported embedding version: \(version)"
+        case .invalidEmbeddingByteCount(let version, let expected, let actual):
+            return "Embedding v\(version) expected \(expected) bytes, received \(actual)"
+        case .missingEmbedding(let assetID):
+            return "Missing embedding for pair asset \(assetID)"
+        case .pairEmbeddingVersionMismatch(let assetID, let expected, let actual):
+            return "Pair asset \(assetID) has embedding v\(actual), expected v\(expected)"
+        case .invalidPair(let message):
+            return "Invalid pair cache record: \(message)"
+        case .walCheckpointBusy(let connections):
+            return "WAL checkpoint could not complete; \(connections) connection(s) are busy"
+        case .invalidMaintenanceTarget(let target):
+            return "Invalid ML store maintenance target: \(target)"
+        case .cannotCreateExport(let path):
+            return "Cannot create ML export at \(path)"
+        case .cannotEncodeCSV:
+            return "Cannot encode ML export as UTF-8"
         }
     }
 }

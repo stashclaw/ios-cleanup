@@ -9,7 +9,7 @@
     <key>CFBundleName</key>
     <string>$(PRODUCT_NAME)</string>
     <key>CFBundleDisplayName</key>
-    <string>iOSCleanup</string>
+    <string>PhotoDuck</string>
     <key>CFBundlePackageType</key>
     <string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
     <key>CFBundleShortVersionString</key>
@@ -25,8 +25,10 @@
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
     </array>
     <key>UIAppFonts</key>
     <array>
@@ -36,8 +38,12 @@
         <string>Nunito-Bold.ttf</string>
     </array>
     <key>NSPhotoLibraryUsageDescription</key>
-    <string>iOSCleanup needs photo access to find similar and duplicate images on your device.</string>
+    <string>PhotoDuck needs photo access to find similar images and let you review cleanup choices on your device.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>PhotoDuck needs permission to save compressed copies to your photo library.</string>
     <key>NSContactsUsageDescription</key>
-    <string>iOSCleanup needs contacts access to find and merge duplicate entries.</string>
+    <string>PhotoDuck needs contacts access to find and merge duplicate entries you approve.</string>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
 </dict>
 </plist>

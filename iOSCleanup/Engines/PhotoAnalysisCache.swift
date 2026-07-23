@@ -1,14 +1,17 @@
 import Foundation
+import OSLog
 import Photos
 
 struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
-    static let schemaVersion = 2
+    static let schemaVersion = 4
 
     let schemaVersion: Int
     let savedAt: Date
     let libraryTotalCount: Int
     let scanTargetCount: Int
     let processedPhotoCount: Int
+    let analyzedPhotoCount: Int
+    let unanalyzedPhotoCount: Int
     let progressFraction: Double
     let groupsFoundCount: Int
     let reviewablePhotosCount: Int
@@ -22,6 +25,8 @@ struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
         libraryTotalCount: Int,
         scanTargetCount: Int,
         processedPhotoCount: Int,
+        analyzedPhotoCount: Int,
+        unanalyzedPhotoCount: Int,
         progressFraction: Double,
         groupsFoundCount: Int,
         reviewablePhotosCount: Int,
@@ -35,6 +40,8 @@ struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
         self.libraryTotalCount = libraryTotalCount
         self.scanTargetCount = scanTargetCount
         self.processedPhotoCount = processedPhotoCount
+        self.analyzedPhotoCount = analyzedPhotoCount
+        self.unanalyzedPhotoCount = unanalyzedPhotoCount
         self.progressFraction = progressFraction
         self.groupsFoundCount = groupsFoundCount
         self.reviewablePhotosCount = reviewablePhotosCount
@@ -119,6 +126,10 @@ struct CachedPhotoGroup: Codable, Sendable {
     func makeGroup(using assetsByID: [String: PHAsset]) -> PhotoGroup? {
         guard let resolvedIdentifiers = resolvedAssetIdentifiers(using: Set(assetsByID.keys)) else { return nil }
         let assets = resolvedIdentifiers.compactMap { assetsByID[$0] }
+        let resolvedIDSet = Set(resolvedIdentifiers)
+        let resolvedKeeperAssetID = keeperAssetID.flatMap {
+            resolvedIDSet.contains($0) ? $0 : nil
+        }
 
         let captureDateRange: DateInterval?
         if let start = captureDateStart, let end = captureDateEnd, start <= end {
@@ -135,18 +146,22 @@ struct CachedPhotoGroup: Codable, Sendable {
             groupType: groupType,
             groupConfidence: groupConfidence,
             reviewState: reviewState,
-            recommendedAction: recommendedAction,
-            keeperAssetID: keeperAssetID,
-            deleteCandidateIDs: deleteCandidateIDs,
-            bestShotPhotoId: bestShotPhotoId,
-            groupReasonsSummary: groupReasonsSummary,
+            // Cached membership may be stale after library edits. A live scan must
+            // revalidate the group before an automatic delete action is exposed.
+            recommendedAction: .reviewManually,
+            keeperAssetID: resolvedKeeperAssetID,
+            deleteCandidateIDs: [],
+            bestShotPhotoId: resolvedKeeperAssetID,
+            groupReasonsSummary: groupReasonsSummary + ["Cached result requires live revalidation."],
             blockerFlags: blockerFlags ?? [],
             scoreBreakdown: scoreBreakdown,
             preferenceQueuePriority: preferenceQueuePriority,
             preferenceAdjustmentReasons: preferenceAdjustmentReasons ?? [],
             captureDateRange: captureDateRange,
-            candidates: candidates.map { $0.makeCandidate() },
-            reclaimableBytes: reclaimableBytes
+            candidates: candidates
+                .filter { resolvedIDSet.contains($0.photoId) }
+                .map { $0.makeCandidate() },
+            reclaimableBytes: 0
         )
     }
 }
@@ -186,24 +201,58 @@ struct CachedSimilarPhotoCandidate: Codable, Sendable {
 actor PhotoAnalysisCache {
     static let shared = PhotoAnalysisCache()
 
+    private static let logger = Logger(subsystem: "com.photoduck.app", category: "PhotoAnalysisCache")
     private let fileURL: URL
+    private(set) var persistenceHealthy = true
 
     init() {
         let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         let directory = baseURL.appendingPathComponent("PhotoDuck", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            persistenceHealthy = false
+            Self.logger.error("Could not create cache directory: \(error.localizedDescription, privacy: .public)")
+        }
         fileURL = directory.appendingPathComponent("photo-analysis-cache.json")
     }
 
     func loadSnapshot() -> CachedPhotoAnalysisSnapshot? {
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        return try? JSONDecoder().decode(CachedPhotoAnalysisSnapshot.self, from: data)
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return nil
+        } catch {
+            persistenceHealthy = false
+            Self.logger.error("Could not read cache: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+
+        do {
+            let snapshot = try JSONDecoder().decode(CachedPhotoAnalysisSnapshot.self, from: data)
+            guard snapshot.schemaVersion == CachedPhotoAnalysisSnapshot.schemaVersion else {
+                Self.logger.info("Ignoring cache from schema \(snapshot.schemaVersion)")
+                return nil
+            }
+            return snapshot
+        } catch {
+            persistenceHealthy = false
+            Self.logger.error("Could not decode cache: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     func saveSnapshot(_ snapshot: CachedPhotoAnalysisSnapshot) {
-        guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? data.write(to: fileURL, options: [.atomic])
+        do {
+            let data = try JSONEncoder().encode(snapshot)
+            try data.write(to: fileURL, options: [.atomic])
+            persistenceHealthy = true
+        } catch {
+            persistenceHealthy = false
+            Self.logger.error("Could not save cache: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     func rehydrateGroups(from snapshot: CachedPhotoAnalysisSnapshot) -> [PhotoGroup] {

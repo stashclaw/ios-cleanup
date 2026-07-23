@@ -7,7 +7,7 @@ struct PhotoDuckShellView: View {
     @EnvironmentObject private var purchaseManager: PurchaseManager
     @EnvironmentObject private var deletionManager: DeletionManager
     @EnvironmentObject private var notificationRouter: CleanupNotificationRouter
-    @State private var selectedTab: Tab = .similar
+    @State private var selectedTab: Tab = .home
 
     enum Tab: Hashable {
         case home, similar, contacts, files
@@ -34,20 +34,36 @@ struct PhotoDuckShellView: View {
             .tag(Tab.similar)
 
             NavigationStack {
-                ContactResultsView(matches: dashboardModel.contactMatches)
+                ContactResultsView(
+                    matches: dashboardModel.contactMatches,
+                    onRefresh: { await dashboardModel.scanContacts(force: true) }
+                )
                     .environmentObject(purchaseManager)
             }
             .tabItem { Label("Contacts", systemImage: "person.2.fill") }
             .tag(Tab.contacts)
 
             NavigationStack {
-                FileResultsView(files: dashboardModel.largeFiles)
+                FileResultsView(
+                    files: dashboardModel.largeFiles,
+                    onRefresh: { await dashboardModel.scanFiles(force: true) }
+                )
                     .environmentObject(purchaseManager)
             }
             .tabItem { Label("Files", systemImage: "doc.fill") }
             .tag(Tab.files)
         }
         .tint(Color.duckPink)
+        .onChange(of: selectedTab) { tab in
+            switch tab {
+            case .contacts:
+                Task { await dashboardModel.scanContacts() }
+            case .files:
+                Task { await dashboardModel.scanFiles() }
+            case .home, .similar:
+                break
+            }
+        }
         .onChange(of: notificationRouter.pendingTarget) { target in
             guard let target else { return }
             switch target {
@@ -65,11 +81,13 @@ struct SimilarPhotosDashboardView: View {
     @EnvironmentObject private var deletionManager: DeletionManager
     @State private var showSwipeMode = false
     @State private var showReviewResults = false
+    @State private var isExportingMLData = false
+    @State private var mlExportMessage: String?
 
     private var similarGroups: [PhotoGroup] { viewModel.photoGroups }
     private var featuredGroups: [PhotoGroup] { Array(similarGroups.prefix(4)) }
     private var totalPhotoCount: Int {
-        viewModel.libraryTotalCount > 0 ? viewModel.libraryTotalCount : similarGroups.reduce(0) { $0 + $1.photoCount }
+        Set(similarGroups.flatMap(\.assets).map(\.localIdentifier)).count
     }
     private var totalReclaimableBytes: Int64 {
         similarGroups.reduce(into: Int64(0)) { acc, group in
@@ -78,8 +96,33 @@ struct SimilarPhotosDashboardView: View {
     }
     private var cleanedBytes: Int64 { max(deletionManager.totalBytesFreed, 0) }
     private var cleanedItems: Int { max(deletionManager.totalItemsFreed, 0) }
-    private var remainingGroups: Int { max(similarGroups.count - cleanedItems, 0) }
-    private var scanProgress: Double { viewModel.scanState == .scanning ? viewModel.progressFraction : (similarGroups.isEmpty ? 0 : 1) }
+    private var remainingGroups: Int { similarGroups.count }
+    private var scanProgress: Double {
+        switch viewModel.scanState {
+        case .scanning, .paused:
+            return viewModel.progressFraction
+        case .completed:
+            return 1
+        default:
+            return similarGroups.isEmpty ? 0 : viewModel.progressFraction
+        }
+    }
+    private var scanStatusLabel: String {
+        switch viewModel.scanState {
+        case .scanning: return "Scanning"
+        case .paused: return "Paused"
+        case .completed: return "Ready"
+        case .failed: return "Needs attention"
+        case .permissionRequired: return "Access needed"
+        case .idle: return "Not scanned"
+        }
+    }
+    private var heroMetricText: String {
+        if viewModel.scanState == .scanning || viewModel.scanState == .paused {
+            return "\(viewModel.scanProgressLabel) • \(similarGroups.count) groups found"
+        }
+        return "\(totalPhotoCount.formatted()) photos • \(ByteCountFormatter.string(fromByteCount: totalReclaimableBytes, countStyle: .file)) reclaimable"
+    }
     private var reclaimablePercent: Int {
         guard viewModel.storageTotalBytesValue > 0 else { return 0 }
         let fraction = Double(totalReclaimableBytes) / Double(viewModel.storageTotalBytesValue)
@@ -89,6 +132,9 @@ struct SimilarPhotosDashboardView: View {
     private var dashboardSubtitle: String {
         if viewModel.scanState == .scanning {
             return "\(viewModel.scanProgressLabel) · \(viewModel.scanRateLabel)"
+        }
+        if viewModel.scanState == .paused {
+            return "\(viewModel.processedPhotoCount.formatted()) photos scanned so far · continue when ready"
         }
         if similarGroups.isEmpty {
             return "Run a scan from Home to build a faster cleanup queue."
@@ -107,8 +153,8 @@ struct SimilarPhotosDashboardView: View {
         ZStack {
             LinearGradient(
                 colors: [
-                    Color(red: 0.18, green: 0.72, blue: 0.56),
-                    Color(red: 0.11, green: 0.34, blue: 0.22),
+                    Color.duckSuccess,
+                    Color.duckSuccess.opacity(0.45),
                     Color.black.opacity(0.92)
                 ],
                 startPoint: .top,
@@ -133,9 +179,17 @@ struct SimilarPhotosDashboardView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(Color.duckSuccess, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
+                    if viewModel.scanState == .paused {
+                        Button("Continue Scanning") { viewModel.resumeDeepClean() }
+                    } else if viewModel.scanState == .scanning, viewModel.cleanupMode == .deepClean {
+                        Button("Pause Deep Clean") { viewModel.pauseDeepClean() }
+                    }
                     Button("Smart Cleanup") {
                         if similarGroups.isEmpty {
                             Task { await viewModel.scanPhotos() }
@@ -145,6 +199,13 @@ struct SimilarPhotosDashboardView: View {
                     }
                     Button("Review Results") { showReviewResults = true }
                     Button("Scan Again") { Task { await viewModel.scanPhotos() } }
+#if DEBUG
+                    Divider()
+                    Button(isExportingMLData ? "Exporting ML Data..." : "Export ML Training Data") {
+                        Task { await exportMLTrainingData() }
+                    }
+                    .disabled(isExportingMLData)
+#endif
                 } label: {
                     Image(systemName: "gearshape.fill")
                         .foregroundStyle(Color.white)
@@ -160,11 +221,26 @@ struct SimilarPhotosDashboardView: View {
                     .environmentObject(purchaseManager)
                     .environmentObject(deletionManager)
             }
+            .deletionUndoToast()
         }
         .fullScreenCover(isPresented: $showSwipeMode) {
             SwipeModeView(groups: viewModel.photoGroups)
                 .environmentObject(purchaseManager)
                 .environmentObject(deletionManager)
+                .deletionUndoToast()
+        }
+        .alert(
+            "ML Training Export",
+            isPresented: Binding(
+                get: { mlExportMessage != nil },
+                set: { if !$0 { mlExportMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                mlExportMessage = nil
+            }
+        } message: {
+            Text(mlExportMessage ?? "")
         }
     }
 
@@ -174,9 +250,9 @@ struct SimilarPhotosDashboardView: View {
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color(red: 0.26, green: 0.78, blue: 0.62),
-                            Color(red: 0.14, green: 0.48, blue: 0.32),
-                            Color(red: 0.06, green: 0.22, blue: 0.14)
+                            Color.duckSuccess,
+                            Color.duckSuccess.opacity(0.72),
+                            Color.black.opacity(0.74)
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
@@ -194,6 +270,11 @@ struct SimilarPhotosDashboardView: View {
                 .shadow(color: .black.opacity(0.24), radius: 14, x: 0, y: 8)
 
             VStack(alignment: .leading, spacing: 14) {
+                PhotoDuckBrandLockup(iconSize: 28, wordmarkHeight: 20)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(Color.white.opacity(0.92), in: Capsule())
+
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Similars")
@@ -201,7 +282,7 @@ struct SimilarPhotosDashboardView: View {
                             .foregroundStyle(.white)
                             .shadow(color: .black.opacity(0.16), radius: 6, x: 0, y: 2)
 
-                        Text("\(totalPhotoCount.formatted()) photo(s) • \(ByteCountFormatter.string(fromByteCount: totalReclaimableBytes, countStyle: .file)) reclaimable")
+                        Text(heroMetricText)
                             .font(.duckHeading)
                             .foregroundStyle(Color.white.opacity(0.95))
                             .fixedSize(horizontal: false, vertical: true)
@@ -215,19 +296,31 @@ struct SimilarPhotosDashboardView: View {
 
                     VStack(alignment: .trailing, spacing: 10) {
                         Menu {
+                            if viewModel.scanState == .paused {
+                                Button("Continue Scanning") { viewModel.resumeDeepClean() }
+                            } else if viewModel.scanState == .scanning, viewModel.cleanupMode == .deepClean {
+                                Button("Pause Deep Clean") { viewModel.pauseDeepClean() }
+                            }
                             Button("Smart Cleanup") { showSwipeMode = true }
                             Button("Review Results") { showReviewResults = true }
                             Button("Scan Again") { Task { await viewModel.scanPhotos() } }
+#if DEBUG
+                            Divider()
+                            Button(isExportingMLData ? "Exporting ML Data..." : "Export ML Training Data") {
+                                Task { await exportMLTrainingData() }
+                            }
+                            .disabled(isExportingMLData)
+#endif
                         } label: {
                             Image(systemName: "gearshape")
-                                .font(.system(size: 20, weight: .semibold))
+                                .font(.duckBody(20, weight: .semibold, relativeTo: .title3))
                                 .foregroundStyle(.white)
                                 .frame(width: 44, height: 44)
                                 .background(Color.white.opacity(0.14), in: Circle())
                                 .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 1))
                         }
 
-                        SimilarDashboardRing(progress: scanProgress, accent: .white, label: viewModel.scanState == .scanning ? "Scanning" : "Ready")
+                        SimilarDashboardRing(progress: scanProgress, accent: .white, label: scanStatusLabel)
                             .frame(width: 112, height: 112)
                     }
                 }
@@ -241,7 +334,7 @@ struct SimilarPhotosDashboardView: View {
                     )
 
                     PhotoDuckStatTile(
-                        title: "Review progress",
+                        title: "Scan progress",
                         value: "\(Int((scanProgress * 100).rounded()))%",
                         accent: .duckYellow,
                         icon: "circle.dashed"
@@ -268,11 +361,14 @@ struct SimilarPhotosDashboardView: View {
         DuckCard {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("Scan diagnostics")
+                    Text("Scan details")
                         .font(.duckHeading)
-                        .foregroundStyle(Color.duckCream)
+                        .foregroundStyle(Color.duckBerry)
                     Spacer()
-                    StatusBadge(title: viewModel.scanState == .scanning ? "Scanning" : "Ready", accent: .duckPink)
+                    StatusBadge(
+                        title: scanStatusLabel,
+                        accent: viewModel.scanState == .paused ? .duckOrange : .duckPink
+                    )
                 }
 
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
@@ -289,7 +385,7 @@ struct SimilarPhotosDashboardView: View {
                         icon: "speedometer"
                     )
                     StatPill(
-                        title: "Matches",
+                        title: "Reviewable",
                         value: "\(viewModel.reviewablePhotosCount.formatted())",
                         accent: .duckRose,
                         icon: "sparkles"
@@ -297,6 +393,22 @@ struct SimilarPhotosDashboardView: View {
                 }
             }
             .padding(16)
+        }
+    }
+
+    @MainActor
+    private func exportMLTrainingData() async {
+        guard !isExportingMLData else { return }
+        isExportingMLData = true
+        defer { isExportingMLData = false }
+
+        do {
+            let csvURLs = try await PhotoMLBridge.shared.exportTrainingDataToDocuments()
+            let databaseURL = try await PhotoMLBridge.shared.exportDatabaseToDocuments()
+            mlExportMessage =
+                "Exported \(csvURLs.count) training files and \(databaseURL.lastPathComponent) to Files > On My iPhone > PhotoDuck > PhotoDuck-ML-Export."
+        } catch {
+            mlExportMessage = "Export failed: \(error.localizedDescription)"
         }
     }
 
@@ -329,11 +441,7 @@ struct SimilarPhotosDashboardView: View {
         DuckCard {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .top, spacing: 12) {
-                    PhotoDuckAssetImage(
-                        assetNames: ["photoduck_mascot", "photoduck_logo"],
-                        fallback: { PhotoDuckMascotFallback(size: 44) }
-                    )
-                    .frame(width: 56, height: 56)
+                    PhotoDuckMascotArt(size: 56)
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text(sessionSummaryText)
@@ -347,8 +455,10 @@ struct SimilarPhotosDashboardView: View {
                     Spacer(minLength: 0)
                 }
 
-                DuckPrimaryButton(title: "Smart Cleanup") {
-                    if similarGroups.isEmpty {
+                DuckPrimaryButton(title: viewModel.scanState == .paused ? "Continue scanning" : "Smart Cleanup") {
+                    if viewModel.scanState == .paused {
+                        viewModel.resumeDeepClean()
+                    } else if similarGroups.isEmpty {
                         Task { await viewModel.scanPhotos() }
                     } else {
                         showSwipeMode = true
@@ -371,11 +481,7 @@ struct SimilarPhotosDashboardView: View {
     private var emptyState: some View {
         DuckCard {
             VStack(spacing: 14) {
-                PhotoDuckAssetImage(
-                    assetNames: ["photoduck_mascot", "photoduck_logo"],
-                    fallback: { PhotoDuckMascotFallback(size: 72) }
-                )
-                .frame(width: 96, height: 96)
+                PhotoDuckMascotArt(size: 96)
 
                 VStack(spacing: 6) {
                     Text("No similar photos yet")
@@ -489,21 +595,11 @@ private struct SimilarGroupPreviewCard: View {
     private func loadThumbnails() async {
         for asset in leadAssets {
             let size = CGSize(width: 360, height: 360)
-            let image = await withCheckedContinuation { continuation in
-                let options = PHImageRequestOptions()
-                options.deliveryMode = .opportunistic
-                options.isNetworkAccessAllowed = true
-                PHImageManager.default().requestImage(
-                    for: asset,
-                    targetSize: size,
-                    contentMode: .aspectFill,
-                    options: options
-                ) { result, info in
-                    let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) == true
-                    guard !isDegraded else { return }
-                    continuation.resume(returning: result)
-                }
-            }
+            let image = await asset.loadImage(
+                targetSize: size,
+                deliveryMode: .opportunistic,
+                allowNetwork: true
+            )
             if let image {
                 images[asset.localIdentifier] = image
             }
@@ -569,56 +665,5 @@ struct PhotoDuckStatTile: View {
             .padding(16)
         }
         .frame(maxWidth: .infinity)
-    }
-}
-
-struct PhotoDuckAssetImage<Fallback: View>: View {
-    let assetNames: [String]
-    let fallback: Fallback
-
-    init(assetNames: [String], @ViewBuilder fallback: () -> Fallback) {
-        self.assetNames = assetNames
-        self.fallback = fallback()
-    }
-
-    var body: some View {
-        if let assetName = assetNames.first(where: { UIImage(named: $0) != nil }) {
-            Image(assetName)
-                .resizable()
-                .scaledToFit()
-        } else {
-            fallback
-        }
-    }
-}
-
-struct PhotoDuckMascotFallback: View {
-    let size: CGFloat
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [Color.duckYellow, Color.duckPink.opacity(0.85)],
-                        center: .topLeading,
-                        startRadius: 4,
-                        endRadius: size * 0.8
-                    )
-                )
-            Circle()
-                .fill(Color.black.opacity(0.85))
-                .frame(width: size * 0.14, height: size * 0.14)
-                .offset(x: -size * 0.16, y: -size * 0.10)
-            Circle()
-                .fill(Color.black.opacity(0.85))
-                .frame(width: size * 0.14, height: size * 0.14)
-                .offset(x: size * 0.08, y: -size * 0.10)
-            Capsule(style: .continuous)
-                .fill(Color.duckOrange)
-                .frame(width: size * 0.34, height: size * 0.20)
-                .offset(x: size * 0.12, y: size * 0.10)
-        }
-        .frame(width: size, height: size)
     }
 }

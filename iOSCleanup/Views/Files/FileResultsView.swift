@@ -1,81 +1,162 @@
-import SwiftUI
 import Photos
+import SwiftUI
+
+enum FileDeletionErrorPolicy {
+    static func isBenignCancellation(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+        let nsError = error as NSError
+        return nsError.domain == PHPhotosErrorDomain
+            && nsError.code == PHPhotosError.Code.userCancelled.rawValue
+    }
+}
 
 struct FileResultsView: View {
     let files: [LargeFile]
+    let onRefresh: (() async -> Void)?
+
     @EnvironmentObject private var purchaseManager: PurchaseManager
+    @EnvironmentObject private var deletionManager: DeletionManager
 
     @State private var compressionTarget: LargeFile?
     @State private var showPaywall = false
     @State private var deletionError: String?
-    @State private var deletedIDs = Set<UUID>()
+    @State private var hiddenFileIDs = Set<UUID>()
+    @State private var pendingPhotoFileIDs = Set<UUID>()
+
+    init(files: [LargeFile], onRefresh: (() async -> Void)? = nil) {
+        self.files = files
+        self.onRefresh = onRefresh
+    }
 
     private var visibleFiles: [LargeFile] {
-        files.filter { !deletedIDs.contains($0.id) }
+        files.filter { !hiddenFileIDs.contains($0.id) }
     }
 
     var body: some View {
-        Group {
-            if visibleFiles.isEmpty {
-                EmptyStateView(title: "No Large Files", icon: "doc.fill",
-                               message: "No files or videos over 50 MB were found.")
-            } else {
-                ScrollView {
-                    VStack(spacing: 12) {
-                        if let error = deletionError {
-                            Text(error).font(.duckCaption).foregroundStyle(.red).padding(.horizontal)
-                        }
-                        ForEach(visibleFiles) { file in
-                            DuckCard {
-                                FileRow(
-                                    file: file,
-                                    purchaseManager: purchaseManager,
-                                    onDelete: { Task { await deleteFile(file) } },
-                                    onCompress: {
-                                        guard purchaseManager.isPurchased else { showPaywall = true; return }
-                                        compressionTarget = file
-                                    }
-                                )
-                                .padding(14)
-                            }
-                        }
-                    }
-                    .padding(.horizontal)
-                    .padding(.vertical, 12)
-                }
-                .background(Color.duckBlush.ignoresSafeArea())
+        refreshableContent
+            .navigationTitle("Large Files")
+            .navigationBarTitleDisplayMode(.inline)
+            .sheet(item: $compressionTarget) { file in
+                VideoCompressionView(file: file).environmentObject(purchaseManager)
             }
-        }
-        .navigationTitle("Large Files")
-        .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $compressionTarget) { file in
-            VideoCompressionView(file: file).environmentObject(purchaseManager)
-        }
-        .sheet(isPresented: $showPaywall) { PaywallView().environmentObject(purchaseManager) }
-        .onReceive(NotificationCenter.default.publisher(for: .purchaseDidSucceed)) { _ in
-            showPaywall = false
+            .sheet(isPresented: $showPaywall) {
+                PaywallView().environmentObject(purchaseManager)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .purchaseDidSucceed)) { _ in
+                showPaywall = false
+            }
+            .onChange(of: Set(files.map(\.id))) { availableIDs in
+                // Parent data remains authoritative. Once a refresh removes an
+                // item, discard its local optimistic-hide marker.
+                hiddenFileIDs.formIntersection(availableIDs)
+                pendingPhotoFileIDs.formIntersection(availableIDs)
+            }
+            .onChange(of: deletionManager.undoEventID) { _ in
+                restoreUndonePhotoLibraryFiles()
+            }
+            .onChange(of: deletionManager.lastDeletionError) { error in
+                guard error != nil else { return }
+                hiddenFileIDs.subtract(pendingPhotoFileIDs)
+                pendingPhotoFileIDs.removeAll()
+            }
+            .onChange(of: deletionManager.lastCommittedToastID) { toastID in
+                guard toastID != nil else { return }
+                pendingPhotoFileIDs.removeAll()
+            }
+    }
+
+    @ViewBuilder
+    private var refreshableContent: some View {
+        if let onRefresh {
+            resultsContent
+                .refreshable {
+                    await onRefresh()
+                }
+        } else {
+            resultsContent
         }
     }
 
-    private func deleteFile(_ file: LargeFile) async {
-        switch file.source {
-        case .photoLibrary(let asset):
-            do {
-                try await PHPhotoLibrary.shared().performChanges {
-                    PHAssetChangeRequest.deleteAssets([asset] as NSFastEnumeration)
+    @ViewBuilder
+    private var resultsContent: some View {
+        if visibleFiles.isEmpty {
+            ScrollView {
+                EmptyStateView(
+                    title: "No Large Files",
+                    icon: "doc.fill",
+                    message: "No files or videos over 50 MB were found."
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .background(Color.duckBlush.ignoresSafeArea())
+        } else {
+            ScrollView {
+                VStack(spacing: 12) {
+                    if let error = deletionError {
+                        Text(error)
+                            .font(.duckCaption)
+                            .foregroundStyle(.red)
+                            .padding(.horizontal)
+                    }
+                    ForEach(visibleFiles) { file in
+                        DuckCard {
+                            FileRow(
+                                file: file,
+                                purchaseManager: purchaseManager,
+                                onDelete: { requestDeletion(of: file) },
+                                onCompress: {
+                                    guard purchaseManager.isPurchased else {
+                                        showPaywall = true
+                                        return
+                                    }
+                                    compressionTarget = file
+                                }
+                            )
+                            .padding(14)
+                        }
+                    }
                 }
-                deletedIDs.insert(file.id)
-            } catch {
-                deletionError = error.localizedDescription
+                .padding(.horizontal)
+                .padding(.vertical, 12)
             }
-        case .filesystem(let url):
-            do {
-                try FileManager.default.removeItem(at: url)
-                deletedIDs.insert(file.id)
-            } catch {
-                deletionError = error.localizedDescription
-            }
+            .background(Color.duckBlush.ignoresSafeArea())
         }
+    }
+
+    private func requestDeletion(of file: LargeFile) {
+        deletionError = nil
+        hiddenFileIDs.insert(file.id)
+        pendingPhotoFileIDs.insert(file.id)
+        Task { await deletePhotoLibraryFile(file, asset: file.photoAsset) }
+    }
+
+    private func deletePhotoLibraryFile(_ file: LargeFile, asset: PHAsset) async {
+        do {
+            // The manager owns serialization, undo timing, confirmation, and
+            // aggregate freed-byte accounting.
+            try await deletionManager.delete(assets: [asset])
+        } catch {
+            hiddenFileIDs.remove(file.id)
+            pendingPhotoFileIDs.remove(file.id)
+            guard !FileDeletionErrorPolicy.isBenignCancellation(error) else { return }
+            deletionError = error.localizedDescription
+        }
+    }
+
+    private func restoreUndonePhotoLibraryFiles() {
+        let undoneAssetIDs = deletionManager.lastUndoneAssetIDs
+        guard !undoneAssetIDs.isEmpty else { return }
+
+        let fileIDsToRestore = files.reduce(into: Set<UUID>()) { result, file in
+            guard undoneAssetIDs.contains(file.photoAsset.localIdentifier) else {
+                return
+            }
+            result.insert(file.id)
+        }
+        hiddenFileIDs.subtract(fileIDsToRestore)
+        pendingPhotoFileIDs.subtract(fileIDsToRestore)
     }
 }
 
@@ -90,22 +171,17 @@ private struct FileRow: View {
     @State private var thumbnail: UIImage?
 
     private var isVideo: Bool {
-        if case .photoLibrary(let asset) = file.source { return asset.mediaType == .video }
-        let ext = (file.displayName as NSString).pathExtension.lowercased()
-        return ["mp4", "mov", "m4v", "avi", "mkv"].contains(ext)
+        file.photoAsset.mediaType == .video
     }
 
     private var photoAsset: PHAsset? {
-        if case .photoLibrary(let asset) = file.source { return asset }
-        return nil
+        file.photoAsset
     }
 
     var body: some View {
         HStack(spacing: 12) {
-            // Thumbnail or icon
             thumbnailView
 
-            // Info
             VStack(alignment: .leading, spacing: 6) {
                 Text(file.displayName)
                     .font(.duckCaption.weight(.semibold))
@@ -123,16 +199,20 @@ private struct FileRow: View {
                     }
                 }
 
-                // Pill buttons
                 HStack(spacing: 8) {
                     if isVideo {
                         Button(action: onCompress) {
-                            Text(purchaseManager.isPurchased ? "Compress" : "Compress 🔒")
-                                .font(.duckLabel.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(Color.duckPink, in: Capsule())
+                            HStack(spacing: 4) {
+                                Text("Compress")
+                                if !purchaseManager.isPurchased {
+                                    Image(systemName: "lock.fill")
+                                }
+                            }
+                            .font(.duckLabel.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.duckPink, in: Capsule())
                         }
                     }
                     Button(action: onDelete) {
@@ -150,7 +230,13 @@ private struct FileRow: View {
         }
         .task {
             guard let asset = photoAsset, isVideo else { return }
-            thumbnail = await loadThumbnail(asset)
+            thumbnail = await asset.loadImage(
+                targetSize: CGSize(width: 240, height: 240),
+                deliveryMode: .opportunistic,
+                allowNetwork: true,
+                contentMode: .aspectFill,
+                acceptsDegradedResult: true
+            )
         }
     }
 
@@ -185,11 +271,11 @@ private struct FileRow: View {
     private var fileSizeView: some View {
         let formatted = splitSize(file.byteSize)
         return HStack(alignment: .lastTextBaseline, spacing: 2) {
-            Text(formatted.number)
-                .font(.system(size: 20, weight: .semibold))
+            Text(file.byteSizeIsEstimated ? "~\(formatted.number)" : formatted.number)
+                .font(.duckBody(20, weight: .semibold, relativeTo: .title3))
                 .foregroundStyle(Color.duckPink)
             Text(formatted.unit)
-                .font(.system(size: 12, weight: .medium))
+                .font(.duckCaption.weight(.medium))
                 .foregroundStyle(Color.duckRose)
         }
     }
@@ -212,23 +298,5 @@ private struct FileRow: View {
             .background(isVideo ? Color.duckOrange.opacity(0.15) : Color.duckPink.opacity(0.15))
             .foregroundStyle(isVideo ? Color.duckOrange : Color.duckPink)
             .clipShape(Capsule())
-    }
-
-    private func loadThumbnail(_ asset: PHAsset) async -> UIImage? {
-        await withCheckedContinuation { continuation in
-            let options = PHImageRequestOptions()
-            options.deliveryMode = .fastFormat
-            options.isNetworkAccessAllowed = false
-            PHImageManager.default().requestImage(
-                for: asset,
-                targetSize: CGSize(width: 240, height: 240),
-                contentMode: .aspectFill,
-                options: options
-            ) { image, info in
-                let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) == true
-                guard !isDegraded else { return }
-                continuation.resume(returning: image)
-            }
-        }
     }
 }

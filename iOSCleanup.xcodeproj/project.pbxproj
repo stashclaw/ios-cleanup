@@ -10,10 +10,10 @@
 		AA00000E000000000000001A /* UndoToast.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000E000000000000001B /* UndoToast.swift */; };
 		AA00000E000000000000002A /* DeletionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000E000000000000002B /* DeletionManager.swift */; };
 		AA00000E000000000000003A /* PhotoDeletionGuardrails.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000E000000000000003B /* PhotoDeletionGuardrails.swift */; };
-		AA00000F000000000000001A /* BrandPresentationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000F000000000000001B /* BrandPresentationView.swift */; };
 		AA00000F000000000000002A /* PhotoDuckShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000F000000000000002B /* PhotoDuckShellView.swift */; };
 		AA00000F000000000000003A /* Color+PhotoDuck.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000F000000000000003B /* Color+PhotoDuck.swift */; };
 		AA00000F000000000000004A /* PHAsset+FileSize.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000F000000000000004B /* PHAsset+FileSize.swift */; };
+		AA00000F000000000000005A /* SharedHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000F000000000000005B /* SharedHelpers.swift */; };
 		AA000012000000000000001A /* PhotoAnalysisCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000012000000000000001B /* PhotoAnalysisCache.swift */; };
 		AA000013000000000000001A /* SimilarityCoreMLClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000013000000000000001B /* SimilarityCoreMLClassifier.swift */; };
 		AA000014000000000000001A /* SimilarityPolicyTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000014000000000000001B /* SimilarityPolicyTypes.swift */; };
@@ -34,7 +34,6 @@
 		AA000001000000000000008A /* PhotoScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000008B /* PhotoScanEngine.swift */; };
 		AA000001000000000000009A /* ContactScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000009B /* ContactScanEngine.swift */; };
 		AA00000100000000000000AA /* FileScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000AB /* FileScanEngine.swift */; };
-		AA000010000000000000001A /* SimilarReviewServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000010000000000000001B /* SimilarReviewServices.swift */; };
 		AA00000100000000000000BA /* Photos.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000BB /* Photos.framework */; };
 		AA00000100000000000000CA /* Contacts.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000CB /* Contacts.framework */; };
 		AA00000100000000000000DA /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA00000100000000000000DB /* Vision.framework */; };
@@ -45,7 +44,7 @@
 		AA00001D000000000000001A /* PreferenceAdjustedRecommendationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00001D000000000000001B /* PreferenceAdjustedRecommendationTests.swift */; };
 		AA00001B000000000000001A /* PhotoFeedbackLearningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00001B000000000000001B /* PhotoFeedbackLearningTests.swift */; };
 		AA000002000000000000001A /* PurchaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000001B /* PurchaseManager.swift */; };
-		AA000002000000000000002A /* iOSCleanup.storekit in Resources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000002B /* iOSCleanup.storekit */; };
+		AA000026000000000000001A /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AA000026000000000000001B /* PrivacyInfo.xcprivacy */; };
 		AA000003000000000000001A /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000003000000000000001B /* OnboardingView.swift */; };
 		AA000004000000000000001A /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000004000000000000001B /* HomeView.swift */; };
 		AA000004000000000000002A /* HomeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000004000000000000002B /* HomeViewModel.swift */; };
@@ -58,7 +57,6 @@
 		AA000008000000000000002A /* ContactMergePreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000008000000000000002B /* ContactMergePreviewView.swift */; };
 		AA000009000000000000001A /* VideoCompressionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000009000000000000001B /* VideoCompressionEngine.swift */; };
 		AA000009000000000000002A /* VideoCompressionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000009000000000000002B /* VideoCompressionEngineTests.swift */; };
-		AA000011000000000000001A /* SimilarGroupReviewViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000011000000000000001B /* SimilarGroupReviewViewModel.swift */; };
 		AA00000A000000000000001A /* FileResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000A000000000000001B /* FileResultsView.swift */; };
 		AA00000A000000000000002A /* VideoCompressionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000A000000000000002B /* VideoCompressionView.swift */; };
 		AA00000B000000000000001A /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000B000000000000001B /* EmptyStateView.swift */; };
@@ -99,7 +97,6 @@
 		AA000001000000000000009B /* ContactScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactScanEngine.swift; sourceTree = "<group>"; };
 		AA00000100000000000000AB /* FileScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileScanEngine.swift; sourceTree = "<group>"; };
 		AA00000F000000000000004B /* PHAsset+FileSize.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PHAsset+FileSize.swift"; sourceTree = "<group>"; };
-		AA000010000000000000001B /* SimilarReviewServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarReviewServices.swift; sourceTree = "<group>"; };
 		AA000012000000000000001B /* PhotoAnalysisCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoAnalysisCache.swift; sourceTree = "<group>"; };
 		AA000013000000000000001B /* SimilarityCoreMLClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarityCoreMLClassifier.swift; sourceTree = "<group>"; };
 		AA000014000000000000001B /* SimilarityPolicyTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarityPolicyTypes.swift; sourceTree = "<group>"; };
@@ -122,6 +119,7 @@
 		AA0000010000000000000201 /* iOSCleanup.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iOSCleanup.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000010000000000000301 /* iOSCleanupTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iOSCleanupTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000010000000000000401 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AA000026000000000000001B /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		AA000002000000000000001B /* PurchaseManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PurchaseManager.swift; sourceTree = "<group>"; };
 		AA000002000000000000002B /* iOSCleanup.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = iOSCleanup.storekit; sourceTree = "<group>"; };
 		AA000003000000000000001B /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
@@ -136,13 +134,12 @@
 		AA000008000000000000002B /* ContactMergePreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactMergePreviewView.swift; sourceTree = "<group>"; };
 		AA000009000000000000001B /* VideoCompressionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionEngine.swift; sourceTree = "<group>"; };
 		AA000009000000000000002B /* VideoCompressionEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionEngineTests.swift; sourceTree = "<group>"; };
-		AA000011000000000000001B /* SimilarGroupReviewViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarGroupReviewViewModel.swift; sourceTree = "<group>"; };
 		AA00000A000000000000001B /* FileResultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileResultsView.swift; sourceTree = "<group>"; };
 		AA00000A000000000000002B /* VideoCompressionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCompressionView.swift; sourceTree = "<group>"; };
 		AA00000B000000000000001B /* EmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyStateView.swift; sourceTree = "<group>"; };
-		AA00000F000000000000001B /* BrandPresentationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandPresentationView.swift; sourceTree = "<group>"; };
 		AA00000F000000000000002B /* PhotoDuckShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoDuckShellView.swift; sourceTree = "<group>"; };
 		AA00000F000000000000003B /* Color+PhotoDuck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+PhotoDuck.swift"; sourceTree = "<group>"; };
+		AA00000F000000000000005B /* SharedHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedHelpers.swift; sourceTree = "<group>"; };
 		AA00000C000000000000001B /* Font+PhotoDuck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Font+PhotoDuck.swift"; sourceTree = "<group>"; };
 		AA00000C000000000000003B /* DuckComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuckComponents.swift; sourceTree = "<group>"; };
 		AA000020000000000000001B /* DuckBottomActionBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuckBottomActionBar.swift; sourceTree = "<group>"; };
@@ -189,6 +186,7 @@
 				AA000001000000000000001B /* iOSCleanupApp.swift */,
 				AA000001000000000000002B /* ContentView.swift */,
 				AA0000010000000000000401 /* Info.plist */,
+				AA000026000000000000001B /* PrivacyInfo.xcprivacy */,
 				AA00000D000000000000005B /* Assets.xcassets */,
 				AA0000010000000000000604 /* Engines */,
 				AA0000010000000000000605 /* Models */,
@@ -237,7 +235,6 @@
 				AA000018000000000000001B /* PhotoFeedbackStore.swift */,
 				AA000019000000000000001B /* PhotoPreferenceProfileStore.swift */,
 				AA00001A000000000000001B /* PhotoTrainingExampleBuilder.swift */,
-				AA000010000000000000001B /* SimilarReviewServices.swift */,
 				AA000001000000000000009B /* ContactScanEngine.swift */,
 				AA00000100000000000000AB /* FileScanEngine.swift */,
 				AA000009000000000000001B /* VideoCompressionEngine.swift */,
@@ -270,6 +267,7 @@
 				AA00000F000000000000004B /* PHAsset+FileSize.swift */,
 				AA00000F000000000000003B /* Color+PhotoDuck.swift */,
 				AA00000C000000000000001B /* Font+PhotoDuck.swift */,
+				AA00000F000000000000005B /* SharedHelpers.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -330,7 +328,6 @@
 				AA000004000000000000002B /* HomeViewModel.swift */,
 				AA000005000000000000001B /* PaywallView.swift */,
 				AA00000B000000000000001B /* EmptyStateView.swift */,
-				AA00000F000000000000001B /* BrandPresentationView.swift */,
 				AA00000F000000000000002B /* PhotoDuckShellView.swift */,
 				AA00000C000000000000006A /* Components */,
 				AA000006000000000000003A /* Photos */,
@@ -355,7 +352,6 @@
 			children = (
 				AA000006000000000000001B /* PhotoResultsView.swift */,
 				AA000006000000000000002B /* PhotoGroupDetailView.swift */,
-				AA000011000000000000001B /* SimilarGroupReviewViewModel.swift */,
 				AA000007000000000000001B /* SwipeModeView.swift */,
 				AA000007000000000000002B /* SwipeModeViewModel.swift */,
 			);
@@ -460,7 +456,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				AA000002000000000000002A /* iOSCleanup.storekit in Resources */,
+				AA000026000000000000001A /* PrivacyInfo.xcprivacy in Resources */,
 				AA00000D000000000000001A /* FredokaOne-Regular.ttf in Resources */,
 				AA00000D000000000000002A /* Nunito-Regular.ttf in Resources */,
 				AA00000D000000000000003A /* Nunito-SemiBold.ttf in Resources */,
@@ -485,7 +481,6 @@
 				AA000001000000000000007A /* NameMatcher.swift in Sources */,
 				AA000001000000000000008A /* PhotoScanEngine.swift in Sources */,
 				AA000012000000000000001A /* PhotoAnalysisCache.swift in Sources */,
-				AA000010000000000000001A /* SimilarReviewServices.swift in Sources */,
 				AA00001C000000000000001A /* PreferenceAdjustedRecommendationService.swift in Sources */,
 				AA000016000000000000001A /* PhotoReviewFeedback.swift in Sources */,
 				AA000017000000000000001A /* PhotoPreferenceProfile.swift in Sources */,
@@ -501,7 +496,6 @@
 				AA000005000000000000001A /* PaywallView.swift in Sources */,
 				AA000006000000000000001A /* PhotoResultsView.swift in Sources */,
 				AA000006000000000000002A /* PhotoGroupDetailView.swift in Sources */,
-				AA000011000000000000001A /* SimilarGroupReviewViewModel.swift in Sources */,
 				AA000013000000000000001A /* SimilarityCoreMLClassifier.swift in Sources */,
 				AA000014000000000000001A /* SimilarityPolicyTypes.swift in Sources */,
 				AA000015000000000000001A /* SimilarityPolicyServices.swift in Sources */,
@@ -519,10 +513,10 @@
 				AA00000E000000000000001A /* UndoToast.swift in Sources */,
 				AA00000E000000000000002A /* DeletionManager.swift in Sources */,
 				AA00000E000000000000003A /* PhotoDeletionGuardrails.swift in Sources */,
-				AA00000F000000000000001A /* BrandPresentationView.swift in Sources */,
 				AA00000F000000000000002A /* PhotoDuckShellView.swift in Sources */,
 				AA00000F000000000000003A /* Color+PhotoDuck.swift in Sources */,
 				AA00000F000000000000004A /* PHAsset+FileSize.swift in Sources */,
+				AA00000F000000000000005A /* SharedHelpers.swift in Sources */,
 				AA000021000000000000001A /* PhotoMLStore.swift in Sources */,
 				AA000022000000000000001A /* PhotoMLBridge.swift in Sources */,
 				AA000023000000000000001A /* MLEnhancedKeeperRankingService.swift in Sources */,
@@ -687,7 +681,7 @@
 				INFOPLIST_FILE = iOSCleanup/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yourname.iOSCleanup;
+				PRODUCT_BUNDLE_IDENTIFIER = com.photoduck.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -708,7 +702,7 @@
 				INFOPLIST_FILE = iOSCleanup/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yourname.iOSCleanup;
+				PRODUCT_BUNDLE_IDENTIFIER = com.photoduck.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -725,7 +719,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yourname.iOSCleanupTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.photoduck.app.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -742,7 +736,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yourname.iOSCleanupTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.photoduck.app.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";

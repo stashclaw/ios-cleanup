@@ -1,6 +1,9 @@
 import Foundation
 
 enum PhotoTrainingExampleBuilder {
+    static let featureSchemaVersion = 2
+    static let activeChoiceColumnName = "active_choice"
+
     static func makeRows<S: Sequence>(from events: S) -> [PhotoTrainingExportRow] where S.Element == PhotoReviewFeedbackEvent {
         var rows: [PhotoTrainingExportRow] = []
         for event in events {
@@ -21,7 +24,11 @@ enum PhotoTrainingExampleBuilder {
 
         rows.append(makeGroupOutcomeRow(event: event))
 
-        if sortedAssets.count >= 2 || sortedAssets.contains(where: { $0.rankingScore != nil }) {
+        // Accepted defaults are useful product analytics, but they are not an
+        // independent keeper label. Training on them would teach the model to
+        // reproduce its own recommendation.
+        if isActiveChoice(event),
+           sortedAssets.count >= 2 || sortedAssets.contains(where: { $0.rankingScore != nil }) {
             rows.append(contentsOf: sortedAssets.map { asset in
                 makeKeeperRankingRow(event: event, asset: asset)
             })
@@ -54,7 +61,8 @@ enum PhotoTrainingExampleBuilder {
             similarityToKeeper: asset.similarityToKeeper,
             policyVersion: event.policyVersion,
             modelVersion: event.modelVersion,
-            featureSchemaVersion: event.featureSchemaVersion,
+            featureSchemaVersion: currentFeatureSchemaVersion(for: event),
+            activeChoice: isActiveChoice(event),
             featureVector: featureVector(for: asset)
         )
     }
@@ -74,13 +82,16 @@ enum PhotoTrainingExampleBuilder {
             groupType: event.groupType,
             confidence: event.confidence,
             suggestedAction: event.suggestedAction,
-            recommendationAccepted: event.recommendationAccepted,
+            // recommendationAccepted is derived from the same decision as the
+            // group outcome label, so it must stop at this export boundary.
+            recommendationAccepted: nil,
             keeperAssetID: event.finalKeeperAssetID ?? event.suggestedKeeperAssetID,
             rankingScore: nil,
             similarityToKeeper: nil,
             policyVersion: event.policyVersion,
             modelVersion: event.modelVersion,
-            featureSchemaVersion: event.featureSchemaVersion,
+            featureSchemaVersion: currentFeatureSchemaVersion(for: event),
+            activeChoice: isActiveChoice(event),
             featureVector: nil
         )
     }
@@ -109,9 +120,18 @@ enum PhotoTrainingExampleBuilder {
             similarityToKeeper: asset.similarityToKeeper,
             policyVersion: event.policyVersion,
             modelVersion: event.modelVersion,
-            featureSchemaVersion: event.featureSchemaVersion,
+            featureSchemaVersion: currentFeatureSchemaVersion(for: event),
+            activeChoice: true,
             featureVector: featureVector(for: asset)
         )
+    }
+
+    static func isActiveChoice(_ event: PhotoReviewFeedbackEvent) -> Bool {
+        guard event.stage == .committed, event.finalKeeperAssetID != nil else {
+            return false
+        }
+        return event.kind == .keeperOverride
+            || event.finalKeeperAssetID != event.suggestedKeeperAssetID
     }
 
     private static func outcomeLabel(for event: PhotoReviewFeedbackEvent, asset: PhotoReviewFeedbackAsset? = nil) -> String {
@@ -176,5 +196,9 @@ enum PhotoTrainingExampleBuilder {
     private static func rowID(event: PhotoReviewFeedbackEvent, kind: PhotoTrainingRowKind, assetID: String?) -> String {
         let assetComponent = assetID ?? "group"
         return "\(event.id.uuidString):\(kind.rawValue):\(assetComponent)"
+    }
+
+    private static func currentFeatureSchemaVersion(for event: PhotoReviewFeedbackEvent) -> Int {
+        max(event.featureSchemaVersion, featureSchemaVersion)
     }
 }

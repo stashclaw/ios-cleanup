@@ -42,29 +42,57 @@ struct PhotoGroup: Identifiable, @unchecked Sendable {
         candidates: [SimilarPhotoCandidate] = [],
         reclaimableBytes: Int64? = nil
     ) {
-        let effectiveKeeperAssetID =
+        let legacyBestShotIDs = candidates
+            .filter(\.isBestShot)
+            .map(\.photoId)
+        let unambiguousLegacyKeeperID = legacyBestShotIDs.count == 1
+            ? legacyBestShotIDs[0]
+            : nil
+        let proposedKeeperAssetID =
             keeperAssetID
             ?? bestShotPhotoId
-            ?? candidates.first(where: \.isBestShot)?.photoId
+            ?? unambiguousLegacyKeeperID
+        let assetIDs = Set(assets.map(\.localIdentifier))
+        let validReferenceIDs = assetIDs.isEmpty
+            ? Set(candidates.map(\.photoId))
+            : assetIDs
+        let effectiveKeeperAssetID = proposedKeeperAssetID.flatMap {
+            validReferenceIDs.contains($0) ? $0 : nil
+        }
         let resolvedGroupConfidence = groupConfidence ?? reason.defaultConfidence(for: similarity, photoCount: assets.count)
-        let resolvedRecommendedAction = recommendedAction ?? resolvedGroupConfidence.defaultRecommendedAction
+        let defaultAction = reason.defaultRecommendedAction(for: resolvedGroupConfidence)
+        var resolvedRecommendedAction = recommendedAction ?? defaultAction
+        let deletePlanIsWellFormed = effectiveKeeperAssetID != nil
+            && !deleteCandidateIDs.isEmpty
+            && Set(deleteCandidateIDs).count == deleteCandidateIDs.count
+            && deleteCandidateIDs.allSatisfy {
+                $0 != effectiveKeeperAssetID && validReferenceIDs.contains($0)
+            }
+        let validatedDeleteCandidateIDs: [String]
+        if deletePlanIsWellFormed {
+            validatedDeleteCandidateIDs = deleteCandidateIDs
+        } else {
+            validatedDeleteCandidateIDs = []
+        }
+
+        // Delete recommendations require a complete, internally consistent result.
+        // Any uncertainty is review-only so malformed or stale data cannot become destructive.
+        if reason == .visuallySimilar
+            || resolvedGroupConfidence != .high
+            || effectiveKeeperAssetID == nil
+            || validatedDeleteCandidateIDs.isEmpty
+            || validReferenceIDs.count < 2
+            || !blockerFlags.isEmpty
+        {
+            if resolvedRecommendedAction == .keepBestTrashRest {
+                resolvedRecommendedAction = .reviewManually
+            }
+        }
         let shouldExposeDeleteCandidates = resolvedRecommendedAction == .keepBestTrashRest
 
         let resolvedDeleteCandidateIDs: [String]
         if shouldExposeDeleteCandidates {
-            if !deleteCandidateIDs.isEmpty {
-                if let effectiveKeeperAssetID {
-                    resolvedDeleteCandidateIDs = Self.unique(deleteCandidateIDs.filter { $0 != effectiveKeeperAssetID })
-                } else {
-                    resolvedDeleteCandidateIDs = Self.unique(deleteCandidateIDs)
-                }
-            } else if let effectiveKeeperAssetID {
-                resolvedDeleteCandidateIDs = assets
-                    .map(\.localIdentifier)
-                    .filter { $0 != effectiveKeeperAssetID }
-            } else {
-                resolvedDeleteCandidateIDs = []
-            }
+            resolvedDeleteCandidateIDs = validatedDeleteCandidateIDs
         } else {
             resolvedDeleteCandidateIDs = []
         }
@@ -89,7 +117,9 @@ struct PhotoGroup: Identifiable, @unchecked Sendable {
         self.candidates = candidates.isEmpty
             ? Self.makeCandidates(from: assets, keeperAssetID: effectiveKeeperAssetID, exposeDeleteCandidates: shouldExposeDeleteCandidates)
             : Self.reconcileCandidates(candidates, keeperAssetID: effectiveKeeperAssetID, exposeDeleteCandidates: shouldExposeDeleteCandidates)
-        self.reclaimableBytes = reclaimableBytes ?? Self.estimateReclaimableBytes(from: assets, deleteCandidateIDs: self.deleteCandidateIDs)
+        self.reclaimableBytes = shouldExposeDeleteCandidates
+            ? (reclaimableBytes ?? Self.estimateReclaimableBytes(from: assets, deleteCandidateIDs: self.deleteCandidateIDs))
+            : 0
     }
 
     enum SimilarityReason: String, CaseIterable, Identifiable, Sendable, Codable {
@@ -102,36 +132,23 @@ struct PhotoGroup: Identifiable, @unchecked Sendable {
 
     var groupId: String { id.uuidString }
     var photoCount: Int { assets.count }
-
-    /// Index of the highest-resolution asset — used as the recommended keeper.
-    var recommendedKeeperIndex: Int {
-        let best = assets.enumerated().max { a, b in
-            let sizeA = a.element.pixelWidth * a.element.pixelHeight
-            let sizeB = b.element.pixelWidth * b.element.pixelHeight
-            return sizeA < sizeB
-        }
-        return best?.offset ?? 0
-    }
-
-    var keeperReason: String {
-        switch reason {
-        case .nearDuplicate: return "Highest resolution copy"
-        case .visuallySimilar: return "Best quality match"
-        case .burstShot: return "Sharpest in burst"
-        }
-    }
-
-    /// Rough byte savings if all non-keeper assets are deleted (pixels × 3 bytes / 10).
-    var estimatedSavingsBytes: Int64 {
-        let nonKeepers = assets.enumerated()
-            .filter { $0.offset != recommendedKeeperIndex }
-            .map(\.element)
-        return nonKeepers.reduce(Int64(0)) { acc, asset in
-            let pixels = Int64(asset.pixelWidth) * Int64(asset.pixelHeight)
-            return acc + (pixels * 3) / 10
-        }
-    }
     var reasons: [String] { groupReasonsSummary }
+    var isAutoCleanEligible: Bool {
+        guard recommendedAction == .keepBestTrashRest,
+              reason != .visuallySimilar,
+              groupConfidence == .high,
+              blockerFlags.isEmpty,
+              let keeperAssetID,
+              !deleteCandidateIDs.isEmpty else {
+            return false
+        }
+
+        let assetIDs = Set(assets.map(\.localIdentifier))
+        return assetIDs.contains(keeperAssetID)
+            && Set(deleteCandidateIDs).isSubset(of: assetIDs)
+            && !deleteCandidateIDs.contains(keeperAssetID)
+            && deleteCandidateIDs.count < assetIDs.count
+    }
     var deleteCandidateAssets: [PHAsset] {
         let deleteIDSet = Set(deleteCandidateIDs)
         return assets.filter { deleteIDSet.contains($0.localIdentifier) }
@@ -168,7 +185,6 @@ struct PhotoGroup: Identifiable, @unchecked Sendable {
     }
 
     private static func reconcileCandidates(_ candidates: [SimilarPhotoCandidate], keeperAssetID: String?, exposeDeleteCandidates: Bool) -> [SimilarPhotoCandidate] {
-        guard let keeperAssetID else { return candidates }
         return candidates.map { candidate in
             let isBest = candidate.photoId == keeperAssetID
             let selectionState: SimilarSelectionState
@@ -208,10 +224,6 @@ struct PhotoGroup: Identifiable, @unchecked Sendable {
         }
     }
 
-    private static func unique(_ ids: [String]) -> [String] {
-        var seen = Set<String>()
-        return ids.filter { seen.insert($0).inserted }
-    }
 }
 
 struct SimilarPhotoCandidate: Identifiable, Hashable, Sendable, Codable {
@@ -355,6 +367,11 @@ extension PhotoGroup.SimilarityReason {
         case .visuallySimilar:
             return similarity < 0.1 ? .medium : .low
         }
+    }
+
+    func defaultRecommendedAction(for confidence: SimilarGroupConfidence) -> SimilarRecommendedAction {
+        guard self != .visuallySimilar else { return .reviewManually }
+        return confidence.defaultRecommendedAction
     }
 }
 

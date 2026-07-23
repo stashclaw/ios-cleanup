@@ -3,20 +3,20 @@ import Contacts
 
 struct ContactResultsView: View {
     let matches: [ContactMatch]
+    let onRefresh: (() async -> Void)?
     @EnvironmentObject private var purchaseManager: PurchaseManager
 
-    @State private var visibleMatches: [ContactMatch]
     @State private var showPaywall = false
     @State private var mergeError: String?
 
-    init(matches: [ContactMatch]) {
+    init(matches: [ContactMatch], onRefresh: (() async -> Void)? = nil) {
         self.matches = matches
-        _visibleMatches = State(initialValue: matches)
+        self.onRefresh = onRefresh
     }
 
     var body: some View {
         Group {
-            if visibleMatches.isEmpty {
+            if matches.isEmpty {
                 EmptyStateView(title: "No Duplicates Found", icon: "person.2.fill",
                                message: "Your contacts look clean.")
             } else {
@@ -28,7 +28,7 @@ struct ContactResultsView: View {
                                 .foregroundStyle(.red)
                                 .padding(.horizontal)
                         }
-                        ForEach(visibleMatches) { match in
+                        ForEach(matches) { match in
                             contactCard(match: match)
                         }
                     }
@@ -36,6 +36,9 @@ struct ContactResultsView: View {
                     .padding(.vertical, 12)
                 }
                 .background(Color.duckBlush.ignoresSafeArea())
+                .refreshable {
+                    await onRefresh?()
+                }
             }
         }
         .navigationTitle("Duplicate Contacts")
@@ -85,16 +88,29 @@ struct ContactResultsView: View {
                             .background(Color.duckCream, in: Capsule())
                     }
 
-                    Button {
-                        guard purchaseManager.isPurchased else { showPaywall = true; return }
-                        // Navigate to merge preview for actual merge action
-                    } label: {
-                        Text(purchaseManager.isPurchased ? "Merge" : "Merge 🔒")
+                    if purchaseManager.isPurchased {
+                        NavigationLink(
+                            destination: ContactMergePreviewView(match: match)
+                                .environmentObject(purchaseManager)
+                        ) {
+                            Text("Merge")
+                                .font(.duckCaption.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(Color.duckPink, in: Capsule())
+                        }
+                    } else {
+                        Button {
+                            showPaywall = true
+                        } label: {
+                            Label("Merge", systemImage: "lock.fill")
                             .font(.duckCaption.weight(.semibold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
                             .background(Color.duckPink, in: Capsule())
+                        }
                     }
                 }
             }
