@@ -25,7 +25,7 @@ struct ContactResultsView: View {
                         if let error = mergeError {
                             Text(error)
                                 .font(.duckCaption)
-                                .foregroundStyle(.red)
+                                .foregroundStyle(Color.danger)
                                 .padding(.horizontal)
                         }
                         ForEach(matches) { match in

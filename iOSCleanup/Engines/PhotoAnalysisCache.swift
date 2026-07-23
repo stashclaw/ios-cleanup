@@ -3,7 +3,9 @@ import OSLog
 import Photos
 
 struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
-    static let schemaVersion = 4
+    // Version 5 invalidates groups produced before Vision feature distances
+    // were normalized. This is a derived cache; user review data is separate.
+    static let schemaVersion = 5
 
     let schemaVersion: Int
     let savedAt: Date

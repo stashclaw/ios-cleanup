@@ -2,24 +2,33 @@ import Foundation
 import SQLite3
 
 enum PhotoEmbeddingContract {
-    // Vision revision 1 produces 128 Float values. Keep the storage version tied
-    // to that revision so threshold/cache changes cannot silently mix scales.
+    // This is an app-owned storage/metric version, not the Vision request
+    // revision. Version 1 incorrectly assumed 128 elements and stored raw
+    // distances. Version 2 uses Vision revision 1's actual 2,048 elements and
+    // normalized RMS distances, so old pair rows cannot cross the scale change.
     static let pinnedVisionRevision = 1
-    static let embeddingVersion = pinnedVisionRevision
-    static let elementCount = 128
+    static let legacyEmbeddingVersion = 1
+    static let embeddingVersion = 2
+    static let legacyElementCount = 128
+    static let elementCount = 2_048
     static let byteCount = elementCount * MemoryLayout<Float>.size
 
     static func expectedByteCount(for version: Int) -> Int? {
         switch version {
-        case 1:
+        case legacyEmbeddingVersion:
+            return legacyElementCount * MemoryLayout<Float>.size
+        case embeddingVersion:
             return byteCount
-        case 2:
-            // Kept only as a validated migration/future-model seam. Inference and
-            // feature generation remain pinned to revision/version 1.
-            return 2_048 * MemoryLayout<Float>.size
         default:
             return nil
         }
+    }
+
+    static func isCompatibleObservation(
+        elementCount: Int,
+        byteCount: Int
+    ) -> Bool {
+        elementCount == Self.elementCount && byteCount == Self.byteCount
     }
 }
 
@@ -117,7 +126,7 @@ actor PhotoMLStore {
             CREATE TABLE IF NOT EXISTS photo_features (
                 asset_id TEXT PRIMARY KEY,
                 embedding BLOB,
-                embedding_version INT NOT NULL DEFAULT 1,
+                embedding_version INT NOT NULL DEFAULT \(PhotoEmbeddingContract.embeddingVersion),
                 pixel_width INT NOT NULL,
                 pixel_height INT NOT NULL,
                 creation_date REAL,
@@ -942,7 +951,7 @@ actor PhotoMLStore {
             """)
             let versionExpression = legacyHasVersion
                 ? "embedding_version"
-                : "\(PhotoEmbeddingContract.embeddingVersion)"
+                : "\(PhotoEmbeddingContract.legacyEmbeddingVersion)"
             try execOrThrow("""
                 INSERT INTO pairwise_similarity (
                     lhs_asset_id, rhs_asset_id, embedding_version, feature_distance,

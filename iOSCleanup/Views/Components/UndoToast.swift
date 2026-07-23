@@ -3,6 +3,7 @@ import SwiftUI
 // Floating toast that appears after a deletion is scheduled.
 // PhotoKit deletions are not reversible through the public API, so tapping Undo here
 // simply cancels the deferred commit window before the change is finalized.
+// Renders through the shared DuckToast shell.
 struct UndoToast: View {
     let toastID: UUID
     let deadline: Date
@@ -30,80 +31,15 @@ struct UndoToast: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.25)) { context in
-            VStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    Button {
-                        onUndo()
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "arrow.uturn.backward")
-                                .font(.duckCaption.weight(.bold))
-                            Text("Undo")
-                                .font(.duckButton)
-                        }
-                        .foregroundStyle(Color.duckRose)
-                        .frame(maxHeight: .infinity)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 14)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    Rectangle()
-                        .fill(Color.duckRose.opacity(0.28))
-                        .frame(width: 1, height: 34)
-                        .padding(.vertical, 8)
-
-                    HStack(spacing: 8) {
-                        Text("Removing \(freedCountLabel)")
-                            .font(.duckButton)
-                            .foregroundStyle(Color.duckPink)
-
-                        Text("✦")
-                            .font(.duckButton)
-                            .foregroundStyle(Color.duckYellow)
-                            .accessibilityHidden(true)
-
-                        Spacer(minLength: 8)
-
-                        Text(freedLabel)
-                            .font(.duckCaption.weight(.semibold))
-                            .foregroundStyle(Color.duckRose.opacity(0.75))
-                            .monospacedDigit()
-
-                        Text("\(remainingSeconds(at: context.date))s")
-                            .font(.duckCaption.weight(.semibold))
-                            .foregroundStyle(Color.duckRose.opacity(0.75))
-                            .monospacedDigit()
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 14)
-                    .contentShape(Rectangle())
-                }
-
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 50, style: .continuous)
-                            .fill(Color.duckRose.opacity(0.16))
-
-                        RoundedRectangle(cornerRadius: 50, style: .continuous)
-                            .fill(Color.duckPink)
-                            .frame(width: geo.size.width * progress(at: context.date))
-                    }
-                }
-                .frame(height: 3)
-                .padding(.horizontal, 4)
-                .padding(.bottom, 4)
-            }
-            .frame(maxWidth: .infinity)
-            .background(Color.duckCream, in: RoundedRectangle(cornerRadius: 50, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 50, style: .continuous)
-                    .strokeBorder(Color.duckPink, lineWidth: 1)
+            DuckToast(
+                style: .destructive,
+                message: "Removing \(freedCountLabel)",
+                detail: freedLabel,
+                trailingDetail: "\(remainingSeconds(at: context.date))s",
+                actionLabel: "Undo",
+                onAction: onUndo,
+                progress: progress(at: context.date)
             )
-            .shadow(color: Color.duckPink.opacity(0.15), radius: 12, x: 0, y: 4)
-            .padding(.horizontal, 16)
         }
         .id(toastID)
         .accessibilityElement(children: .contain)

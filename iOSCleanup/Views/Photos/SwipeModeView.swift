@@ -60,54 +60,24 @@ struct SwipeModeView: View {
     private var swipeThreshold: CGFloat { 100 }
 
     private var cardStack: some View {
-        ZStack {
-            // Background cards (depth effect)
-            ForEach(upcomingEntries.reversed().prefix(2), id: \.id) { entry in
-                if case .asset(let asset, _) = entry, entry.id != viewModel.current?.id {
+        VStack(spacing: 0) {
+            reviewProgressHeader
+
+            ZStack {
+                if let current = viewModel.current, case .asset(let asset, _) = current {
                     DuckAssetCard(
                         asset: asset,
-                        estimatedFileSize: viewModel.fileSize(for: asset.localIdentifier)
+                        estimatedFileSize: viewModel.fileSize(for: asset.localIdentifier),
+                        monthHeader: currentMonthHeader
                     )
-                        .scaleEffect(0.93)
-                        .opacity(0.5)
-                }
-            }
-
-            // Side strips — always visible, intensity driven by drag
-            HStack(spacing: 0) {
-                // Left: red strip (delete)
-                ZStack {
-                    Color.red.opacity(0.85 + leftStripIntensity * 0.15)
-                    Image(systemName: "trash")
-                        .font(.duckBody(20, weight: .semibold, relativeTo: .title3))
-                        .foregroundStyle(.white)
-                        .scaleEffect(1 + leftStripIntensity * 0.4)
-                }
-                .frame(width: 32)
-                .frame(maxHeight: .infinity)
-
-                Spacer()
-
-                // Right: green strip (keep)
-                ZStack {
-                    Color.green.opacity(0.85 + rightStripIntensity * 0.15)
-                    Image(systemName: "checkmark")
-                        .font(.duckBody(20, weight: .semibold, relativeTo: .title3))
-                        .foregroundStyle(.white)
-                        .scaleEffect(1 + rightStripIntensity * 0.4)
-                }
-                .frame(width: 32)
-                .frame(maxHeight: .infinity)
-            }
-            .ignoresSafeArea()
-
-            // Current card
-            if let current = viewModel.current, case .asset(let asset, _) = current {
-                DuckAssetCard(
-                    asset: asset,
-                    estimatedFileSize: viewModel.fileSize(for: asset.localIdentifier),
-                    monthHeader: currentMonthHeader
-                )
+                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                    }
+                    .shadow(color: .black.opacity(0.35), radius: 14, x: 0, y: 8)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
                     .offset(cardOffset)
                     .rotationEffect(.degrees(Double(cardOffset.width) / 20))
                     .gesture(
@@ -125,78 +95,104 @@ struct SwipeModeView: View {
                             }
                     )
                     .allowsHitTesting(!viewModel.isTransitioning)
-            }
-
-            // Progress + round buttons overlay
-            VStack {
-                // Progress strip at top
-                HStack {
-                    StatusBadge(title: "\(viewModel.reviewedCount) / \(viewModel.totalReviewableCount) reviewed", accent: .duckPink)
-                    Spacer()
-                    StatusBadge(title: "\(viewModel.remainingCount) left", accent: .duckRose)
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 4)
-
-                DuckProgressBar(progress: viewModel.progress, color: .duckPink)
-                    .frame(height: 4)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 4)
-
-                Spacer()
-
-                // Round action buttons
-                HStack(spacing: 48) {
-                    // Duck it — pink filled
-                    Button { swipeLeft() } label: {
-                        ZStack {
-                            Circle()
-                                .fill(Color.duckPink)
-                                .frame(width: 64, height: 64)
-                            Image(systemName: "trash")
-                                .font(.duckBody(24, weight: .semibold, relativeTo: .title2))
-                                .foregroundStyle(.white)
-                        }
+                    .overlay(alignment: .topLeading) {
+                        swipeCue(
+                            title: "Delete",
+                            icon: "trash.fill",
+                            color: .duckDanger,
+                            intensity: deleteCueIntensity
+                        )
+                        .padding(34)
                     }
-                    .accessibilityLabel("Duck it")
-                    .disabled(viewModel.isTransitioning)
-
-                    // Keep it — white outlined
-                    Button { swipeRight() } label: {
-                        ZStack {
-                            Circle()
-                                .strokeBorder(.white, lineWidth: 2)
-                                .frame(width: 64, height: 64)
-                            Image(systemName: "heart")
-                                .font(.duckBody(24, weight: .semibold, relativeTo: .title2))
-                                .foregroundStyle(.white)
-                        }
+                    .overlay(alignment: .topTrailing) {
+                        swipeCue(
+                            title: "Keep",
+                            icon: "heart.fill",
+                            color: .duckSuccess,
+                            intensity: keepCueIntensity
+                        )
+                        .padding(34)
                     }
-                    .accessibilityLabel("Keep it")
-                    .disabled(viewModel.isTransitioning)
                 }
-                .padding(.bottom, 48)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+
+            actionButtons
         }
     }
 
-    // MARK: - Strip intensity (0…1)
+    private var reviewProgressHeader: some View {
+        VStack(spacing: 8) {
+            HStack {
+                StatusBadge(
+                    title: "\(viewModel.reviewedCount) / \(viewModel.totalReviewableCount) reviewed",
+                    accent: .duckPink
+                )
+                Spacer()
+                StatusBadge(title: "\(viewModel.remainingCount) left", accent: .duckRose)
+            }
 
-    private var leftStripIntensity: Double {
+            DuckProgressBar(progress: viewModel.progress, color: .duckPink)
+                .frame(height: 4)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color.black)
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 12) {
+            Button { swipeLeft() } label: {
+                Label("Delete", systemImage: "trash.fill")
+                    .font(.duckButton)
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(Color.duckDanger, in: RoundedRectangle(cornerRadius: 16))
+            }
+            .accessibilityLabel("Delete photo")
+            .disabled(viewModel.isTransitioning)
+
+            Button { swipeRight() } label: {
+                Label("Keep", systemImage: "heart.fill")
+                    .font(.duckButton)
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(Color.duckSuccess, in: RoundedRectangle(cornerRadius: 16))
+            }
+            .accessibilityLabel("Keep photo")
+            .disabled(viewModel.isTransitioning)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 16)
+        .background(Color.black)
+    }
+
+    private func swipeCue(title: String, icon: String, color: Color, intensity: Double) -> some View {
+        Label(title, systemImage: icon)
+            .font(.duckCaption.weight(.bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(color.opacity(0.92), in: Capsule())
+            .opacity(intensity)
+            .scaleEffect(0.85 + intensity * 0.15)
+    }
+
+    // MARK: - Swipe cue intensity (0…1)
+
+    private var deleteCueIntensity: Double {
         guard cardOffset.width < 0 else { return 0 }
         return min(Double(-cardOffset.width) / Double(swipeThreshold), 1)
     }
 
-    private var rightStripIntensity: Double {
+    private var keepCueIntensity: Double {
         guard cardOffset.width > 0 else { return 0 }
         return min(Double(cardOffset.width) / Double(swipeThreshold), 1)
     }
 
     // MARK: - Helpers
-
-    private var upcomingEntries: [SwipeModeViewModel.QueueEntry] {
-        Array(viewModel.queue.dropFirst(viewModel.currentIndex).prefix(3))
-    }
 
     private var currentMonthHeader: String? {
         let preceding = viewModel.queue.prefix(viewModel.currentIndex + 1)
@@ -293,7 +289,7 @@ private struct DuckModeCompletion: View {
                 }
 
                 if let error = viewModel.deleteError {
-                    Text(error).font(.duckCaption).foregroundStyle(.red)
+                    Text(error).font(.duckCaption).foregroundStyle(Color.danger)
                 }
 
                 if deletionManager.isDeleting {
@@ -463,7 +459,7 @@ private struct DuckAssetCard: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 44) // inset from side strips
+                .padding(.horizontal, 18)
                 .padding(.bottom, 20)
             }
             .task(id: "\(Int(targetSize.width.rounded()))x\(Int(targetSize.height.rounded()))") {

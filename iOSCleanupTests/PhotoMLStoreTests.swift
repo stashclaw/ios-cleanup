@@ -102,7 +102,7 @@ final class PhotoMLStoreTests: XCTestCase {
         let feature = PhotoFeatureRecord(
             assetID: "test-asset-001",
             embedding: validEmbedding(),
-            embeddingVersion: 1,
+            embeddingVersion: PhotoEmbeddingContract.embeddingVersion,
             pixelWidth: 4032,
             pixelHeight: 3024,
             creationDate: Date(),
@@ -240,7 +240,7 @@ final class PhotoMLStoreTests: XCTestCase {
         let feature = PhotoFeatureRecord(
             assetID: "embed-test",
             embedding: expectedData,
-            embeddingVersion: 1,
+            embeddingVersion: PhotoEmbeddingContract.embeddingVersion,
             pixelWidth: 100,
             pixelHeight: 100,
             creationDate: nil,
@@ -399,7 +399,7 @@ final class PhotoMLStoreTests: XCTestCase {
         let otherVersion = try await store.loadPairSimilarity(
             lhsAssetID: "left",
             rhsAssetID: "right",
-            embeddingVersion: 2
+            embeddingVersion: PhotoEmbeddingContract.legacyEmbeddingVersion
         )
 
         XCTAssertEqual(cached?.lhsAssetID, "left")
@@ -412,8 +412,13 @@ final class PhotoMLStoreTests: XCTestCase {
     func testPairCacheRejectsMixedEmbeddingVersions() async throws {
         let versionOne = PhotoFeatureRecord(
             assetID: "v1",
-            embedding: validEmbedding(),
-            embeddingVersion: 1,
+            embedding: Data(
+                repeating: 0x01,
+                count: PhotoEmbeddingContract.expectedByteCount(
+                    for: PhotoEmbeddingContract.legacyEmbeddingVersion
+                )!
+            ),
+            embeddingVersion: PhotoEmbeddingContract.legacyEmbeddingVersion,
             pixelWidth: 100,
             pixelHeight: 100,
             creationDate: nil,
@@ -428,8 +433,8 @@ final class PhotoMLStoreTests: XCTestCase {
         )
         let versionTwo = PhotoFeatureRecord(
             assetID: "v2",
-            embedding: Data(repeating: 0x02, count: 2_048 * MemoryLayout<Float>.size),
-            embeddingVersion: 2,
+            embedding: validEmbedding(byte: 0x02),
+            embeddingVersion: PhotoEmbeddingContract.embeddingVersion,
             pixelWidth: 100,
             pixelHeight: 100,
             creationDate: nil,
@@ -449,7 +454,7 @@ final class PhotoMLStoreTests: XCTestCase {
                 PairSimilarityRecord(
                     lhsAssetID: "v1",
                     rhsAssetID: "v2",
-                    embeddingVersion: 1,
+                    embeddingVersion: PhotoEmbeddingContract.legacyEmbeddingVersion,
                     featureDistance: 0.04,
                     timeDeltaSeconds: 1,
                     isBurstPair: false,
@@ -464,8 +469,8 @@ final class PhotoMLStoreTests: XCTestCase {
             let actual
         ) {
             XCTAssertEqual(assetID, "v2")
-            XCTAssertEqual(expected, 1)
-            XCTAssertEqual(actual, 2)
+            XCTAssertEqual(expected, PhotoEmbeddingContract.legacyEmbeddingVersion)
+            XCTAssertEqual(actual, PhotoEmbeddingContract.embeddingVersion)
         }
     }
 
@@ -784,12 +789,21 @@ final class PhotoMLStoreTests: XCTestCase {
         XCTAssertTrue(csv.contains(",\(PhotoTrainingExampleBuilder.featureSchemaVersion),1,"))
     }
 
-    func testPinnedVisionRequestMatchesEmbeddingStorageVersion() {
+    func testPinnedVisionRequestMatchesFeatureContract() {
         let request = PhotoMLBridge.makePinnedFeaturePrintRequest()
         XCTAssertEqual(request.revision, PhotoMLBridge.pinnedFeaturePrintRevision)
         XCTAssertEqual(
             Int(request.revision),
-            PhotoEmbeddingContract.embeddingVersion
+            PhotoEmbeddingContract.pinnedVisionRevision
+        )
+        XCTAssertEqual(PhotoEmbeddingContract.elementCount, 2_048)
+        XCTAssertEqual(
+            PhotoEmbeddingContract.byteCount,
+            2_048 * MemoryLayout<Float>.size
+        )
+        XCTAssertNotEqual(
+            PhotoEmbeddingContract.embeddingVersion,
+            PhotoEmbeddingContract.legacyEmbeddingVersion
         )
     }
 
@@ -935,7 +949,7 @@ final class PhotoMLStoreTests: XCTestCase {
         let feature = PhotoFeatureRecord(
             assetID: "stats-test",
             embedding: validEmbedding(byte: 0xFF),
-            embeddingVersion: 1,
+            embeddingVersion: PhotoEmbeddingContract.embeddingVersion,
             pixelWidth: 100,
             pixelHeight: 100,
             creationDate: nil,
@@ -962,7 +976,7 @@ final class PhotoMLStoreTests: XCTestCase {
         let oldFeature = PhotoFeatureRecord(
             assetID: "old-asset",
             embedding: nil,
-            embeddingVersion: 1,
+            embeddingVersion: PhotoEmbeddingContract.legacyEmbeddingVersion,
             pixelWidth: 100,
             pixelHeight: 100,
             creationDate: nil,
@@ -1113,7 +1127,7 @@ final class PhotoMLStoreTests: XCTestCase {
         let feature = PhotoFeatureRecord(
             assetID: "delete-all-test",
             embedding: validEmbedding(byte: 0x01),
-            embeddingVersion: 1,
+            embeddingVersion: PhotoEmbeddingContract.embeddingVersion,
             pixelWidth: 100,
             pixelHeight: 100,
             creationDate: nil,

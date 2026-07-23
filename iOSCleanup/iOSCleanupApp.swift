@@ -9,32 +9,21 @@ struct iOSCleanupApp: App {
 
     init() {
         VideoCompressionEngine.performStartupCleanup()
-        configureAppearance()
         UNUserNotificationCenter.current().delegate = notificationRouter
     }
 
+    // No global UIKit appearance chrome: each screen owns its own
+    // `.toolbarBackground` / `.toolbarColorScheme`, and tint flows from here.
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .tint(Color.accentPrimary)
                 .deletionUndoToast()
                 .environmentObject(purchaseManager)
                 .environmentObject(deletionManager)
                 .environmentObject(notificationRouter)
                 .task { await purchaseManager.updatePurchaseStatus() }
         }
-    }
-
-    private func configureAppearance() {
-        let primaryTint = UIColor(named: "DuckPink") ?? .systemPink
-        let secondaryTint = UIColor(named: "DuckRose") ?? .secondaryLabel
-        UINavigationBar.appearance().tintColor = primaryTint
-
-        let tabAppearance = UITabBarAppearance()
-        tabAppearance.configureWithDefaultBackground()
-        UITabBar.appearance().standardAppearance = tabAppearance
-        UITabBar.appearance().scrollEdgeAppearance = tabAppearance
-        UITabBar.appearance().tintColor = primaryTint
-        UITabBar.appearance().unselectedItemTintColor = secondaryTint.withAlphaComponent(0.5)
     }
 }
 

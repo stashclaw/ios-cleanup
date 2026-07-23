@@ -63,7 +63,7 @@ struct PaywallView: View {
                         VStack(spacing: 8) {
                             Text(error)
                                 .font(.duckCaption)
-                                .foregroundStyle(.red)
+                                .foregroundStyle(Color.danger)
                                 .multilineTextAlignment(.center)
 
                             if purchaseManager.product == nil {

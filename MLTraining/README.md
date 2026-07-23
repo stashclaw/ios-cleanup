@@ -48,7 +48,7 @@
 
 ## Storage Budget
 
-- VNFeaturePrintObservation: 512 bytes per photo (128 floats × 4 bytes)
+- VNFeaturePrintObservation revision 1: 8,192 bytes per photo (2,048 floats x 4 bytes)
 - Metadata per photo: ~200 bytes
 - Feedback event: ~500 bytes
-- 10GB budget → ~5M photos worth of embeddings. Typical library: 5K-50K photos = 5-50MB.
+- Typical library: 5K-50K photos = roughly 40-400MB of raw embeddings.

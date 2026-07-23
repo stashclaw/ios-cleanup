@@ -9,7 +9,7 @@ extension Font {
     static let duckBody = BrandFont.makeBody(size: 15, weight: .semibold, relativeTo: .body)
     static let duckCaption = BrandFont.makeBody(size: 13, weight: .regular, relativeTo: .caption)
     static let duckLabel = BrandFont.makeBody(size: 11, weight: .bold, relativeTo: .caption2)
-    static let duckStat = BrandFont.makeDisplay(size: 24, relativeTo: .title2)
+    static let duckStat = BrandFont.makeBody(size: 17, weight: .bold, relativeTo: .body).monospacedDigit()
     static let duckMicro = BrandFont.makeBody(size: 10, weight: .semibold, relativeTo: .caption2)
 
     static func duckDisplay(_ size: CGFloat, relativeTo textStyle: Font.TextStyle = .largeTitle) -> Font {
@@ -37,8 +37,8 @@ enum DuckCornerRadius {
 
 private enum BrandFont {
     static func makeDisplay(size: CGFloat, relativeTo textStyle: Font.TextStyle) -> Font {
-        if UIFont(name: "FredokaOne-Regular", size: size) != nil {
-            return .custom("FredokaOne-Regular", size: size, relativeTo: textStyle)
+        if UIFont(name: "BricolageGrotesque-SemiBold", size: size) != nil {
+            return .custom("BricolageGrotesque-SemiBold", size: size, relativeTo: textStyle)
         }
         return .system(size: size, weight: .semibold, design: .rounded)
     }
@@ -47,13 +47,13 @@ private enum BrandFont {
         let name: String
         switch weight {
         case .bold:
-            name = "Nunito-Bold"
+            name = "Manrope-Bold"
         case .semibold:
-            name = "Nunito-SemiBold"
+            name = "Manrope-SemiBold"
         case .medium:
-            name = "Nunito-SemiBold"
+            name = "Manrope-Medium"
         default:
-            name = "Nunito-Regular"
+            name = "Manrope-Regular"
         }
 
         if UIFont(name: name, size: size) != nil {

@@ -32,10 +32,11 @@
     </array>
     <key>UIAppFonts</key>
     <array>
-        <string>FredokaOne-Regular.ttf</string>
-        <string>Nunito-Regular.ttf</string>
-        <string>Nunito-SemiBold.ttf</string>
-        <string>Nunito-Bold.ttf</string>
+        <string>BricolageGrotesque-SemiBold.ttf</string>
+        <string>Manrope-Regular.ttf</string>
+        <string>Manrope-Medium.ttf</string>
+        <string>Manrope-SemiBold.ttf</string>
+        <string>Manrope-Bold.ttf</string>
     </array>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>PhotoDuck needs photo access to find similar images and let you review cleanup choices on your device.</string>

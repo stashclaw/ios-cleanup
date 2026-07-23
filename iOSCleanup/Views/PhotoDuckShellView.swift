@@ -53,7 +53,9 @@ struct PhotoDuckShellView: View {
             .tabItem { Label("Files", systemImage: "doc.fill") }
             .tag(Tab.files)
         }
-        .tint(Color.duckPink)
+        .tint(Color.accentPrimary)
+        .toolbarBackground(Color.surface, for: .tabBar)
+        .toolbarBackground(.visible, for: .tabBar)
         .onChange(of: selectedTab) { tab in
             switch tab {
             case .contacts:
@@ -94,8 +96,6 @@ struct SimilarPhotosDashboardView: View {
             acc += group.reclaimableBytes
         }
     }
-    private var cleanedBytes: Int64 { max(deletionManager.totalBytesFreed, 0) }
-    private var cleanedItems: Int { max(deletionManager.totalItemsFreed, 0) }
     private var remainingGroups: Int { similarGroups.count }
     private var scanProgress: Double {
         switch viewModel.scanState {
@@ -142,30 +142,21 @@ struct SimilarPhotosDashboardView: View {
         return "Can free up \(reclaimablePercent)% of storage"
     }
 
-    private var sessionSummaryText: String {
-        if cleanedItems > 0 {
-            return "\(cleanedItems) items / \(ByteCountFormatter.string(fromByteCount: cleanedBytes, countStyle: .file)) moved to Trash"
-        }
-        return "\(similarGroups.count) groups ready · \(ByteCountFormatter.string(fromByteCount: totalReclaimableBytes, countStyle: .file)) reclaimable"
+    private var showsScanDetails: Bool {
+        viewModel.scanState == .scanning || viewModel.scanState == .paused
     }
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    Color.duckSuccess,
-                    Color.duckSuccess.opacity(0.45),
-                    Color.black.opacity(0.92)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+            Color.backgroundBlush.ignoresSafeArea()
 
             ScrollView {
                 VStack(spacing: 18) {
                     heroCard
-                    diagnosticsStrip
+
+                    if showsScanDetails {
+                        diagnosticsStrip
+                    }
 
                     if similarGroups.isEmpty {
                         emptyState
@@ -179,9 +170,8 @@ struct SimilarPhotosDashboardView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(Color.duckSuccess, for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
-        .toolbarColorScheme(.dark, for: .navigationBar)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbarColorScheme(.light, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
@@ -208,7 +198,7 @@ struct SimilarPhotosDashboardView: View {
 #endif
                 } label: {
                     Image(systemName: "gearshape.fill")
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(Color.textSecondary)
                 }
             }
         }
@@ -244,117 +234,79 @@ struct SimilarPhotosDashboardView: View {
         }
     }
 
+    // Direction 3b: the hero is the one saturated moment on the dashboard —
+    // brand gradient card with white content and white-on-white-16% stat tiles.
     private var heroCard: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 30, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.duckSuccess,
-                            Color.duckSuccess.opacity(0.72),
-                            Color.black.opacity(0.74)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .overlay(
-                    RadialGradient(
-                        colors: [Color.white.opacity(0.16), Color.clear],
-                        center: .topTrailing,
-                        startRadius: 10,
-                        endRadius: 220
-                    )
-                    .blendMode(.screen)
-                )
-                .shadow(color: .black.opacity(0.24), radius: 14, x: 0, y: 8)
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Similar photos")
+                        .font(.duckTitle)
+                        .foregroundStyle(.white)
 
-            VStack(alignment: .leading, spacing: 14) {
-                PhotoDuckBrandLockup(iconSize: 28, wordmarkHeight: 20)
+                    Text(heroMetricText)
+                        .font(.duckHeading)
+                        .foregroundStyle(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text(dashboardSubtitle)
+                        .font(.duckCaption)
+                        .foregroundStyle(.white.opacity(0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+                PhotoDuckMascotArt(size: 72)
+            }
+
+            HStack(spacing: 10) {
+                HeroStatTile(
+                    title: "Groups",
+                    value: remainingGroups.formatted(),
+                    icon: "photo.stack.fill"
+                )
+                HeroStatTile(
+                    title: "Reviewable",
+                    value: viewModel.reviewablePhotosCount.formatted(),
+                    icon: "checkmark.circle.fill"
+                )
+            }
+
+            HStack {
+                Text(scanStatusLabel)
+                    .font(.duckLabel)
+                    .foregroundStyle(.white)
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(Color.white.opacity(0.92), in: Capsule())
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.16), in: Capsule(style: .continuous))
+                Spacer()
+                Text("\(Int((scanProgress * 100).rounded()))% scanned")
+                    .font(.duckCaption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+            }
 
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Similars")
-                            .font(.duckDisplay(52))
-                            .foregroundStyle(.white)
-                            .shadow(color: .black.opacity(0.16), radius: 6, x: 0, y: 2)
-
-                        Text(heroMetricText)
-                            .font(.duckHeading)
-                            .foregroundStyle(Color.white.opacity(0.95))
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Text(dashboardSubtitle)
-                            .font(.duckCaption)
-                            .foregroundStyle(Color.white.opacity(0.86))
-                    }
-
-                    Spacer(minLength: 10)
-
-                    VStack(alignment: .trailing, spacing: 10) {
-                        Menu {
-                            if viewModel.scanState == .paused {
-                                Button("Continue Scanning") { viewModel.resumeDeepClean() }
-                            } else if viewModel.scanState == .scanning, viewModel.cleanupMode == .deepClean {
-                                Button("Pause Deep Clean") { viewModel.pauseDeepClean() }
-                            }
-                            Button("Smart Cleanup") { showSwipeMode = true }
-                            Button("Review Results") { showReviewResults = true }
-                            Button("Scan Again") { Task { await viewModel.scanPhotos() } }
-#if DEBUG
-                            Divider()
-                            Button(isExportingMLData ? "Exporting ML Data..." : "Export ML Training Data") {
-                                Task { await exportMLTrainingData() }
-                            }
-                            .disabled(isExportingMLData)
-#endif
-                        } label: {
-                            Image(systemName: "gearshape")
-                                .font(.duckBody(20, weight: .semibold, relativeTo: .title3))
-                                .foregroundStyle(.white)
-                                .frame(width: 44, height: 44)
-                                .background(Color.white.opacity(0.14), in: Circle())
-                                .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 1))
-                        }
-
-                        SimilarDashboardRing(progress: scanProgress, accent: .white, label: scanStatusLabel)
-                            .frame(width: 112, height: 112)
-                    }
-                }
-
-                HStack(spacing: 12) {
-                    PhotoDuckStatTile(
-                        title: "Total cleaned",
-                        value: "\(cleanedItems) files\n\(ByteCountFormatter.string(fromByteCount: cleanedBytes, countStyle: .file))",
-                        accent: .duckPink,
-                        icon: "doc.fill"
-                    )
-
-                    PhotoDuckStatTile(
-                        title: "Scan progress",
-                        value: "\(Int((scanProgress * 100).rounded()))%",
-                        accent: .duckYellow,
-                        icon: "circle.dashed"
-                    )
-
-                    PhotoDuckStatTile(
-                        title: "Remaining",
-                        value: "\(remainingGroups)\ngroups",
-                        accent: .duckSoftPink,
-                        icon: "sparkles"
-                    )
-                }
-
-                HStack(spacing: 8) {
-                    StatusBadge(title: "\(similarGroups.count) groups ready", accent: .duckPink)
-                    StatusBadge(title: "\(viewModel.reviewablePhotosCount) reviewable", accent: .duckOrange)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.white.opacity(0.25))
+                        .frame(height: 6)
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.white)
+                        .frame(width: geo.size.width * min(max(scanProgress, 0), 1), height: 6)
+                        .animation(.linear(duration: 0.3), value: scanProgress)
                 }
             }
-            .padding(18)
+            .frame(height: 6)
         }
+        .padding(18)
+        .background(
+            LinearGradient(
+                colors: [Color.accentPrimary, Color.accentDeep, Color.textPrimary],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: DuckRadius.l, style: .continuous)
+        )
     }
 
     private var diagnosticsStrip: some View {
@@ -363,33 +315,17 @@ struct SimilarPhotosDashboardView: View {
                 HStack {
                     Text("Scan details")
                         .font(.duckHeading)
-                        .foregroundStyle(Color.duckBerry)
+                        .foregroundStyle(Color.textPrimary)
                     Spacer()
                     StatusBadge(
                         title: scanStatusLabel,
-                        accent: viewModel.scanState == .paused ? .duckOrange : .duckPink
+                        accent: viewModel.scanState == .paused ? .warning : .accentPrimary
                     )
                 }
 
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                    StatPill(
-                        title: "Photos",
-                        value: viewModel.scanProgressLabel,
-                        accent: .duckPink,
-                        icon: "photo.on.rectangle.angled"
-                    )
-                    StatPill(
-                        title: "Rate",
-                        value: viewModel.scanRateLabel,
-                        accent: .duckOrange,
-                        icon: "speedometer"
-                    )
-                    StatPill(
-                        title: "Reviewable",
-                        value: "\(viewModel.reviewablePhotosCount.formatted())",
-                        accent: .duckRose,
-                        icon: "sparkles"
-                    )
+                HStack(spacing: 10) {
+                    DiagnosticsTile(title: "Progress", value: viewModel.scanProgressLabel)
+                    DiagnosticsTile(title: "Rate", value: viewModel.scanRateLabel)
                 }
             }
             .padding(16)
@@ -413,69 +349,86 @@ struct SimilarPhotosDashboardView: View {
     }
 
     private var collageSection: some View {
-        DuckCard {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Best shots ready")
-                            .font(.duckHeading)
-                            .foregroundStyle(Color.duckBerry)
-                        Text("\(similarGroups.count) groups grouped for fast cleanup")
-                            .font(.duckCaption)
-                            .foregroundStyle(Color.duckRose)
-                    }
-                    Spacer()
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .bottom) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Ready to review")
+                        .font(.duckHeading)
+                        .foregroundStyle(Color.textPrimary)
+                    Text("\(similarGroups.count) groups, kept separate and easy to compare")
+                        .font(.duckCaption)
+                        .foregroundStyle(Color.textSecondary)
                 }
+                Spacer()
 
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                    ForEach(featuredGroups) { group in
-                        SimilarGroupPreviewCard(group: group)
+                if similarGroups.count > featuredGroups.count {
+                    Button("See all") {
+                        showReviewResults = true
                     }
+                    .font(.duckCaption.weight(.semibold))
+                    .foregroundStyle(Color.accentPrimary)
                 }
             }
-            .padding(16)
+
+            ForEach(Array(featuredGroups.enumerated()), id: \.element.id) { index, group in
+                NavigationLink {
+                    PhotoGroupDetailView(
+                        group: group,
+                        groupIndex: index,
+                        totalGroups: similarGroups.count
+                    )
+                    .environmentObject(purchaseManager)
+                    .environmentObject(deletionManager)
+                } label: {
+                    DuckCard {
+                        SimilarGroupPreviewCard(group: group)
+                            .padding(12)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 
     private var actionDock: some View {
-        DuckCard {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 12) {
-                    PhotoDuckMascotArt(size: 56)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(sessionSummaryText)
-                            .font(.duckHeading)
-                            .foregroundStyle(Color.duckBerry)
-                        Text(viewModel.heroSecondaryText)
-                            .font(.duckCaption)
-                            .foregroundStyle(Color.duckRose)
-                    }
-
-                    Spacer(minLength: 0)
-                }
-
-                DuckPrimaryButton(title: viewModel.scanState == .paused ? "Continue scanning" : "Smart Cleanup") {
-                    if viewModel.scanState == .paused {
-                        viewModel.resumeDeepClean()
-                    } else if similarGroups.isEmpty {
-                        Task { await viewModel.scanPhotos() }
-                    } else {
-                        showSwipeMode = true
-                    }
-                }
-
-                HStack(spacing: 12) {
-                    DuckOutlineButton(title: "Review results", color: .duckPink) {
-                        showReviewResults = true
-                    }
-                    DuckOutlineButton(title: "Scan again", color: .duckRose) {
-                        Task { await viewModel.scanPhotos() }
-                    }
-                }
+        HStack(spacing: 10) {
+            Button {
+                showReviewResults = true
+            } label: {
+                Label("Review", systemImage: "rectangle.grid.1x2")
+                    .font(.duckButton)
+                    .foregroundStyle(Color.textSecondary)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .background(Color.surface, in: RoundedRectangle(cornerRadius: 16))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color.textSecondary.opacity(0.24), lineWidth: 1)
+                    )
             }
-            .padding(16)
+
+            Button {
+                if viewModel.scanState == .paused {
+                    viewModel.resumeDeepClean()
+                } else if similarGroups.isEmpty {
+                    Task { await viewModel.scanPhotos() }
+                } else {
+                    showSwipeMode = true
+                }
+            } label: {
+                Label(
+                    viewModel.scanState == .paused ? "Continue" : "Smart Cleanup",
+                    systemImage: "sparkles"
+                )
+                .font(.duckButton)
+                .foregroundStyle(Color.white)
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .background(LinearGradient.duckPrimaryCTA, in: RoundedRectangle(cornerRadius: DuckRadius.m, style: .continuous))
+                .duckPrimaryGlow()
+            }
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
     }
 
     private var emptyState: some View {
@@ -486,10 +439,10 @@ struct SimilarPhotosDashboardView: View {
                 VStack(spacing: 6) {
                     Text("No similar photos yet")
                         .font(.duckTitle)
-                        .foregroundStyle(Color.duckBerry)
+                        .foregroundStyle(Color.textPrimary)
                     Text("Run a photo scan from Home or start Smart Cleanup to build the queue.")
                         .font(.duckCaption)
-                        .foregroundStyle(Color.duckRose)
+                        .foregroundStyle(Color.textSecondary)
                         .multilineTextAlignment(.center)
                 }
 
@@ -502,29 +455,54 @@ struct SimilarPhotosDashboardView: View {
     }
 }
 
-private struct SimilarDashboardRing: View {
-    let progress: Double
-    let accent: Color
-    let label: String
+private struct HeroStatTile: View {
+    let title: String
+    let value: String
+    let icon: String
 
     var body: some View {
-        ZStack {
-            Circle()
-                .stroke(Color.white.opacity(0.15), lineWidth: 10)
-            Circle()
-                .trim(from: 0, to: min(max(progress, 0), 1))
-                .stroke(accent, style: StrokeStyle(lineWidth: 10, lineCap: .round, lineJoin: .round))
-                .rotationEffect(.degrees(-90))
-            VStack(spacing: 4) {
-                Text("\(Int((progress * 100).rounded()))%")
-                    .font(.duckTitle)
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.duckBody.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(Color.white.opacity(0.16), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.duckMicro)
+                    .foregroundStyle(.white.opacity(0.8))
+                Text(value)
+                    .font(.duckStat)
                     .foregroundStyle(.white)
-                Text(label)
-                    .font(.duckLabel)
-                    .foregroundStyle(Color.white.opacity(0.86))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
         }
-        .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color.white.opacity(0.16), in: RoundedRectangle(cornerRadius: DuckRadius.m, style: .continuous))
+    }
+}
+
+private struct DiagnosticsTile: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.duckLabel)
+                .foregroundStyle(Color.textSecondary)
+            Text(value)
+                .font(.duckStat)
+                .foregroundStyle(Color.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color.backgroundBlush, in: RoundedRectangle(cornerRadius: DuckRadius.m, style: .continuous))
     }
 }
 
@@ -533,53 +511,51 @@ private struct SimilarGroupPreviewCard: View {
     @State private var images: [String: UIImage] = [:]
 
     private var leadAssets: [PHAsset] {
-        Array(group.assets.prefix(2))
+        let keeper = group.keeperAssetID.flatMap { keeperID in
+            group.assets.first { $0.localIdentifier == keeperID }
+        }
+        let remaining = group.assets.filter { $0.localIdentifier != keeper?.localIdentifier }
+        return Array(([keeper].compactMap { $0 } + remaining).prefix(3))
     }
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Color.white.opacity(0.16), Color.black.opacity(0.26)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .frame(height: 178)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(reasonLabel)
+                    .font(.duckCaption.weight(.semibold))
+                    .foregroundStyle(Color.accentPrimary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.accentPrimary.opacity(0.10), in: Capsule())
 
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text(reasonLabel)
-                        .font(.duckLabel.weight(.semibold))
-                        .foregroundStyle(Color.white)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.black.opacity(0.26), in: Capsule())
-                    Spacer(minLength: 0)
-                }
+                Spacer(minLength: 8)
 
-                GeometryReader { proxy in
-                    let tileWidth = max(0, (proxy.size.width - 8) / 2)
-                    HStack(spacing: 8) {
-                        ForEach(Array(leadAssets.enumerated()), id: \.offset) { index, asset in
-                            thumbnailTile(for: asset, isLeading: index == 0)
-                                .frame(width: tileWidth, height: tileWidth)
-                        }
-                    }
-                }
-                .frame(height: 92)
+                Text("\(group.assets.count) photos")
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.textSecondary)
 
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("\(group.assets.count) photos")
-                        .font(.duckCaption.weight(.semibold))
-                        .foregroundStyle(Color.white)
-                    Text("Best shot selected")
-                        .font(.duckLabel)
-                        .foregroundStyle(Color.white.opacity(0.88))
+                Image(systemName: "chevron.right")
+                    .font(.duckCaption.weight(.semibold))
+                    .foregroundStyle(Color.decorPink)
+            }
+
+            HStack(spacing: 6) {
+                ForEach(leadAssets, id: \.localIdentifier) { asset in
+                    thumbnailTile(for: asset)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 104)
                 }
             }
-            .padding(12)
+
+            HStack(spacing: 6) {
+                Image(systemName: group.isAutoCleanEligible ? "sparkles" : "rectangle.stack")
+                    .foregroundStyle(group.isAutoCleanEligible ? Color.accentPrimary : Color.warning)
+                Text(actionLabel)
+                    .font(.duckCaption.weight(.semibold))
+                    .foregroundStyle(Color.textPrimary)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+            }
         }
         .task(id: group.id) { await loadThumbnails() }
     }
@@ -590,6 +566,13 @@ private struct SimilarGroupPreviewCard: View {
         case .visuallySimilar: return "Similar"
         case .burstShot: return "Burst"
         }
+    }
+
+    private var actionLabel: String {
+        if group.isAutoCleanEligible {
+            return "Keep 1 · \(group.deleteCandidateIDs.count) suggested"
+        }
+        return "Review together only"
     }
 
     private func loadThumbnails() async {
@@ -607,7 +590,7 @@ private struct SimilarGroupPreviewCard: View {
     }
 
     @ViewBuilder
-    private func thumbnailTile(for asset: PHAsset, isLeading: Bool) -> some View {
+    private func thumbnailTile(for asset: PHAsset) -> some View {
         ZStack {
             if let image = images[asset.localIdentifier] {
                 Image(uiImage: image)
@@ -617,7 +600,7 @@ private struct SimilarGroupPreviewCard: View {
                     .clipped()
             } else {
                 LinearGradient(
-                    colors: [Color.duckSoftPink.opacity(0.55), Color.duckPink.opacity(0.88)],
+                    colors: [Color.decorPink.opacity(0.55), Color.accentPrimary.opacity(0.88)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
@@ -626,44 +609,24 @@ private struct SimilarGroupPreviewCard: View {
                 }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(isLeading ? Color.white.opacity(0.35) : Color.white.opacity(0.20), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.decorPink.opacity(0.55), lineWidth: 1)
         )
-        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-}
-
-struct PhotoDuckStatTile: View {
-    let title: String
-    let value: String
-    let accent: Color
-    let icon: String
-
-    var body: some View {
-        DuckCard {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Image(systemName: icon)
-                        .font(.headline)
-                        .foregroundStyle(accent)
-                    Spacer()
-                }
-                Text(title)
-                    .font(.duckCaption)
-                    .foregroundStyle(Color.duckRose)
-                Text(value)
-                    .font(.duckTitle)
-                    .foregroundStyle(accent)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.85)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Spacer(minLength: 0)
+        .overlay(alignment: .topLeading) {
+            if asset.localIdentifier == group.keeperAssetID {
+                Image(systemName: "star.fill")
+                    .font(.duckMicro.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 26, height: 26)
+                    .background(Color.accentPrimary, in: Circle())
+                    .padding(6)
+                    .accessibilityHidden(true)
             }
-            .frame(maxWidth: .infinity, minHeight: 104, alignment: .topLeading)
-            .padding(16)
         }
-        .frame(maxWidth: .infinity)
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }

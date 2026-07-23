@@ -8,15 +8,18 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        if hasOnboarded {
-            PhotoDuckShellView(dashboardModel: dashboardModel)
-                .environmentObject(purchaseManager)
-                .environmentObject(deletionManager)
-                .onChange(of: scenePhase) { phase in
-                    dashboardModel.updateScenePhase(phase)
-                }
-        } else {
-            OnboardingView()
+        Group {
+            if hasOnboarded {
+                PhotoDuckShellView(dashboardModel: dashboardModel)
+                    .environmentObject(purchaseManager)
+                    .environmentObject(deletionManager)
+                    .onChange(of: scenePhase) { phase in
+                        dashboardModel.updateScenePhase(phase)
+                    }
+            } else {
+                OnboardingView()
+            }
         }
+        .preferredColorScheme(.light)  // deliberate lock — light mode is the brand
     }
 }

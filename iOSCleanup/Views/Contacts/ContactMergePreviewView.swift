@@ -15,7 +15,7 @@ struct ContactMergePreviewView: View {
         Group {
             if isMerged {
                 EmptyStateView(title: "Merged!", icon: "checkmark.circle.fill", message: "")
-                    .tint(.green)
+                    .tint(Color.success)
             } else {
                 ScrollView {
                     VStack(spacing: 20) {
@@ -108,7 +108,7 @@ struct ContactMergePreviewView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
-        .background(added ? Color.green.opacity(0.08) : dropped ? Color.red.opacity(0.08) : Color.clear)
+        .background(added ? Color.success.opacity(0.08) : dropped ? Color.danger.opacity(0.08) : Color.clear)
     }
 
     // MARK: - Merge button

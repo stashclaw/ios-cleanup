@@ -66,11 +66,58 @@ final class PhotoScanEngineTests: XCTestCase {
             &unrelatedDistance,
             to: unrelatedObservation
         )
+        let normalizedRepeatedDistance = try XCTUnwrap(
+            PhotoFeatureDistanceNormalizer.normalizedDistance(
+                rawDistance: Double(repeatedDistance),
+                elementCount: matchingObservation.elementCount
+            )
+        )
+        let normalizedUnrelatedDistance = try XCTUnwrap(
+            PhotoFeatureDistanceNormalizer.normalizedDistance(
+                rawDistance: Double(unrelatedDistance),
+                elementCount: matchingObservation.elementCount
+            )
+        )
 
-        XCTAssertLessThanOrEqual(repeatedDistance, 0.001)
+        XCTAssertEqual(
+            matchingObservation.elementCount,
+            PhotoEmbeddingContract.elementCount
+        )
+        XCTAssertEqual(
+            matchingObservation.data.count,
+            PhotoEmbeddingContract.byteCount
+        )
+        XCTAssertLessThanOrEqual(normalizedRepeatedDistance, 0.001)
         XCTAssertGreaterThan(
-            unrelatedDistance,
-            Float(SimilarityThresholds.maxNearDuplicateFeatureDistance)
+            normalizedUnrelatedDistance,
+            SimilarityThresholds.maxVisualSimilarFeatureDistance
+        )
+    }
+
+    func testFeatureDistanceNormalizerUsesRMSScale() throws {
+        let expectedDistance = 0.16
+        let rawDistance = sqrt(Double(PhotoEmbeddingContract.elementCount))
+            * expectedDistance
+
+        let normalizedDistance = try XCTUnwrap(
+            PhotoFeatureDistanceNormalizer.normalizedDistance(
+                rawDistance: rawDistance,
+                elementCount: PhotoEmbeddingContract.elementCount
+            )
+        )
+
+        XCTAssertEqual(normalizedDistance, expectedDistance, accuracy: 0.000_001)
+        XCTAssertNil(
+            PhotoFeatureDistanceNormalizer.normalizedDistance(
+                rawDistance: -1,
+                elementCount: PhotoEmbeddingContract.elementCount
+            )
+        )
+        XCTAssertNil(
+            PhotoFeatureDistanceNormalizer.normalizedDistance(
+                rawDistance: rawDistance,
+                elementCount: 0
+            )
         )
     }
 
@@ -100,15 +147,48 @@ final class PhotoScanEngineTests: XCTestCase {
         )
     }
 
+    func testPairDistanceResolverRejectsLegacyRawDistanceVersion() {
+        let key = SimilarityPairKey("left", "right")
+        let cachedRecord = PairSimilarityRecord(
+            lhsAssetID: "left",
+            rhsAssetID: "right",
+            embeddingVersion: PhotoEmbeddingContract.legacyEmbeddingVersion,
+            featureDistance: 5.2,
+            timeDeltaSeconds: 1,
+            isBurstPair: false,
+            bucket: SimilarityBucket.visuallySimilar.rawValue,
+            similarityScore: 0.8
+        )
+
+        XCTAssertNil(
+            PhotoScanPairDistanceResolver.cachedResolution(
+                key: key,
+                cachedRecords: [key: cachedRecord]
+            )
+        )
+    }
+
     func testTuningConstantsStayPrecisionFirstAndBounded() {
         XCTAssertFalse(PhotoScanDefaults.allowNetworkAccess)
         XCTAssertLessThan(
             SimilarityThresholds.maxNearDuplicateFeatureDistance,
             SimilarityThresholds.maxVisualSimilarFeatureDistance
         )
+        XCTAssertLessThan(
+            SimilarityThresholds.maxExtendedVisualFeatureDistance,
+            SimilarityThresholds.maxVisualSimilarFeatureDistance
+        )
+        XCTAssertGreaterThan(
+            SimilarityThresholds.featureScoreNormalizationDistance,
+            SimilarityThresholds.maxVisualSimilarFeatureDistance
+        )
         XCTAssertLessThanOrEqual(
             SimilarityThresholds.maxFeatureComparisonsPerAsset,
             SimilarityThresholds.maxCandidateAssetsInspected
+        )
+        XCTAssertLessThanOrEqual(
+            SimilarityThresholds.reservedExtendedFeatureComparisonsPerAsset,
+            SimilarityThresholds.maxFeatureComparisonsPerAsset
         )
         XCTAssertLessThanOrEqual(
             SimilarityThresholds.maxRetainedGenericPairEdgesPerAsset,
@@ -117,6 +197,14 @@ final class PhotoScanEngineTests: XCTestCase {
         XCTAssertLessThan(
             SimilarityThresholds.nearDuplicateWindowSeconds,
             SimilarityThresholds.visualSessionWindowSeconds
+        )
+        XCTAssertLessThan(
+            SimilarityThresholds.visualSessionWindowSeconds,
+            SimilarityThresholds.extendedVisualSessionWindowSeconds
+        )
+        XCTAssertLessThanOrEqual(
+            SimilarityThresholds.visualReviewClusterFloor,
+            SimilarityThresholds.visualClusterFloor
         )
         XCTAssertGreaterThanOrEqual(
             SimilarityThresholds.nearDuplicateAutoDeleteScoreFloor,
@@ -245,7 +333,7 @@ final class PhotoScanEngineTests: XCTestCase {
         XCTAssertGreaterThan(cancelledCount, 0)
     }
 
-    func testAnalysisCacheSchemaFourRoundTripPreservesCoverageCounts() async throws {
+    func testAnalysisCacheCurrentSchemaRoundTripPreservesCoverageCounts() async throws {
         try await withIsolatedAnalysisCacheFile { _ in
             let cache = PhotoAnalysisCache()
             let snapshot = makeAnalysisSnapshot(
@@ -256,7 +344,10 @@ final class PhotoScanEngineTests: XCTestCase {
             await cache.saveSnapshot(snapshot)
             let loaded = await cache.loadSnapshot()
 
-            XCTAssertEqual(loaded?.schemaVersion, 4)
+            XCTAssertEqual(
+                loaded?.schemaVersion,
+                CachedPhotoAnalysisSnapshot.schemaVersion
+            )
             XCTAssertEqual(loaded?.processedPhotoCount, 10)
             XCTAssertEqual(loaded?.analyzedPhotoCount, 7)
             XCTAssertEqual(loaded?.unanalyzedPhotoCount, 3)
@@ -427,6 +518,51 @@ final class PhotoScanEngineTests: XCTestCase {
             XCTAssertEqual(Set(memberIDs).count, assetCount)
             XCTAssertTrue(clusters.allSatisfy { $0.count >= 2 })
         }
+    }
+
+    func testCandidateSelectorReservesExtendedWindowCoverage() {
+        let current = descriptor("current", seconds: 4_000)
+        let primary = (0..<140).map {
+            descriptor(
+                "primary-\($0)",
+                seconds: 3_999 - TimeInterval($0)
+            )
+        }
+        let extended = (0..<30).map {
+            descriptor(
+                "extended-\($0)",
+                seconds: 1_900 - TimeInterval($0)
+            )
+        }
+        let tooOld = descriptor("too-old", seconds: 0)
+        let allDescriptors = ([tooOld] + extended + primary).sorted {
+            ($0.captureTimestamp ?? .distantPast)
+                < ($1.captureTimestamp ?? .distantPast)
+        }
+        let descriptorsByID = Dictionary(
+            uniqueKeysWithValues: allDescriptors.map { ($0.id, $0) }
+        )
+
+        let candidateIDs = PhotoScanCandidateSelector.genericCandidateIDs(
+            for: current,
+            orderedProcessedIDs: allDescriptors.map(\.id),
+            descriptorsByID: descriptorsByID
+        )
+
+        XCTAssertEqual(
+            candidateIDs.count,
+            SimilarityThresholds.maxFeatureComparisonsPerAsset
+        )
+        XCTAssertEqual(
+            candidateIDs.filter { $0.hasPrefix("extended-") }.count,
+            SimilarityThresholds.reservedExtendedFeatureComparisonsPerAsset
+        )
+        XCTAssertEqual(
+            candidateIDs.filter { $0.hasPrefix("primary-") }.count,
+            SimilarityThresholds.maxFeatureComparisonsPerAsset
+                - SimilarityThresholds.reservedExtendedFeatureComparisonsPerAsset
+        )
+        XCTAssertFalse(candidateIDs.contains("too-old"))
     }
 
     func testGroupCacheKeyIgnoresMemberOrderButNotMembership() {

@@ -232,12 +232,17 @@ enum SimilarityThresholds {
     // Tuning constants. Defaults intentionally favor precision over recall.
     static let burstWindowSeconds: Double = 3
     static let nearDuplicateWindowSeconds: Double = 20
-    static let visualSessionWindowSeconds: Double = 15 * 60
+    static let visualSessionWindowSeconds: Double = 30 * 60
+    static let extendedVisualSessionWindowSeconds: Double = 60 * 60
 
     static let maxNearDuplicateFeatureDistance: Double = 0.05
-    static let maxVisualSimilarFeatureDistance: Double = 0.12
+    // Review-only discovery can be broader than destructive recommendations.
+    static let maxVisualSimilarFeatureDistance: Double = 0.18
+    static let maxExtendedVisualFeatureDistance: Double = 0.08
     static let maxBurstFeatureDistance: Double = 0.16
     static let maxScreenshotDuplicateFeatureDistance: Double = 0.025
+    // Preserve the original score scale when tuning review eligibility.
+    static let featureScoreNormalizationDistance: Double = 0.24
 
     static let aspectRatioMismatchPenalty: Double = 0.08
     static let dimensionMismatchPenalty: Double = 0.05
@@ -250,18 +255,20 @@ enum SimilarityThresholds {
     static let featureScoreWeight: Double = 0.55
 
     static let burstPairEligibilityScoreFloor: Double = 0.35
-    static let timeGapVisualScoreFloor: Double = 0.45
+    static let timeGapVisualScoreFloor: Double = 0.38
     static let screenshotAutoDeleteScoreFloor: Double = 0.50
     static let burstAutoDeleteScoreFloor: Double = 0.55
     static let nearDuplicateAutoDeleteScoreFloor: Double = 0.60
     static let nearDuplicateClusterFloor: Double = 0.45
     static let visualClusterFloor: Double = 0.25
+    static let visualReviewClusterFloor: Double = 0.18
     static let splitConsistencyFloor: Double = 0.30
 
     static let majorAspectRatioMismatch: Double = 0.35
-    static let maxCandidateAssetsInspected = 240
-    static let maxFeatureComparisonsPerAsset = 80
-    static let maxRetainedGenericPairEdgesPerAsset = 16
+    static let maxCandidateAssetsInspected = 480
+    static let maxFeatureComparisonsPerAsset = 120
+    static let reservedExtendedFeatureComparisonsPerAsset = 24
+    static let maxRetainedGenericPairEdgesPerAsset = 24
     static let maxBurstAssetsPerCluster = 40
     static let maxRetainedScreenshotFeaturePrints = 1_000
 }

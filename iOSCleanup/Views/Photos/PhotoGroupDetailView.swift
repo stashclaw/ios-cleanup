@@ -46,28 +46,36 @@ struct PhotoGroupDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 8) {
+            VStack(spacing: 12) {
                 reviewGuidance
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
 
                 LazyVGrid(
-                    columns: [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)],
-                    spacing: 2
+                    columns: [GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3)],
+                    spacing: 3
                 ) {
-                    ForEach(group.assets, id: \.localIdentifier) { asset in
-                        photoCell(asset: asset)
+                    ForEach(Array(group.assets.enumerated()), id: \.element.localIdentifier) { index, asset in
+                        photoCell(asset: asset, index: index)
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
             }
         }
-        .background(Color.black.ignoresSafeArea())
+        .background(Color.berryBlack.ignoresSafeArea())
         .navigationTitle("Group \(groupIndex + 1) of \(totalGroups)")
         .navigationBarTitleDisplayMode(.inline)
+        // Dark-native translucent chrome over the grid; needs no global
+        // appearance because every screen owns its own toolbar now.
+        .toolbarBackground(Color.black.opacity(0.001), for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 4) {
                 if let deleteError {
                     Text(deleteError)
                         .font(.duckCaption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Color.danger)
                         .padding(.horizontal)
                 }
 
@@ -83,11 +91,14 @@ struct PhotoGroupDetailView: View {
 
                 DuckBottomActionBar(
                     summary: actionSummary,
-                    primaryLabel: isDeleting ? "Moving…" : "Move Selected",
+                    primaryLabel: isDeleting
+                        ? "Moving…"
+                        : (purchaseManager.isPurchased ? "Delete Selected" : "Delete Selected — Pro"),
                     primaryEnabled: !deleteSet.isEmpty
                         && deleteSet.count < group.assets.count
                         && !isDeleting,
                     isPaid: !purchaseManager.isPurchased,
+                    isDark: true,
                     onPrimary: { Task { await deleteSelected() } },
                     onShowPaywall: { showPaywall = true }
                 )
@@ -126,29 +137,54 @@ struct PhotoGroupDetailView: View {
     // MARK: - Photo cell
 
     @ViewBuilder
-    private func photoCell(asset: PHAsset) -> some View {
+    private func photoCell(asset: PHAsset, index: Int) -> some View {
         let inDelete = deleteSet.contains(asset.localIdentifier)
 
         PhotoGroupAssetCell(
             asset: asset,
+            index: index,
+            totalCount: group.assets.count,
             estimatedFileSize: fileSizes[asset.localIdentifier],
             isSelectedForDeletion: inDelete,
             isRecommendedKeeper: asset.localIdentifier == keeperID
         ) {
-            deleteError = nil
-            if deleteSet.contains(asset.localIdentifier) {
-                deleteSet.remove(asset.localIdentifier)
-            } else {
-                let proposedSelection = deleteSet.union([asset.localIdentifier])
-                guard proposedSelection.count < group.assets.count else {
-                    deleteError = PhotoDeletionGuardrailError.wouldDeleteEntireGroup.localizedDescription
-                    return
-                }
-                deleteSet = proposedSelection
-            }
+            toggleSelection(for: asset)
         } onPreview: {
             previewAssetID = asset.localIdentifier
         }
+    }
+
+    private func toggleSelection(for asset: PHAsset) {
+        deleteError = nil
+
+        // The keeper guardrail, made visible: the recommended keeper cannot
+        // be marked for deletion from the grid.
+        guard asset.localIdentifier != keeperID else {
+            deleteError = "The recommended keeper is protected from deletion."
+            DuckHaptics.rigid()
+            UIAccessibility.post(notification: .announcement, argument: "Keeper is protected from deletion")
+            return
+        }
+
+        let nowSelected: Bool
+        if deleteSet.contains(asset.localIdentifier) {
+            deleteSet.remove(asset.localIdentifier)
+            nowSelected = false
+        } else {
+            let proposedSelection = deleteSet.union([asset.localIdentifier])
+            guard proposedSelection.count < group.assets.count else {
+                deleteError = PhotoDeletionGuardrailError.wouldDeleteEntireGroup.localizedDescription
+                return
+            }
+            deleteSet = proposedSelection
+            nowSelected = true
+        }
+
+        DuckHaptics.selection()
+        UIAccessibility.post(
+            notification: .announcement,
+            argument: nowSelected ? "Marked for deletion" : "Kept"
+        )
     }
 
     private var previewPresented: Binding<Bool> {
@@ -231,10 +267,11 @@ struct PhotoGroupDetailView: View {
 
     @ViewBuilder
     private var reviewGuidance: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(group.recommendedAction == .keepBestTrashRest ? "High-confidence cleanup" : "Review together")
-                .font(.duckCaption.weight(.semibold))
-                .foregroundStyle(group.isAutoCleanEligible ? Color.green : Color.duckRose)
+        VStack(alignment: .leading, spacing: 6) {
+            StatusBadge(
+                title: group.recommendedAction == .keepBestTrashRest ? "High-confidence cleanup" : "Review together",
+                accent: group.isAutoCleanEligible ? .success : .textSecondary
+            )
 
             if let reason = group.reasons.first {
                 Text(reason)
@@ -250,6 +287,8 @@ struct PhotoGroupDetailView: View {
 
 private struct PhotoGroupAssetCell: View {
     let asset: PHAsset
+    let index: Int
+    let totalCount: Int
     let estimatedFileSize: Int64?
     let isSelectedForDeletion: Bool
     let isRecommendedKeeper: Bool
@@ -279,7 +318,7 @@ private struct PhotoGroupAssetCell: View {
                     .clipped()
 
                     if isSelectedForDeletion {
-                        Color.red.opacity(0.35)
+                        Color.danger.opacity(0.38)
                     }
 
                     LinearGradient(
@@ -293,12 +332,15 @@ private struct PhotoGroupAssetCell: View {
                         Text(fileSizeLabel)
                             .font(.duckLabel)
                             .foregroundStyle(.white.opacity(0.9))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
 
                         Spacer()
 
                         Image(systemName: isSelectedForDeletion ? "xmark.circle.fill" : "checkmark.circle.fill")
-                            .font(.duckHeading)
-                            .foregroundStyle(isSelectedForDeletion ? Color.red : Color.green)
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, isSelectedForDeletion ? Color.danger : Color.success)
+                            .font(.title2)   // filled 22pt selection circle
                             .shadow(radius: 2)
                     }
                     .padding(.horizontal, 8)
@@ -318,16 +360,30 @@ private struct PhotoGroupAssetCell: View {
         .buttonStyle(.plain)
         .aspectRatio(1, contentMode: .fit)
         .clipped()
+        .clipShape(RoundedRectangle(cornerRadius: DuckRadius.s, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: DuckRadius.s, style: .continuous)
+                .stroke(
+                    isSelectedForDeletion
+                        ? Color.danger
+                        : (isRecommendedKeeper ? Color.success : Color.white.opacity(0.12)),
+                    lineWidth: isSelectedForDeletion || isRecommendedKeeper ? 3 : 1
+                )
+        }
         .overlay(alignment: .topLeading) {
             if isRecommendedKeeper {
-                Label("Best", systemImage: "star.fill")
-                    .font(.duckMicro.weight(.bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(Color.duckPink, in: Capsule())
-                    .padding(7)
-                    .accessibilityHidden(true)
+                HStack(spacing: 3) {
+                    Image(systemName: "star.fill")
+                        .font(.duckMicro.weight(.bold))
+                    Text("Keeper")
+                        .font(.duckLabel)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.success, in: Capsule())
+                .padding(6)
+                .accessibilityHidden(true)
             }
         }
         .overlay(alignment: .topTrailing) {
@@ -335,16 +391,25 @@ private struct PhotoGroupAssetCell: View {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
                     .font(.duckCaption.weight(.bold))
                     .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 32, height: 32)
                     .background(.black.opacity(0.55), in: Circle())
             }
+            .frame(width: 44, height: 44)
             .buttonStyle(.plain)
             .padding(4)
             .accessibilityLabel("Open fullscreen comparison")
         }
-        .accessibilityLabel(isRecommendedKeeper ? "Photo, recommended keeper" : "Photo")
-        .accessibilityValue(isSelectedForDeletion ? "Selected for deletion" : "Kept")
-        .accessibilityHint(isSelectedForDeletion ? "Double tap to keep this photo" : "Double tap to mark this photo for deletion")
+        .accessibilityLabel(
+            isRecommendedKeeper
+                ? "Photo \(index + 1) of \(totalCount), \(fileSizeLabel), recommended keeper"
+                : "Photo \(index + 1) of \(totalCount), \(fileSizeLabel)"
+        )
+        .accessibilityValue(isSelectedForDeletion ? "Marked for deletion" : "Kept")
+        .accessibilityHint(
+            isRecommendedKeeper
+                ? "The keeper is protected from deletion"
+                : (isSelectedForDeletion ? "Double tap to keep this photo" : "Double tap to mark this photo for deletion")
+        )
         .accessibilityAddTraits(isSelectedForDeletion ? .isSelected : [])
     }
 
@@ -499,7 +564,7 @@ private struct CompareThumbnail: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(isSelected ? Color.duckPink : Color.white.opacity(0.25), lineWidth: isSelected ? 3 : 1)
+                .stroke(isSelected ? Color.accentPrimary : Color.white.opacity(0.25), lineWidth: isSelected ? 3 : 1)
         )
         .overlay(alignment: .topTrailing) {
             if isKeeper {
@@ -507,7 +572,7 @@ private struct CompareThumbnail: View {
                     .font(.duckMicro.weight(.bold))
                     .foregroundStyle(.white)
                     .padding(5)
-                    .background(Color.duckPink, in: Circle())
+                    .background(Color.accentPrimary, in: Circle())
                     .padding(4)
             }
         }

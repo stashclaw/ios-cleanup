@@ -3,11 +3,13 @@ import SwiftUI
 /// Sticky bottom action bar used across photo/file detail views.
 /// Shows a summary label on the left and a pink pill CTA on the right.
 /// When `isPaid` is true the enabled button shows a lock and opens the paywall.
+/// `isDark` matches the berry-black chrome of the group detail grid.
 struct DuckBottomActionBar: View {
     let summary: String
     let primaryLabel: String
     let primaryEnabled: Bool
     let isPaid: Bool
+    var isDark: Bool = false
     let onPrimary: () -> Void
     let onShowPaywall: () -> Void
 
@@ -15,7 +17,7 @@ struct DuckBottomActionBar: View {
         HStack(spacing: 12) {
             Text(summary)
                 .font(.duckCaption)
-                .foregroundStyle(Color.duckRose)
+                .foregroundStyle(isDark ? Color.white.opacity(0.75) : Color.textSecondary)
                 .lineLimit(1)
 
             Spacer()
@@ -38,7 +40,7 @@ struct DuckBottomActionBar: View {
                 .frame(minHeight: 44)
                 .padding(.horizontal, 20)
                 .background(
-                    primaryEnabled ? Color.duckPink : Color.duckSoftPink,
+                    primaryEnabled ? AnyShapeStyle(LinearGradient.duckPrimaryCTA) : AnyShapeStyle(Color.decorPink),
                     in: Capsule()
                 )
             }
@@ -47,9 +49,9 @@ struct DuckBottomActionBar: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
-        .background(Color.duckBlush)
+        .background(isDark ? Color.berryBlack : Color.backgroundBlush)
         .overlay(alignment: .top) {
-            Divider().background(Color.duckSoftPink)
+            Divider().background(isDark ? Color.white.opacity(0.12) : Color.decorPink)
         }
     }
 }

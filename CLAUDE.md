@@ -77,6 +77,15 @@ The shared `iOSCleanup` scheme attaches `iOSCleanup/Configuration/iOSCleanup.sto
 - Tests cover clustering, split/chaining prevention, deletion guardrails, ML schemas and persistence, file sizing, video failure paths, and cancellation. Real-device PhotoKit behavior still needs device QA.
 - **Build simulator**: `iPhone 17 Pro` (iPhone 16 not available on this machine).
 
+## Design tokens (polish pass, phase 1)
+
+- Colors: use the semantic statics in `Utilities/DuckTheme.swift` (`.backgroundBlush`, `.surface`, `.surfaceElevated`, `.textPrimary`, `.textSecondary`, `.accentPrimary`, `.accentDeep`, `.success`, `.danger`, `.warning`, `.mascotYellow`, `.decorPink`, `.berryBlack`). They map to the `Duck*` colorsets; the generated `Color.duck*` symbols are a deprecated layer still used by not-yet-polished screens.
+- The accent token is `Color.accentPrimary`. `Color.accent` is Xcode's generated symbol for `AccentColor.colorset` (same value, #F85FA3) — never redeclare `accent`.
+- Type: Bricolage Grotesque (display) + Manrope (text) behind the `duck*` Font tokens. Never `.font(.system(size:))` under `Views/` — enforced by `DesignLintTests`.
+- `DuckRadius` s/m/l, `DuckSpace`, `DuckHaptics`. Primary CTAs use `LinearGradient.duckPrimaryCTA` + `.duckPrimaryGlow()` (the only colored glow). Cards use `DuckCard` / `.duckCardElevation()` — hairline stroke + tight shadow, no floaty drop shadows. Toasts render through `DuckToast`.
+- Light mode is deliberately locked in `ContentView`; every screen owns its own toolbar chrome (no global UIKit appearance).
+- Duck Mode, Files/compression, Paywall, Onboarding, and scan-celebration/auto-clean moments await a later design handoff — do not invent their polish.
+
 ## ML Training Pipeline
 
 ### On-device data collection (automatic)
@@ -104,6 +113,6 @@ xcrun coremlcompiler compile trained-models/PhotoDuckGroupAction.mlmodel .
 Drop `.mlmodelc` directories into Xcode project. On next launch, `MLEnhancedKeeperRankingService` picks them up automatically.
 
 ### Storage budget
-- Embedding per photo: 512 bytes (128 floats × 4 bytes)
+- Embedding per photo: 8,192 bytes (2,048 floats x 4 bytes)
 - Metadata per photo: ~200 bytes
-- 50K photos ≈ 35 MB. 10GB budget = ~14M photos of headroom.
+- 50K photos is roughly 400 MB of raw embeddings before database overhead.

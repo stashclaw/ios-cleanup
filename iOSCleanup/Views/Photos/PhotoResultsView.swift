@@ -9,11 +9,11 @@ struct PhotoResultsView: View {
     @State private var hiddenGroupIDs: Set<UUID> = []
     @State private var deferredGroupIDs: [UUID] = []
     @State private var showPaywall = false
-    @State private var showSwipeMode = false
     @State private var showAutoCleanAllConfirm = false
     @State private var deletionError: String?
     @State private var activeFilter: FilterPill = .all
     @State private var reviewLaterToastVisible = false
+    @State private var reviewLaterDismissToken = 0
 
     enum FilterPill: String, CaseIterable {
         case all = "All"
@@ -84,16 +84,15 @@ struct PhotoResultsView: View {
                     if reviewLaterToastVisible {
                         VStack {
                             Spacer()
-                            Text("Moved to end of list")
-                                .font(.duckCaption.weight(.semibold))
-                                .foregroundStyle(Color.white)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 10)
-                                .background(Color.duckBerry.opacity(0.9), in: Capsule())
-                                .padding(.bottom, 24)
+                            DuckToast(
+                                style: .info,
+                                message: "Moved to end of list",
+                                actionLabel: "Undo",
+                                onAction: { undoReviewLater() }
+                            )
+                            .padding(.bottom, 8)
                         }
                         .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .allowsHitTesting(false)
                     }
                 }
             }
@@ -101,24 +100,21 @@ struct PhotoResultsView: View {
         .navigationTitle("Similar Photos")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                Button("Duck Mode") { showSwipeMode = true }
-                    .font(.duckCaption)
-                    .foregroundStyle(Color.duckPink)
-
+            // One toolbar action. Duck Mode lives on the dashboard hero CTA,
+            // not up here. Lock only while the purchase is missing.
+            ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
                     guard purchaseManager.isPurchased else { showPaywall = true; return }
                     showAutoCleanAllConfirm = true
                 } label: {
-                    HStack(spacing: 4) {
-                        if !purchaseManager.isPurchased {
-                            Image(systemName: "lock.fill")
-                        }
+                    if purchaseManager.isPurchased {
                         Text("Auto-clean all")
+                    } else {
+                        Label("Auto-clean all", systemImage: "lock.fill")
                     }
                 }
-                .font(.duckCaption)
-                .foregroundStyle(Color.duckRose)
+                .font(.duckCaption.weight(.semibold))
+                .foregroundStyle(Color.textSecondary)
                 .disabled(autoCleanEligibleGroups.isEmpty)
                 .accessibilityHint(purchaseManager.isPurchased ? "" : "Requires PhotoDuck unlock")
             }
@@ -139,12 +135,6 @@ struct PhotoResultsView: View {
             .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showPaywall) { PaywallView().environmentObject(purchaseManager) }
-        .fullScreenCover(isPresented: $showSwipeMode) {
-            SwipeModeView(groups: visibleGroups)
-                .environmentObject(purchaseManager)
-                .environmentObject(deletionManager)
-                .deletionUndoToast()
-        }
         .onReceive(NotificationCenter.default.publisher(for: .purchaseDidSucceed)) { _ in
             showPaywall = false
         }
@@ -196,6 +186,34 @@ struct PhotoResultsView: View {
         }
     }
 
+    // MARK: - Review later
+
+    private func deferGroupForReviewLater(_ group: PhotoGroup) {
+        withAnimation(.duckSpring) {
+            deferredGroupIDs.removeAll { $0 == group.id }
+            deferredGroupIDs.append(group.id)
+        }
+        withAnimation { reviewLaterToastVisible = true }
+        reviewLaterDismissToken += 1
+        let token = reviewLaterDismissToken
+        Task {
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            guard token == reviewLaterDismissToken else { return }
+            withAnimation { reviewLaterToastVisible = false }
+        }
+    }
+
+    private func undoReviewLater() {
+        DuckHaptics.rigid()
+        reviewLaterDismissToken += 1
+        withAnimation(.duckSpring) {
+            if let lastDeferred = deferredGroupIDs.last {
+                deferredGroupIDs.removeAll { $0 == lastDeferred }
+            }
+            reviewLaterToastVisible = false
+        }
+    }
+
     private func restoreGroupsAffectedByUndo() {
         let undoneAssetIDs = deletionManager.lastUndoneAssetIDs
         guard !undoneAssetIDs.isEmpty else { return }
@@ -222,7 +240,7 @@ struct PhotoResultsView: View {
                 if let error = deletionError {
                     Text(error)
                         .font(.duckCaption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Color.danger)
                         .padding(.horizontal)
                 }
                 groupList
@@ -230,7 +248,7 @@ struct PhotoResultsView: View {
             .padding(.horizontal)
             .padding(.vertical, 12)
         }
-        .background(Color.duckBlush.ignoresSafeArea())
+        .background(Color.backgroundBlush.ignoresSafeArea())
     }
 
     // MARK: - Bulk progress overlay
@@ -243,9 +261,9 @@ struct PhotoResultsView: View {
                 VStack(spacing: 12) {
                     Text("Moving to Recently Deleted...")
                         .font(.duckTitle)
-                        .foregroundStyle(Color.duckBerry)
+                        .foregroundStyle(Color.textPrimary)
 
-                    DuckProgressBar(progress: deletionManager.deletionProgress, color: .duckPink)
+                    DuckProgressBar(progress: deletionManager.deletionProgress, color: .accentPrimary)
                         .frame(height: 12)
 
                     VStack(spacing: 6) {
@@ -253,22 +271,22 @@ struct PhotoResultsView: View {
                             "\(ByteCountFormatter.string(fromByteCount: deletionManager.bulkProcessedBytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: deletionManager.bulkTotalBytes, countStyle: .file)) selected"
                         )
                         .font(.duckBody)
-                        .foregroundStyle(Color.duckRose)
+                        .foregroundStyle(Color.textSecondary)
                         .multilineTextAlignment(.center)
 
                         Text("\(deletionManager.bulkProcessedCount) of \(deletionManager.bulkTotalCount) photos")
                             .font(.duckCaption)
-                            .foregroundStyle(Color.duckBerry)
+                            .foregroundStyle(Color.textPrimary)
 
                         Text("Potential space is permanently reclaimed after Recently Deleted is emptied.")
                             .font(.duckCaption)
-                            .foregroundStyle(Color.duckRose)
+                            .foregroundStyle(Color.textSecondary)
                             .multilineTextAlignment(.center)
                     }
                 }
                 .padding(28)
                 .frame(maxWidth: .infinity)
-                .background(Color.duckCream, in: RoundedRectangle(cornerRadius: 22))
+                .background(Color.surface, in: RoundedRectangle(cornerRadius: DuckRadius.l, style: .continuous))
             }
             .padding(.horizontal, 40)
         }
@@ -281,7 +299,7 @@ struct PhotoResultsView: View {
             title: "Review progress",
             value: "\(filteredGroups.count) / \(groups.count) groups shown",
             detail: "\(currentReviewCount) photos in current review set · \(currentDeletableCount) move candidates",
-            accent: .duckPink,
+            accent: .accentPrimary,
             progress: groups.isEmpty ? 0 : Double(filteredGroups.count) / Double(groups.count)
         ) {
             PhotoDuckMascotArt(size: 72)
@@ -289,32 +307,43 @@ struct PhotoResultsView: View {
     }
 
     private var metricRow: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-            StatPill(title: "Groups", value: "\(filteredGroups.count)", accent: .duckPink, icon: "photo.stack")
-            StatPill(title: "Current set", value: "\(currentReviewCount) photos", accent: .duckOrange, icon: "photo.stack")
-            StatPill(title: "Potential space", value: ByteCountFormatter.string(fromByteCount: reclaimableBytes, countStyle: .file), accent: .duckRose, icon: "sparkles")
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                StatPill(title: "Groups", value: "\(filteredGroups.count)", accent: .accentPrimary, icon: "photo.stack")
+                StatPill(title: "Current set", value: "\(currentReviewCount) photos", accent: .warning, icon: "photo.stack")
+            }
+            StatPill(title: "Potential space", value: ByteCountFormatter.string(fromByteCount: reclaimableBytes, countStyle: .file), accent: .textSecondary, icon: "sparkles")
         }
     }
 
     // MARK: - Filter pills
 
+    private func count(for pill: FilterPill) -> Int {
+        switch pill {
+        case .all:           return visibleGroups.count
+        case .nearDuplicate: return visibleGroups.filter { $0.reason == .nearDuplicate }.count
+        case .similar:       return visibleGroups.filter { $0.reason == .visuallySimilar }.count
+        case .burst:         return visibleGroups.filter { $0.reason == .burstShot }.count
+        }
+    }
+
     private var filterPills: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 ForEach(FilterPill.allCases, id: \.self) { pill in
-                    Button(pill.rawValue) {
+                    Button("\(pill.rawValue) \(count(for: pill))") {
                         activeFilter = pill
                     }
-                    .font(.duckCaption)
+                    .font(.duckCaption.weight(.semibold))
+                    .monospacedDigit()
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .frame(minHeight: 44)
+                    .padding(.vertical, 13)   // ≥44pt target
                     .background(
-                        activeFilter == pill ? Color.duckPink : Color.duckCream,
+                        activeFilter == pill ? Color.accentPrimary : Color.surface,
                         in: Capsule()
                     )
-                    .foregroundStyle(activeFilter == pill ? Color.white : Color.duckRose)
-                    .accessibilityAddTraits(activeFilter == pill ? .isSelected : [])
+                    .foregroundStyle(activeFilter == pill ? Color.white : Color.textSecondary)
+                    .accessibilityAddTraits(activeFilter == pill ? [.isButton, .isSelected] : .isButton)
                 }
             }
             .padding(.horizontal, 2)
@@ -378,36 +407,28 @@ struct PhotoResultsView: View {
                                         .padding(.horizontal, 14)
                                         .padding(.vertical, 8)
                                         .frame(minHeight: 44)
-                                        .background(Color.duckPink, in: Capsule())
+                                        .background(LinearGradient.duckPrimaryCTA, in: Capsule())
                                 }
                             } else {
                                 Text("Review only")
                                     .font(.duckCaption.weight(.semibold))
-                                    .foregroundStyle(Color.duckRose)
+                                    .foregroundStyle(Color.textSecondary)
                                     .padding(.horizontal, 14)
                                     .padding(.vertical, 8)
                                     .frame(minHeight: 44)
-                                    .background(Color.duckCream, in: Capsule())
+                                    .background(Color.surface, in: Capsule())
                             }
 
                             Button {
-                                withAnimation(.duckSpring) {
-                                    deferredGroupIDs.removeAll { $0 == group.id }
-                                    deferredGroupIDs.append(group.id)
-                                }
-                                withAnimation { reviewLaterToastVisible = true }
-                                Task {
-                                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                                    withAnimation { reviewLaterToastVisible = false }
-                                }
+                                deferGroupForReviewLater(group)
                             } label: {
                                 Text("Review Later")
                                     .font(.duckCaption.weight(.semibold))
-                                    .foregroundStyle(Color.duckRose)
+                                    .foregroundStyle(Color.textSecondary)
                                     .padding(.horizontal, 14)
                                     .padding(.vertical, 8)
                                     .frame(minHeight: 44)
-                                    .background(Color.duckCream, in: Capsule())
+                                    .background(Color.surface, in: Capsule())
                             }
                         }
                     }
@@ -440,13 +461,13 @@ private struct AutoCleanConfirmationSheet: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Review Auto-clean")
                         .font(.duckTitle)
-                        .foregroundStyle(Color.duckBerry)
+                        .foregroundStyle(Color.textPrimary)
                     Text("\(assets.count) high-confidence duplicate\(assets.count == 1 ? "" : "s") selected")
                         .font(.duckBody)
-                        .foregroundStyle(Color.duckRose)
+                        .foregroundStyle(Color.textSecondary)
                     Text("\(potentialBytes.formattedBytes) potential space")
                         .font(.duckCaption.weight(.semibold))
-                        .foregroundStyle(Color.duckPink)
+                        .foregroundStyle(Color.accentPrimary)
                 }
 
                 LazyVGrid(
@@ -460,20 +481,20 @@ private struct AutoCleanConfirmationSheet: View {
 
                 Text("Recommended keepers are excluded. These photos move to Recently Deleted, and space is permanently reclaimed only after that album is emptied.")
                     .font(.duckCaption)
-                    .foregroundStyle(Color.duckRose)
+                    .foregroundStyle(Color.textSecondary)
 
                 DuckPrimaryButton(title: "Move \(assets.count) to Recently Deleted") {
                     onConfirm()
                 }
                 .disabled(assets.isEmpty)
 
-                DuckOutlineButton(title: "Cancel", color: .duckRose) {
+                DuckOutlineButton(title: "Cancel", color: .textSecondary) {
                     onCancel()
                 }
             }
             .padding(20)
         }
-        .background(Color.duckBlush.ignoresSafeArea())
+        .background(Color.backgroundBlush.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -489,7 +510,7 @@ private struct AutoCleanDeleteThumbnail: View {
                     .resizable()
                     .scaledToFill()
             } else {
-                Color.duckSoftPink.opacity(0.35)
+                Color.decorPink.opacity(0.35)
                     .overlay(ProgressView().tint(.white))
             }
         }
@@ -500,7 +521,7 @@ private struct AutoCleanDeleteThumbnail: View {
                 .font(.duckMicro.weight(.bold))
                 .foregroundStyle(.white)
                 .padding(6)
-                .background(Color.duckDanger, in: Circle())
+                .background(Color.danger, in: Circle())
                 .padding(5)
         }
         .accessibilityLabel("Selected for Recently Deleted")
@@ -520,65 +541,102 @@ private struct AutoCleanDeleteThumbnail: View {
 
 private struct GroupOverviewCard: View {
     let group: PhotoGroup
-    @State private var thumbnails: [UIImage?] = [nil, nil, nil]
+    @State private var thumbnails: [String: UIImage] = [:]
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        VStack(alignment: .leading, spacing: 12) {
             thumbnailRow
 
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Text(reasonLabel)
-                        .font(.duckBody)
-                        .foregroundStyle(Color.duckBerry)
+            HStack(spacing: 8) {
+                Text(reasonLabel)
+                    .font(.duckBody)
+                    .foregroundStyle(Color.textPrimary)
 
-                    StatusBadge(title: confidenceLabel, accent: confidenceColor)
-                }
+                StatusBadge(title: confidenceLabel, accent: confidenceColor)
 
+                Spacer(minLength: 8)
+
+                Image(systemName: "chevron.right")
+                    .font(.duckCaption.weight(.semibold))
+                    .foregroundStyle(Color.decorPink)
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("\(group.photoCount) photos")
                     .font(.duckCaption)
-                    .foregroundStyle(Color.duckRose)
+                    .foregroundStyle(Color.textSecondary)
+
+                Spacer(minLength: 8)
 
                 Text(actionLabel)
                     .font(.duckCaption.weight(.semibold))
-                    .foregroundStyle(Color.duckPink)
-
-                if let reason = group.reasons.first {
-                    Text(reason)
-                        .font(.duckCaption)
-                        .foregroundStyle(Color.duckRose.opacity(0.8))
-                        .lineLimit(1)
-                }
+                    .foregroundStyle(Color.accentPrimary)
+                    .multilineTextAlignment(.trailing)
             }
 
-            Spacer()
-
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundStyle(Color.duckSoftPink)
+            if let reason = group.reasons.first {
+                Text(reason)
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.textSecondary.opacity(0.8))
+                    .lineLimit(2)
+            }
         }
-        .task { await loadThumbnails() }
+        .task(id: group.id) { await loadThumbnails() }
     }
 
     private var thumbnailRow: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<3, id: \.self) { i in
-                Group {
-                    if i < group.assets.count, let img = thumbnails[i] {
-                        Image(uiImage: img)
+        HStack(spacing: 6) {
+            ForEach(Array(previewAssets.enumerated()), id: \.element.localIdentifier) { index, asset in
+                ZStack {
+                    if let image = thumbnails[asset.localIdentifier] {
+                        Image(uiImage: image)
                             .resizable()
                             .scaledToFill()
-                    } else if i < group.assets.count {
-                        Color.duckSoftPink.opacity(0.4)
-                            .overlay(ProgressView().scaleEffect(0.6).tint(.white))
                     } else {
-                        Color.duckSoftPink.opacity(0.15)
+                        Color.decorPink.opacity(0.4)
+                            .overlay(ProgressView().scaleEffect(0.6).tint(.white))
                     }
                 }
-                .frame(width: 72, height: 72)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .frame(maxWidth: .infinity)
+                .frame(height: 104)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: DuckRadius.s, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: DuckRadius.s, style: .continuous)
+                        .stroke(Color.decorPink.opacity(0.55), lineWidth: 1)
+                )
+                .overlay(alignment: .topLeading) {
+                    if asset.localIdentifier == group.keeperAssetID {
+                        Image(systemName: "star.fill")
+                            .font(.duckMicro.weight(.bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 26, height: 26)
+                            .background(Color.accentPrimary, in: Circle())
+                            .padding(6)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if index == previewAssets.count - 1, group.assets.count > previewAssets.count {
+                        Text("+\(group.assets.count - previewAssets.count)")
+                            .font(.duckMicro.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 5)
+                            .background(Color.black.opacity(0.62), in: Capsule())
+                            .padding(6)
+                    }
+                }
             }
         }
+    }
+
+    private var previewAssets: [PHAsset] {
+        let keeper = group.keeperAssetID.flatMap { keeperID in
+            group.assets.first { $0.localIdentifier == keeperID }
+        }
+        let remaining = group.assets.filter { $0.localIdentifier != keeper?.localIdentifier }
+        return Array(([keeper].compactMap { $0 } + remaining).prefix(3))
     }
 
     private var reasonLabel: String {
@@ -597,17 +655,19 @@ private struct GroupOverviewCard: View {
         }
     }
 
+    // High confidence reads as a trust signal, not an ad — success green,
+    // never pink. Anything needing review is warning amber.
     private var confidenceColor: Color {
         switch group.groupConfidence {
-        case .high:   return .duckPink
-        case .medium: return .duckOrange
-        case .low:    return .duckRose
+        case .high:   return .success
+        case .medium: return .warning
+        case .low:    return .warning
         }
     }
 
     private var actionLabel: String {
         if group.isAutoCleanEligible {
-            return "\(ByteCountFormatter.string(fromByteCount: group.reclaimableBytes, countStyle: .file)) potential space"
+            return "Save \(ByteCountFormatter.string(fromByteCount: group.reclaimableBytes, countStyle: .file))"
         }
         if !group.blockerFlags.isEmpty {
             return "Review only · \(group.blockerFlags.count) safeguard\(group.blockerFlags.count == 1 ? "" : "s")"
@@ -616,14 +676,16 @@ private struct GroupOverviewCard: View {
     }
 
     private func loadThumbnails() async {
-        let assets = group.assets.prefix(3)
-        var loaded = [UIImage?](repeating: nil, count: 3)
-        await withTaskGroup(of: (Int, UIImage?).self) { tg in
-            for (i, asset) in assets.enumerated() {
-                tg.addTask { (i, await requestThumb(asset)) }
+        let assets = previewAssets
+        var loaded: [String: UIImage] = [:]
+        await withTaskGroup(of: (String, UIImage?).self) { taskGroup in
+            for asset in assets {
+                taskGroup.addTask {
+                    (asset.localIdentifier, await requestThumb(asset))
+                }
             }
-            for await (i, img) in tg {
-                loaded[i] = img
+            for await (assetID, image) in taskGroup {
+                loaded[assetID] = image
             }
         }
         thumbnails = loaded

@@ -158,9 +158,13 @@ struct ConservativePairSimilarityClassifier: PairSimilarityClassifying {
             && !signals.aspectRatioMismatch
             && !signals.dimensionMismatch
 
-        let visualEligible = visualEvidenceAvailable
+        let visualSessionEligible = visualEvidenceAvailable
             && featureDistance <= SimilarityThresholds.maxVisualSimilarFeatureDistance
             && timeDelta <= SimilarityThresholds.visualSessionWindowSeconds
+        let extendedVisualEligible = visualEvidenceAvailable
+            && featureDistance <= SimilarityThresholds.maxExtendedVisualFeatureDistance
+            && timeDelta <= SimilarityThresholds.extendedVisualSessionWindowSeconds
+        let visualEligible = visualSessionEligible || extendedVisualEligible
 
         let screenshotDuplicateEligible = signals.bothScreenshots
             && visualEvidenceAvailable
@@ -214,7 +218,7 @@ struct ConservativePairSimilarityClassifier: PairSimilarityClassifying {
 
         if !eligible {
             provisionalBucket = .notSimilar
-            if similarityScore < SimilarityThresholds.visualClusterFloor {
+            if similarityScore < SimilarityThresholds.visualReviewClusterFloor {
                 reasons.append("Low visual evidence")
             }
             if hardBlockers.isEmpty {
@@ -234,7 +238,7 @@ struct ConservativePairSimilarityClassifier: PairSimilarityClassifying {
 
     private func visualScore(for featureDistance: Double) -> Double {
         guard featureDistance.isFinite else { return 0 }
-        let band = max(SimilarityThresholds.maxVisualSimilarFeatureDistance * 2.0, 0.001)
+        let band = max(SimilarityThresholds.featureScoreNormalizationDistance, 0.001)
         let normalized = max(0, 1 - min(featureDistance / band, 1))
         return normalized
     }
@@ -405,6 +409,9 @@ struct ConservativeSimilarityClusterClassifier: SimilarityClusterClassifying {
             }
 
         if assetCount > 2 && minPairScore < SimilarityThresholds.splitConsistencyFloor && !sameBurst {
+            // A broader review-only pair band must not permit transitive
+            // A~B~C chains when the weakest pair is not a coherent match.
+            softBlockers.insert(.contentDivergence)
             return makeResult(
                 bucket: .notSimilar,
                 confidence: .low,
@@ -475,11 +482,16 @@ struct ConservativeSimilarityClusterClassifier: SimilarityClusterClassifying {
                 action = .reviewTogetherOnly
             }
             reasons.append("Near-duplicate match")
-        } else if averagePairScore >= SimilarityThresholds.visualClusterFloor
-            && maxTimeSpan <= SimilarityThresholds.visualSessionWindowSeconds
+        } else if averagePairScore >= (
+            maxTimeSpan > SimilarityThresholds.visualSessionWindowSeconds
+                ? SimilarityThresholds.timeGapVisualScoreFloor
+                : SimilarityThresholds.visualReviewClusterFloor
+        )
+            && maxTimeSpan <= SimilarityThresholds.extendedVisualSessionWindowSeconds
         {
             bucket = .visuallySimilar
-            confidence = averagePairScore >= SimilarityThresholds.visualClusterFloor
+            confidence = maxTimeSpan <= SimilarityThresholds.visualSessionWindowSeconds
+                && averagePairScore >= SimilarityThresholds.visualClusterFloor
                 ? .medium
                 : .low
             action = .reviewTogetherOnly
@@ -876,6 +888,7 @@ private func sharedTimeScore(for delta: Double) -> Double {
     if delta <= SimilarityThresholds.burstWindowSeconds { return 0.18 }
     if delta <= SimilarityThresholds.nearDuplicateWindowSeconds { return 0.15 }
     if delta <= SimilarityThresholds.visualSessionWindowSeconds { return 0.08 }
+    if delta <= SimilarityThresholds.extendedVisualSessionWindowSeconds { return 0.03 }
     return 0
 }
 

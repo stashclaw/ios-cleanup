@@ -50,7 +50,7 @@ struct PhotoDuckBrandLockup: View {
             PhotoDuckAssetImage(assetNames: ["photoduck_wordmark"]) {
                 Text("PhotoDuck")
                     .font(.duckDisplay(wordmarkHeight * 0.78))
-                    .foregroundStyle(Color.duckPink)
+                    .foregroundStyle(Color.accentPrimary)
             }
             .frame(width: wordmarkHeight * 3.15, height: wordmarkHeight)
         }
@@ -80,7 +80,7 @@ struct PhotoDuckMascotFallback: View {
             Circle()
                 .fill(
                     RadialGradient(
-                        colors: [Color.duckYellow, Color.duckPink.opacity(0.85)],
+                        colors: [Color.mascotYellow, Color.accentPrimary.opacity(0.85)],
                         center: .topLeading,
                         startRadius: 4,
                         endRadius: size * 0.8
@@ -95,7 +95,7 @@ struct PhotoDuckMascotFallback: View {
                 .frame(width: size * 0.14, height: size * 0.14)
                 .offset(x: size * 0.08, y: -size * 0.10)
             Capsule(style: .continuous)
-                .fill(Color.duckOrange)
+                .fill(Color.warning)
                 .frame(width: size * 0.34, height: size * 0.20)
                 .offset(x: size * 0.12, y: size * 0.10)
         }
@@ -110,8 +110,8 @@ struct DuckCard<Content: View>: View {
 
     var body: some View {
         content()
-            .background(Color.duckCream, in: RoundedRectangle(cornerRadius: 22))
-            .shadow(color: Color.duckPink.opacity(0.08), radius: 8, x: 0, y: 3)
+            .background(Color.surface, in: RoundedRectangle(cornerRadius: DuckRadius.l, style: .continuous))
+            .duckCardElevation()
     }
 }
 
@@ -128,15 +128,8 @@ struct DuckPrimaryButton: View {
                 .foregroundStyle(Color.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 15)
-                .background(
-                    LinearGradient(
-                        colors: [Color.duckPink, Color.duckRose],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    ),
-                    in: RoundedRectangle(cornerRadius: 50)
-                )
-                .shadow(color: Color.duckPink.opacity(0.35), radius: 12, x: 0, y: 4)
+                .background(LinearGradient.duckPrimaryCTA, in: Capsule(style: .continuous))
+                .duckPrimaryGlow()
         }
     }
 }
@@ -188,9 +181,9 @@ struct DuckSectionHeader: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.duckHeading)
-                .foregroundStyle(Color.duckBerry)
+                .foregroundStyle(Color.textPrimary)
             Rectangle()
-                .fill(Color.duckSoftPink)
+                .fill(Color.decorPink)
                 .frame(height: 1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -207,7 +200,7 @@ struct DuckProgressBar: View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.duckSoftPink)
+                    .fill(Color.decorPink)
                     .frame(height: 6)
                 RoundedRectangle(cornerRadius: 4)
                     .fill(color)
@@ -252,7 +245,7 @@ struct PrimaryMetricCard<Accessory: View>: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(title)
                             .font(.duckCaption)
-                            .foregroundStyle(Color.duckRose)
+                            .foregroundStyle(Color.textSecondary)
 
                         Text(value)
                             .font(.duckDisplay)
@@ -262,7 +255,7 @@ struct PrimaryMetricCard<Accessory: View>: View {
 
                         Text(detail)
                             .font(.duckCaption)
-                            .foregroundStyle(Color.duckBerry)
+                            .foregroundStyle(Color.textPrimary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
@@ -300,10 +293,10 @@ struct StatPill: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
                     .font(.duckLabel)
-                    .foregroundStyle(Color.duckRose)
+                    .foregroundStyle(Color.textSecondary)
                 Text(value)
                     .font(.duckCaption.weight(.semibold))
-                    .foregroundStyle(Color.duckBerry)
+                    .foregroundStyle(Color.textPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
@@ -312,7 +305,7 @@ struct StatPill: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color.duckCream, in: Capsule(style: .continuous))
+        .background(Color.surface, in: Capsule(style: .continuous))
         .overlay(
             Capsule(style: .continuous)
                 .stroke(accent.opacity(0.16), lineWidth: 1)
@@ -355,14 +348,14 @@ struct BestShotBadge: View {
         .background(
             LinearGradient(
                 colors: isRecommended
-                    ? [Color.duckPink, Color.duckOrange.opacity(0.9)]
-                    : [Color.duckOrange, Color.duckRose],
+                    ? [Color.accentPrimary, Color.warning.opacity(0.9)]
+                    : [Color.warning, Color.textSecondary],
                 startPoint: .leading,
                 endPoint: .trailing
             ),
             in: Capsule()
         )
-        .shadow(color: Color.duckPink.opacity(0.18), radius: 8, x: 0, y: 3)
+        .shadow(color: Color.accentPrimary.opacity(0.18), radius: 8, x: 0, y: 3)
         .accessibilityLabel(isRecommended ? "Recommended Keeper" : "Needs Review")
     }
 }

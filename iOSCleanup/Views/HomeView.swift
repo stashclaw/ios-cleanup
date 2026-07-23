@@ -30,6 +30,9 @@ struct HomeView: View {
                     if let warning = viewModel.persistenceWarningMessage {
                         persistenceWarning(warning)
                     }
+                    if viewModel.scanState == .failed {
+                        scanFailureBanner
+                    }
                     if viewModel.scanState == .completed, viewModel.unanalyzedPhotoCount > 0 {
                         iCloudAnalysisBanner
                     }
@@ -42,9 +45,10 @@ struct HomeView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 32)
             }
-            .background(Color.photoduckBlushBackground.ignoresSafeArea())
+            .background(Color.backgroundBlush.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
         }
         .sheet(isPresented: $showPaywall) {
@@ -125,11 +129,11 @@ struct HomeView: View {
                 Button { showPaywall = true } label: {
                     Label("Unlock", systemImage: "lock.fill")
                 }
-                    .font(.duckCaption)
-                    .foregroundStyle(Color.duckPink)
+                    .font(.duckCaption.weight(.semibold))
+                    .foregroundStyle(Color.accentPrimary)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .background(Color.duckCream, in: Capsule())
+                    .background(Color.surface, in: Capsule())
             }
         }
     }
@@ -151,11 +155,13 @@ struct HomeView: View {
     private var heroAccent: Color {
         switch viewModel.heroState {
         case .deepCleanPaused:
-            return .duckOrange
-        case .permissionRequired, .scanFailure:
-            return .duckRose
+            return .warning
+        case .permissionRequired:
+            return .warning
+        case .scanFailure:
+            return .danger
         default:
-            return .duckPink
+            return .accentPrimary
         }
     }
 
@@ -227,7 +233,8 @@ struct HomeView: View {
                     .foregroundStyle(.white.opacity(0.9))
             }
             .padding(16)
-            .background(Color.duckPink, in: RoundedRectangle(cornerRadius: 16))
+            .background(LinearGradient.duckPrimaryCTA, in: RoundedRectangle(cornerRadius: DuckRadius.m, style: .continuous))
+            .duckPrimaryGlow()
         }
     }
 
@@ -258,17 +265,17 @@ struct HomeView: View {
         DuckCard {
             HStack(spacing: 12) {
                 Image(systemName: viewModel.hasLimitedPhotoAccess ? "photo.badge.plus" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(viewModel.hasLimitedPhotoAccess ? Color.duckOrange : Color.duckRose)
+                    .foregroundStyle(viewModel.hasLimitedPhotoAccess ? Color.warning : Color.danger)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(viewModel.hasLimitedPhotoAccess ? "Limited Photos access" : "Photos access is off")
                         .font(.duckBody.weight(.semibold))
-                        .foregroundStyle(Color.duckBerry)
+                        .foregroundStyle(Color.textPrimary)
                     Text(viewModel.hasLimitedPhotoAccess
                         ? "PhotoDuck can only scan the photos currently selected."
                         : "Open Settings to allow PhotoDuck to scan your library.")
                         .font(.duckCaption)
-                        .foregroundStyle(Color.duckRose)
+                        .foregroundStyle(Color.textSecondary)
                 }
 
                 Spacer()
@@ -281,7 +288,7 @@ struct HomeView: View {
                     }
                 }
                 .font(.duckCaption.weight(.semibold))
-                .foregroundStyle(Color.duckPink)
+                .foregroundStyle(Color.accentPrimary)
             }
             .padding(14)
         }
@@ -291,21 +298,21 @@ struct HomeView: View {
         DuckCard {
             HStack(spacing: 12) {
                 Image(systemName: "person.crop.circle.badge.exclamationmark")
-                    .foregroundStyle(Color.duckRose)
+                    .foregroundStyle(Color.textSecondary)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Contacts access is off")
                         .font(.duckBody.weight(.semibold))
-                        .foregroundStyle(Color.duckBerry)
+                        .foregroundStyle(Color.textPrimary)
                     Text("Allow access in Settings to scan for duplicate contacts.")
                         .font(.duckCaption)
-                        .foregroundStyle(Color.duckRose)
+                        .foregroundStyle(Color.textSecondary)
                 }
                 Spacer()
                 Button("Settings") {
                     viewModel.openPhotoAccessSettings()
                 }
                 .font(.duckCaption.weight(.semibold))
-                .foregroundStyle(Color.duckPink)
+                .foregroundStyle(Color.accentPrimary)
             }
             .padding(14)
         }
@@ -315,16 +322,16 @@ struct HomeView: View {
         DuckCard {
             HStack(spacing: 12) {
                 Image(systemName: "externaldrive.badge.exclamationmark")
-                    .foregroundStyle(Color.duckWarning)
+                    .foregroundStyle(Color.warning)
                 Text(message)
                     .font(.duckCaption)
-                    .foregroundStyle(Color.duckBerry)
+                    .foregroundStyle(Color.textPrimary)
                 Spacer()
                 Button("Dismiss") {
                     viewModel.dismissPersistenceWarning()
                 }
                 .font(.duckCaption.weight(.semibold))
-                .foregroundStyle(Color.duckPink)
+                .foregroundStyle(Color.accentPrimary)
             }
             .padding(14)
         }
@@ -334,21 +341,46 @@ struct HomeView: View {
         DuckCard {
             HStack(spacing: 12) {
                 Image(systemName: "icloud.and.arrow.down")
-                    .foregroundStyle(Color.duckPink)
+                    .foregroundStyle(Color.accentPrimary)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("\(viewModel.unanalyzedPhotoCount.formatted()) photos not analyzed")
                         .font(.duckBody.weight(.semibold))
-                        .foregroundStyle(Color.duckBerry)
+                        .foregroundStyle(Color.textPrimary)
                     Text("They appear to be stored in iCloud. Your current results may be incomplete.")
                         .font(.duckCaption)
-                        .foregroundStyle(Color.duckRose)
+                        .foregroundStyle(Color.textSecondary)
                 }
                 Spacer()
                 Button("Rescan") {
                     showICloudScanConfirmation = true
                 }
                 .font(.duckCaption.weight(.semibold))
-                .foregroundStyle(Color.duckPink)
+                .foregroundStyle(Color.accentPrimary)
+            }
+            .padding(14)
+        }
+    }
+
+    private var scanFailureBanner: some View {
+        DuckCard {
+            HStack(spacing: 12) {
+                Image(systemName: "exclamationmark.octagon.fill")
+                    .foregroundStyle(Color.danger)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Scan didn't finish")
+                        .font(.duckBody.weight(.semibold))
+                        .foregroundStyle(Color.textPrimary)
+                    Text(viewModel.scanErrorMessage ?? "Something interrupted the last scan. Try again.")
+                        .font(.duckCaption)
+                        .foregroundStyle(Color.textSecondary)
+                        .lineLimit(3)
+                }
+                Spacer()
+                Button("Retry") {
+                    viewModel.startDeepClean()
+                }
+                .font(.duckCaption.weight(.semibold))
+                .foregroundStyle(Color.accentPrimary)
             }
             .padding(14)
         }
@@ -361,7 +393,10 @@ struct HomeView: View {
             guard viewModel.scanState != .idle else { return "0" }
             return viewModel.processedPhotoCount.formatted()
         }()
-        return HStack(spacing: 8) {
+        return LazyVGrid(
+            columns: [GridItem(.flexible()), GridItem(.flexible())],
+            spacing: 8
+        ) {
             StatMiniCard(value: photosScanned, label: "Photos scanned")
             StatMiniCard(value: viewModel.photoGroups.count.formatted(), label: "Groups found")
             StatMiniCard(
@@ -382,7 +417,7 @@ struct HomeView: View {
         return LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
             HomeCategoryTile(
                 icon: "photo.on.rectangle.angled",
-                color: .duckPink,
+                color: .accentPrimary,
                 title: "Duplicates",
                 count: duplicateGroups.count,
                 status: categoryStatus(for: duplicateGroups.count),
@@ -396,7 +431,7 @@ struct HomeView: View {
 
             HomeCategoryTile(
                 icon: "rectangle.stack.fill",
-                color: .duckOrange,
+                color: .warning,
                 title: "Similar",
                 count: visuallySimilarGroups.count,
                 status: categoryStatus(for: visuallySimilarGroups.count),
@@ -410,11 +445,13 @@ struct HomeView: View {
 
             HomeCategoryTile(
                 icon: "person.2.fill",
-                color: .duckRose,
+                color: .textSecondary,
                 title: "Contacts",
                 count: viewModel.contactMatches.count,
                 status: supportingScanStatus(viewModel.contactScanState),
-                note: viewModel.contactMatches.isEmpty ? "0 found" : "\(viewModel.contactMatches.count) contacts",
+                note: viewModel.contactMatches.isEmpty
+                    ? (viewModel.contactScanState == .idle ? "Waiting for scan" : "0 found")
+                    : "\(viewModel.contactMatches.count) contacts",
                 destination: {
                     ContactResultsView(
                         matches: viewModel.contactMatches,
@@ -426,11 +463,13 @@ struct HomeView: View {
 
             HomeCategoryTile(
                 icon: "video.fill",
-                color: .duckOrange,
+                color: .warning,
                 title: "Large Videos",
                 count: viewModel.largeFiles.count,
                 status: supportingScanStatus(viewModel.fileScanState),
-                note: viewModel.largeFiles.isEmpty ? "0 found" : "\(viewModel.largeFiles.count) items",
+                note: viewModel.largeFiles.isEmpty
+                    ? (viewModel.fileScanState == .idle ? "Waiting for scan" : "0 found")
+                    : "\(viewModel.largeFiles.count) items",
                 sizeBadge: (viewModel.fileScanState == .completed && !viewModel.largeFiles.isEmpty)
                     ? ByteCountFormatter.string(fromByteCount: largeFileBytes, countStyle: .file) : nil,
                 destination: {
@@ -446,26 +485,40 @@ struct HomeView: View {
 
     // MARK: - Storage Card
 
+    // One honest Used bar from the real filesystem fraction. After a completed
+    // scan, an accent segment inside "used" shows what PhotoDuck can free,
+    // computed from PHAsset estimated file sizes — never a flat per-group guess.
+    private var foundFraction: Double {
+        guard viewModel.scanState == .completed, viewModel.storageTotalBytesValue > 0 else { return 0 }
+        let fraction = Double(viewModel.reclaimableBytes) / Double(viewModel.storageTotalBytesValue)
+        return min(max(fraction, 0), viewModel.storageUsedFraction)
+    }
+
     private var storageCard: some View {
         DuckCard {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text("iPhone storage")
                         .font(.duckHeading)
-                        .foregroundStyle(Color.duckBerry)
+                        .foregroundStyle(Color.textPrimary)
                     Spacer()
                     Text(viewModel.storageFreeFormatted)
                         .font(.duckCaption)
                         .foregroundStyle(.white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
-                        .background(Color.duckPink, in: Capsule())
+                        .background(Color.accentPrimary, in: Capsule())
                 }
                 GeometryReader { geo in
                     let used = viewModel.storageUsedFraction
+                    let found = foundFraction
                     HStack(spacing: 2) {
-                        Color.duckPink
-                            .frame(width: geo.size.width * used)
+                        Color.decorPink
+                            .frame(width: geo.size.width * max(used - found, 0))
+                        if found > 0 {
+                            Color.accentPrimary
+                                .frame(width: max(geo.size.width * found, 2))
+                        }
                         Color.gray.opacity(0.15)
                             .frame(maxWidth: .infinity)
                     }
@@ -473,7 +526,10 @@ struct HomeView: View {
                 }
                 .frame(height: 10)
                 HStack(spacing: 12) {
-                    legendItem(color: .duckPink, label: viewModel.storageUsedFormatted)
+                    legendItem(color: .decorPink, label: viewModel.storageUsedFormatted)
+                    if foundFraction > 0 {
+                        legendItem(color: .accent, label: "Found by PhotoDuck: \(viewModel.reclaimableFormatted)")
+                    }
                     legendItem(color: .gray.opacity(0.3), label: viewModel.storageFreeFormatted)
                 }
             }
@@ -488,7 +544,7 @@ struct HomeView: View {
                 .frame(width: 8, height: 8)
             Text(label)
                 .font(.duckMicro)
-                .foregroundStyle(Color.duckRose)
+                .foregroundStyle(Color.textSecondary)
         }
     }
 
@@ -500,10 +556,10 @@ struct HomeView: View {
                 HStack(spacing: 12) {
                     ZStack {
                         Circle()
-                            .stroke(Color.duckSoftPink, lineWidth: 3)
+                            .stroke(Color.decorPink, lineWidth: 3)
                         Circle()
                             .trim(from: 0, to: viewModel.progressFraction)
-                            .stroke(Color.duckYellow, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .stroke(Color.mascotYellow, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                             .rotationEffect(.degrees(-90))
                     }
                     .frame(width: 40, height: 40)
@@ -511,10 +567,10 @@ struct HomeView: View {
                         Text(viewModel.scanState == .paused ? "Scan paused" : "Scan in progress")
                             .font(.duckBody)
                             .fontWeight(.medium)
-                            .foregroundStyle(Color.duckBerry)
+                            .foregroundStyle(Color.textPrimary)
                         Text("\(viewModel.scanProgressLabel) · \(viewModel.progressPercentLabel)")
                             .font(.duckCaption)
-                            .foregroundStyle(Color.duckRose)
+                            .foregroundStyle(Color.textSecondary)
                             .lineLimit(2)
                     }
                     Spacer()
@@ -526,10 +582,10 @@ struct HomeView: View {
                         }
                     }
                     .font(.duckCaption)
-                    .foregroundStyle(Color.duckPink)
+                    .foregroundStyle(Color.accentPrimary)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .overlay(Capsule().stroke(Color.duckPink, lineWidth: 1))
+                    .overlay(Capsule().stroke(Color.accentPrimary, lineWidth: 1))
                 }
 
                 Button {
@@ -546,8 +602,8 @@ struct HomeView: View {
                     .font(.duckCaption.weight(.semibold))
                     .frame(maxWidth: .infinity, minHeight: 44)
                 }
-                .foregroundStyle(viewModel.notificationEligible ? Color.duckSuccess : Color.duckRose)
-                .background(Color.duckCream, in: Capsule())
+                .foregroundStyle(viewModel.notificationEligible ? Color.success : Color.textSecondary)
+                .background(Color.surface, in: Capsule())
                 .disabled(viewModel.notificationEligible)
             }
             .padding(16)
@@ -614,11 +670,11 @@ private struct StatMiniCard: View {
         DuckCard {
             VStack(spacing: 4) {
                 Text(value)
-                    .font(.duckBody(17, weight: .semibold, relativeTo: .headline))
-                    .foregroundStyle(Color.duckBerry)
+                    .font(.duckStat)
+                    .foregroundStyle(Color.textPrimary)
                 Text(label)
                     .font(.duckMicro)
-                    .foregroundStyle(Color.duckRose)
+                    .foregroundStyle(Color.textSecondary)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
             }
@@ -667,28 +723,28 @@ private struct HomeCategoryTile<Destination: View>: View {
                         .foregroundStyle(color)
                 }
                 Spacer()
-                StatusBadge(title: status, accent: color)
+                StatusBadge(title: status, accent: count > 0 ? color : .textSecondary)
             }
 
             Text(title)
                 .font(.duckBody)
-                .foregroundStyle(Color.duckBerry)
+                .foregroundStyle(Color.textPrimary)
 
             Text(count == 0 ? "0" : "\(count)")
                 .font(.duckDisplay(24))
-                .foregroundStyle(count > 0 ? color : Color.duckSoftPink)
+                .foregroundStyle(count > 0 ? color : Color.textSecondary.opacity(0.55))
 
             if let badge = sizeBadge {
                 Text(badge)
                     .font(.duckMicro)
-                    .foregroundStyle(Color.duckBerry)
+                    .foregroundStyle(Color.textPrimary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.duckSoftPink, in: Capsule())
+                    .background(Color.decorPink, in: Capsule())
             } else {
                 Text(note)
                     .font(.duckCaption)
-                    .foregroundStyle(Color.duckRose)
+                    .foregroundStyle(Color.textSecondary)
             }
         }
     }
@@ -710,7 +766,7 @@ private struct CompletionOverlay: View {
                     title: "Scan complete",
                     value: "\(viewModel.lastCompletedGroupsCount) groups ready",
                     detail: "\(viewModel.lastCompletedReviewableCount) photos to review · \(ByteCountFormatter.string(fromByteCount: viewModel.lastCompletedReclaimableBytes, countStyle: .file)) potentially reclaimable",
-                    accent: .duckPink,
+                    accent: .accentPrimary,
                     progress: 1
                 ) {
                     PhotoDuckMascotArt(size: 84)
@@ -720,13 +776,13 @@ private struct CompletionOverlay: View {
                     StatPill(
                         title: "Reviewable",
                         value: "\(viewModel.lastCompletedReviewableCount)",
-                        accent: .duckPink,
+                        accent: .accentPrimary,
                         icon: "photo.stack"
                     )
                     StatPill(
                         title: "Potential",
                         value: ByteCountFormatter.string(fromByteCount: viewModel.lastCompletedReclaimableBytes, countStyle: .file),
-                        accent: .duckYellow,
+                        accent: .mascotYellow,
                         icon: "sparkles"
                     )
                 }
@@ -741,7 +797,7 @@ private struct CompletionOverlay: View {
                                 onReview()
                             }
                         }
-                        DuckOutlineButton(title: "Back to Library", color: .duckRose) {
+                        DuckOutlineButton(title: "Back to Library", color: .textSecondary) {
                             dismiss()
                         }
                     }
@@ -752,6 +808,6 @@ private struct CompletionOverlay: View {
             }
             .padding(.horizontal, 16)
         }
-        .background(Color.photoduckBlushBackground.ignoresSafeArea())
+        .background(Color.backgroundBlush.ignoresSafeArea())
     }
 }

@@ -589,7 +589,13 @@ actor PhotoScanEngine {
         let request = PhotoMLBridge.makePinnedFeaturePrintRequest()
         do {
             try handler.perform([request])
-            let observation = request.results?.first as? VNFeaturePrintObservation
+            let rawObservation = request.results?.first as? VNFeaturePrintObservation
+            let observation = rawObservation.flatMap {
+                PhotoEmbeddingContract.isCompatibleObservation(
+                    elementCount: $0.elementCount,
+                    byteCount: $0.data.count
+                ) ? $0 : nil
+            }
             return PhotoScanAssetAnalysis(
                 observation: observation,
                 embedding: observation?.data,
@@ -743,41 +749,27 @@ actor PhotoScanEngine {
             )
         }
 
-        let inspectedIDs = orderedProcessedIDs
-            .suffix(SimilarityThresholds.maxCandidateAssetsInspected)
-            .reversed()
-        var candidates: [String] = []
-        candidates.reserveCapacity(SimilarityThresholds.maxFeatureComparisonsPerAsset)
-
-        for candidateID in inspectedIDs {
-            guard let candidate = descriptorsByID[candidateID],
-                  !candidate.isScreenshot,
-                  let currentDate = descriptor.captureTimestamp,
-                  let candidateDate = candidate.captureTimestamp,
-                  abs(currentDate.timeIntervalSince(candidateDate))
-                    <= SimilarityThresholds.visualSessionWindowSeconds,
-                  abs(descriptor.aspectRatio - candidate.aspectRatio)
-                    <= SimilarityThresholds.majorAspectRatioMismatch else {
-                continue
-            }
-
-            candidates.append(candidateID)
-            if candidates.count >= SimilarityThresholds.maxFeatureComparisonsPerAsset {
-                break
-            }
-        }
-        return candidates
+        return PhotoScanCandidateSelector.genericCandidateIDs(
+            for: descriptor,
+            orderedProcessedIDs: orderedProcessedIDs,
+            descriptorsByID: descriptorsByID
+        )
     }
 
     private nonisolated func featureDistance(
         lhs: VNFeaturePrintObservation?,
         rhs: VNFeaturePrintObservation?
     ) -> Double? {
-        guard let lhs, let rhs else { return nil }
+        guard let lhs, let rhs, lhs.elementCount == rhs.elementCount else {
+            return nil
+        }
         var distance: Float = 0
         do {
             try lhs.computeDistance(&distance, to: rhs)
-            return Double(distance)
+            return PhotoFeatureDistanceNormalizer.normalizedDistance(
+                rawDistance: Double(distance),
+                elementCount: lhs.elementCount
+            )
         } catch {
             return nil
         }
@@ -1150,6 +1142,22 @@ enum PhotoScanPairDistanceResolver {
     }
 }
 
+enum PhotoFeatureDistanceNormalizer {
+    static func normalizedDistance(
+        rawDistance: Double,
+        elementCount: Int
+    ) -> Double? {
+        guard rawDistance.isFinite, rawDistance >= 0, elementCount > 0 else {
+            return nil
+        }
+
+        // Vision reports an L2 distance across the whole feature vector.
+        // RMS normalization keeps policy thresholds stable per feature rather
+        // than accidentally treating a raw 2,048-dimensional value as 0...1.
+        return rawDistance / sqrt(Double(elementCount))
+    }
+}
+
 struct PhotoScanGroupCacheKey: Hashable, Sendable {
     let memberIDs: [String]
 
@@ -1160,6 +1168,67 @@ struct PhotoScanGroupCacheKey: Hashable, Sendable {
 
 private struct CachedPhotoScanGroup {
     let group: PhotoGroup?
+}
+
+enum PhotoScanCandidateSelector {
+    static func genericCandidateIDs(
+        for descriptor: SimilarityAssetDescriptor,
+        orderedProcessedIDs: [String],
+        descriptorsByID: [String: SimilarityAssetDescriptor]
+    ) -> [String] {
+        guard let currentDate = descriptor.captureTimestamp else { return [] }
+
+        let inspectedIDs = orderedProcessedIDs
+            .suffix(SimilarityThresholds.maxCandidateAssetsInspected)
+            .reversed()
+        var primaryCandidates: [String] = []
+        var extendedCandidates: [String] = []
+        primaryCandidates.reserveCapacity(
+            SimilarityThresholds.maxFeatureComparisonsPerAsset
+        )
+        extendedCandidates.reserveCapacity(
+            SimilarityThresholds.reservedExtendedFeatureComparisonsPerAsset
+        )
+
+        for candidateID in inspectedIDs {
+            guard candidateID != descriptor.id,
+                  let candidate = descriptorsByID[candidateID],
+                  !candidate.isScreenshot,
+                  let candidateDate = candidate.captureTimestamp,
+                  abs(descriptor.aspectRatio - candidate.aspectRatio)
+                    <= SimilarityThresholds.majorAspectRatioMismatch else {
+                continue
+            }
+
+            let timeDelta = abs(currentDate.timeIntervalSince(candidateDate))
+            if timeDelta <= SimilarityThresholds.visualSessionWindowSeconds {
+                primaryCandidates.append(candidateID)
+            } else if timeDelta <= SimilarityThresholds.extendedVisualSessionWindowSeconds {
+                extendedCandidates.append(candidateID)
+            }
+        }
+
+        // Reserve a small part of the bounded comparison budget for strong
+        // 30-60 minute matches so a dense recent burst cannot starve them.
+        let maxComparisons = SimilarityThresholds.maxFeatureComparisonsPerAsset
+        let extendedCount = min(
+            extendedCandidates.count,
+            min(
+                SimilarityThresholds.reservedExtendedFeatureComparisonsPerAsset,
+                maxComparisons
+            )
+        )
+        let primaryCount = min(
+            primaryCandidates.count,
+            maxComparisons - extendedCount
+        )
+
+        var candidates = Array(primaryCandidates.prefix(primaryCount))
+        candidates.append(
+            contentsOf: extendedCandidates.prefix(maxComparisons - candidates.count)
+        )
+        return candidates
+    }
 }
 
 enum PhotoScanRefreshSchedule {

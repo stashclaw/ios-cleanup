@@ -66,6 +66,130 @@ final class SimilarityPolicyTests: XCTestCase {
         XCTAssertEqual(group.confidence, .medium)
     }
 
+    func testExpandedSessionBandCreatesReviewOnlyGroup() async {
+        let a = asset("a", seconds: 0)
+        let b = asset("b", seconds: 10 * 60)
+        let signals = pair(a, b, distance: 0.16)
+
+        let pairResult = pairClassifier.classifyPair(
+            lhs: a,
+            rhs: b,
+            signals: signals
+        )
+        let group = await policyEngine.classifyCluster(
+            clusterInput(
+                assets: [a, b],
+                pairs: [pairKey("a", "b"): signals]
+            )
+        )
+
+        XCTAssertTrue(pairResult.eligible)
+        XCTAssertEqual(pairResult.provisionalBucket, .visuallySimilar)
+        XCTAssertEqual(group.bucket, .visuallySimilar)
+        XCTAssertEqual(group.action, .reviewTogetherOnly)
+        XCTAssertTrue(group.deleteCandidateIDs.isEmpty)
+    }
+
+    func testExpandedReviewBoundaryStaysLowConfidenceAndNonDestructive() async {
+        let a = asset("a", seconds: 0)
+        let b = asset("b", seconds: 5 * 60)
+        let signals = pair(
+            a,
+            b,
+            distance: SimilarityThresholds.maxVisualSimilarFeatureDistance
+        )
+
+        let group = await policyEngine.classifyCluster(
+            clusterInput(
+                assets: [a, b],
+                pairs: [pairKey("a", "b"): signals]
+            )
+        )
+
+        XCTAssertEqual(group.bucket, .visuallySimilar)
+        XCTAssertEqual(group.confidence, .low)
+        XCTAssertEqual(group.action, .reviewTogetherOnly)
+        XCTAssertTrue(group.deleteCandidateIDs.isEmpty)
+    }
+
+    func testStrongExtendedSessionMatchCreatesReviewOnlyGroup() async {
+        let a = asset("a", seconds: 0)
+        let b = asset("b", seconds: 45 * 60)
+        let signals = pair(
+            a,
+            b,
+            distance: SimilarityThresholds.maxExtendedVisualFeatureDistance
+        )
+
+        let pairResult = pairClassifier.classifyPair(
+            lhs: a,
+            rhs: b,
+            signals: signals
+        )
+        let group = await policyEngine.classifyCluster(
+            clusterInput(
+                assets: [a, b],
+                pairs: [pairKey("a", "b"): signals]
+            )
+        )
+
+        XCTAssertTrue(pairResult.eligible)
+        XCTAssertEqual(pairResult.provisionalBucket, .visuallySimilar)
+        XCTAssertTrue(pairResult.softBlockers.contains(.largeTimeGap))
+        XCTAssertEqual(group.bucket, .visuallySimilar)
+        XCTAssertEqual(group.confidence, .low)
+        XCTAssertEqual(group.action, .reviewTogetherOnly)
+        XCTAssertTrue(group.deleteCandidateIDs.isEmpty)
+    }
+
+    func testExtendedSessionRejectsMerelyModerateVisualMatch() async {
+        let a = asset("a", seconds: 0)
+        let b = asset("b", seconds: 45 * 60)
+        let signals = pair(
+            a,
+            b,
+            distance: SimilarityThresholds.maxExtendedVisualFeatureDistance + 0.01
+        )
+
+        let pairResult = pairClassifier.classifyPair(
+            lhs: a,
+            rhs: b,
+            signals: signals
+        )
+        let group = await policyEngine.classifyCluster(
+            clusterInput(
+                assets: [a, b],
+                pairs: [pairKey("a", "b"): signals]
+            )
+        )
+
+        XCTAssertFalse(pairResult.eligible)
+        XCTAssertEqual(pairResult.provisionalBucket, .notSimilar)
+        XCTAssertEqual(group.bucket, .notSimilar)
+        XCTAssertEqual(group.action, .doNotSuggestDeletion)
+    }
+
+    func testNearDuplicateBoundaryDoesNotGainDeleteRecommendation() async {
+        let a = asset("a", seconds: 0)
+        let b = asset("b", seconds: 10)
+        let signals = pair(
+            a,
+            b,
+            distance: SimilarityThresholds.maxNearDuplicateFeatureDistance
+        )
+
+        let group = await policyEngine.classifyCluster(
+            clusterInput(
+                assets: [a, b],
+                pairs: [pairKey("a", "b"): signals]
+            )
+        )
+
+        XCTAssertEqual(group.bucket, .nearDuplicate)
+        XCTAssertEqual(group.action, .reviewTogetherOnly)
+        XCTAssertTrue(group.deleteCandidateIDs.isEmpty)
+    }
+
     func testScreenshotMixedWithCameraIsBlocked() async {
         let screenshot = asset("shot", seconds: 0, screenshot: true)
         let camera = asset("cam", seconds: 1)

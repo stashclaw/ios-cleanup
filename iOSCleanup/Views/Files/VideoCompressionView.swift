@@ -205,7 +205,7 @@ struct VideoCompressionView: View {
         return VStack(spacing: 16) {
             Image(systemName: "checkmark.circle.fill")
                 .font(.duckDisplay(56))
-                .foregroundStyle(.green)
+                .foregroundStyle(Color.success)
             Text(content.title)
                 .font(.title2.bold())
             Text(content.message)
@@ -225,7 +225,7 @@ struct VideoCompressionView: View {
         VStack(spacing: 12) {
             Text("Compression stopped")
                 .font(.headline)
-                .foregroundStyle(.red)
+                .foregroundStyle(Color.danger)
             Text(message)
                 .font(.caption)
                 .foregroundStyle(.secondary)

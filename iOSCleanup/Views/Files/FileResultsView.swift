@@ -97,7 +97,7 @@ struct FileResultsView: View {
                     if let error = deletionError {
                         Text(error)
                             .font(.duckCaption)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Color.danger)
                             .padding(.horizontal)
                     }
                     ForEach(visibleFiles) { file in
