@@ -185,6 +185,146 @@ final class FileScanEngineTests: XCTestCase {
         XCTAssertFalse(FileDeletionErrorPolicy.isBenignCancellation(unrelatedError))
     }
 
+    func testExternalExportSanitizesUnsafeFilenames() {
+        XCTAssertEqual(
+            ExternalPhotoExportNaming.sanitizedFilename(
+                "../Summer/Trip:IMG?.HEIC"
+            ),
+            "..-Summer-Trip-IMG-.HEIC"
+        )
+        XCTAssertEqual(
+            ExternalPhotoExportNaming.sanitizedFilename(".."),
+            "photo-resource"
+        )
+    }
+
+    func testExternalExportCreatesCaseInsensitiveCollisionSafeNames() {
+        var usedNames = Set<String>()
+        let first = ExternalPhotoExportNaming.uniqueFilename(
+            preferredName: "IMG_0001.HEIC",
+            assetIndex: 0,
+            resourceIndex: 0,
+            usedNames: &usedNames
+        )
+        let second = ExternalPhotoExportNaming.uniqueFilename(
+            preferredName: "img_0001.heic",
+            assetIndex: 1,
+            resourceIndex: 0,
+            usedNames: &usedNames
+        )
+
+        XCTAssertEqual(first, "IMG_0001.HEIC")
+        XCTAssertEqual(second, "img_0001-2-1-1.heic")
+        XCTAssertEqual(usedNames.count, 2)
+    }
+
+    func testExternalExportRejectsEmptySelectionBeforeCreatingFiles() async {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ExternalPhotoExportTests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+
+        do {
+            _ = try await ExternalPhotoExportService().export(
+                assets: [],
+                to: folder
+            )
+            XCTFail("Expected an empty-selection error")
+        } catch let error as ExternalPhotoExportError {
+            guard case .emptySelection = error else {
+                XCTFail("Unexpected error: \(error)")
+                return
+            }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path))
+    }
+
+    func testExternalExportRejectsDuplicateAssetsBeforeCreatingFiles() async {
+        let asset = ExternalExportTestAsset(localIdentifier: "same-asset")
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ExternalPhotoExportDuplicateTests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+
+        do {
+            _ = try await ExternalPhotoExportService().export(
+                assets: [asset, asset],
+                to: folder
+            )
+            XCTFail("Expected a duplicate-identifier error")
+        } catch let error as ExternalPhotoExportError {
+            guard case .duplicateAssetIdentifiers = error else {
+                XCTFail("Unexpected error: \(error)")
+                return
+            }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path))
+    }
+
+    @MainActor
+    func testExportAlbumDeduplicatesAndPersistsAssetIdentifiers() {
+        let suiteName = "ExportAlbumTests-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Could not create isolated defaults")
+            return
+        }
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let first = ExternalExportTestAsset(localIdentifier: "asset-1")
+        let second = ExternalExportTestAsset(localIdentifier: "asset-2")
+        let store = ExportAlbumStore(defaults: defaults)
+
+        store.add([first, first, second])
+
+        XCTAssertEqual(store.assetIDs, ["asset-1", "asset-2"])
+        XCTAssertEqual(
+            store.assets.map(\.localIdentifier),
+            ["asset-1", "asset-2"]
+        )
+
+        let reloadedStore = ExportAlbumStore(defaults: defaults)
+        XCTAssertEqual(reloadedStore.assetIDs, ["asset-1", "asset-2"])
+    }
+
+    @MainActor
+    func testExportAlbumRemovalAndClearUseExplicitIdentifiers() {
+        let suiteName = "ExportAlbumRemovalTests-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Could not create isolated defaults")
+            return
+        }
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let first = ExternalExportTestAsset(localIdentifier: "asset-1")
+        let second = ExternalExportTestAsset(localIdentifier: "asset-2")
+        let third = ExternalExportTestAsset(localIdentifier: "asset-3")
+        let store = ExportAlbumStore(defaults: defaults)
+        store.add([first, second, third])
+
+        store.remove(assetIDs: ["asset-2"])
+
+        XCTAssertEqual(store.assetIDs, ["asset-1", "asset-3"])
+        XCTAssertEqual(
+            store.assets.map(\.localIdentifier),
+            ["asset-1", "asset-3"]
+        )
+
+        store.clear()
+
+        XCTAssertTrue(store.assetIDs.isEmpty)
+        XCTAssertTrue(store.assets.isEmpty)
+    }
+
     private func candidate(
         _ kind: AssetResourceKind,
         _ filename: String,
@@ -195,6 +335,19 @@ final class FileScanEngineTests: XCTestCase {
             originalFilename: filename,
             byteCount: bytes
         )
+    }
+}
+
+private final class ExternalExportTestAsset: PHAsset, @unchecked Sendable {
+    private let identifier: String
+
+    init(localIdentifier: String) {
+        identifier = localIdentifier
+        super.init()
+    }
+
+    override var localIdentifier: String {
+        identifier
     }
 }
 

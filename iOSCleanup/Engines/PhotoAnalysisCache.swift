@@ -2,10 +2,18 @@ import Foundation
 import OSLog
 import Photos
 
+struct CachedPhotoAssetMetadata: Codable, Hashable, Sendable {
+    let localIdentifier: String
+    let modificationDate: Date?
+    let pixelWidth: Int
+    let pixelHeight: Int
+    let mediaSubtypesRawValue: UInt
+}
+
 struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
-    // Version 5 invalidates groups produced before Vision feature distances
-    // were normalized. This is a derived cache; user review data is separate.
-    static let schemaVersion = 5
+    // Version 7 records the complete Photos inventory so future scans can analyze
+    // only new assets plus bounded comparison context.
+    static let schemaVersion = 7
 
     let schemaVersion: Int
     let savedAt: Date
@@ -21,6 +29,10 @@ struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
     let cleanupMode: CleanupMode
     let resultsFreshnessState: CleanupResultsFreshnessState
     let groups: [CachedPhotoGroup]
+    let screenshotAssetIdentifiers: [String]
+    let blurryAssetIdentifiers: [String]
+    let libraryAssetIdentifiers: [String]
+    let libraryAssets: [CachedPhotoAssetMetadata]
 
     init(
         savedAt: Date = Date(),
@@ -35,7 +47,11 @@ struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
         reclaimableBytesFoundSoFar: Int64,
         cleanupMode: CleanupMode,
         resultsFreshnessState: CleanupResultsFreshnessState,
-        groups: [CachedPhotoGroup]
+        groups: [CachedPhotoGroup],
+        screenshotAssetIdentifiers: [String] = [],
+        blurryAssetIdentifiers: [String] = [],
+        libraryAssetIdentifiers: [String] = [],
+        libraryAssets: [CachedPhotoAssetMetadata] = []
     ) {
         self.schemaVersion = Self.schemaVersion
         self.savedAt = savedAt
@@ -51,6 +67,10 @@ struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
         self.cleanupMode = cleanupMode
         self.resultsFreshnessState = resultsFreshnessState
         self.groups = groups
+        self.screenshotAssetIdentifiers = screenshotAssetIdentifiers
+        self.blurryAssetIdentifiers = blurryAssetIdentifiers
+        self.libraryAssetIdentifiers = libraryAssetIdentifiers
+        self.libraryAssets = libraryAssets
     }
 }
 
@@ -129,9 +149,16 @@ struct CachedPhotoGroup: Codable, Sendable {
         guard let resolvedIdentifiers = resolvedAssetIdentifiers(using: Set(assetsByID.keys)) else { return nil }
         let assets = resolvedIdentifiers.compactMap { assetsByID[$0] }
         let resolvedIDSet = Set(resolvedIdentifiers)
+        let allMembersResolved = resolvedIdentifiers.count == assetIdentifiers.count
         let resolvedKeeperAssetID = keeperAssetID.flatMap {
             resolvedIDSet.contains($0) ? $0 : nil
         }
+        let safeRecommendedAction = allMembersResolved
+            ? (recommendedAction ?? .reviewManually)
+            : .reviewManually
+        let safeDeleteCandidateIDs = allMembersResolved
+            ? deleteCandidateIDs.filter(resolvedIDSet.contains)
+            : []
 
         let captureDateRange: DateInterval?
         if let start = captureDateStart, let end = captureDateEnd, start <= end {
@@ -148,13 +175,15 @@ struct CachedPhotoGroup: Codable, Sendable {
             groupType: groupType,
             groupConfidence: groupConfidence,
             reviewState: reviewState,
-            // Cached membership may be stale after library edits. A live scan must
-            // revalidate the group before an automatic delete action is exposed.
-            recommendedAction: .reviewManually,
+            // Complete identifier membership is stable persisted classifier
+            // evidence. Missing members conservatively downgrade the group.
+            recommendedAction: safeRecommendedAction,
             keeperAssetID: resolvedKeeperAssetID,
-            deleteCandidateIDs: [],
+            deleteCandidateIDs: safeDeleteCandidateIDs,
             bestShotPhotoId: resolvedKeeperAssetID,
-            groupReasonsSummary: groupReasonsSummary + ["Cached result requires live revalidation."],
+            groupReasonsSummary: allMembersResolved
+                ? groupReasonsSummary
+                : groupReasonsSummary + ["Group changed since its last scan; review manually."],
             blockerFlags: blockerFlags ?? [],
             scoreBreakdown: scoreBreakdown,
             preferenceQueuePriority: preferenceQueuePriority,
@@ -163,7 +192,7 @@ struct CachedPhotoGroup: Codable, Sendable {
             candidates: candidates
                 .filter { resolvedIDSet.contains($0.photoId) }
                 .map { $0.makeCandidate() },
-            reclaimableBytes: 0
+            reclaimableBytes: allMembersResolved ? reclaimableBytes : 0
         )
     }
 }
@@ -268,5 +297,15 @@ actor PhotoAnalysisCache {
         }
 
         return snapshot.groups.compactMap { $0.makeGroup(using: assetsByID) }
+    }
+
+    func rehydrateAssets(with identifiers: [String]) -> [PHAsset] {
+        guard !identifiers.isEmpty else { return [] }
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
+        var assetsByID: [String: PHAsset] = [:]
+        result.enumerateObjects { asset, _, _ in
+            assetsByID[asset.localIdentifier] = asset
+        }
+        return identifiers.compactMap { assetsByID[$0] }
     }
 }

@@ -2,6 +2,24 @@
 
 Based on July 2026 competitive research (CleanMyPhone, Swipewipe, Cleanup, Slidebox, Clever Cleaner, Kage, LuminaClean, Boost, Cleaner Guru + Apple built-ins) combined with the codebase review. Companion to FIXSPEC.md — fix P0/P1 there before building most of this. Items reference the code seams that make them cheap.
 
+## Implementation status
+
+Shipped in the first roadmap pass:
+
+- Separate screenshot and conservative blurry-photo review categories, progressively populated by `PhotoScanEngine` and restored from the derived analysis cache.
+- Explicit-selection category review grid. Nothing is preselected; one-photo cleanup remains free and bulk selection uses the existing Pro gate.
+- Session and lifetime freed-space/item counters. Lifetime totals advance only after PhotoKit confirms deletion and the UI explains Recently Deleted.
+- Candidate scans now stop walking an ordered time bucket after crossing the extended session window instead of inspecting the remainder.
+- Existing Smart Cleanup review sheet, pair-cache read-back, photo-library observer, iCloud coverage reporting, and Vision revision pinning were verified as already implemented.
+- Persistent Export Album with compact “Add to Export” review chips: the album copies every PhotoKit resource to a user-picked Files folder, verifies it, and records a manifest before deletion is offered.
+- Incremental photo analysis cache: restore completed results immediately and analyze only new or modified assets plus bounded session/burst/screenshot context.
+
+Deliberately deferred:
+
+- Live Photo conversion and duplicate-video cleanup require a separate destructive-media design and device test plan.
+- Pricing changes require an App Store Connect/product decision and are not safe to infer from code.
+- Monthly ritual, recap sharing, widgets, notifications, sensitivity presets, onboarding scan, and background indexing remain later product phases.
+
 ## Market context (one paragraph)
 
 Cleaner apps are a ~$40M/month iOS category. The top grossers ($1–6M/mo) run $6–12/week subscriptions on paid ads targeting older users — a model publicly called predatory and drowning in 1-star subscription rage. Apple's built-in Duplicates album (iOS 16) only catches exact copies and hasn't advanced since 2022 — iOS 18/26 shipped zero new cleanup features. The open wedge: **honest, on-device, pay-once, accurate similar-photo cleanup** — "everything after Apple's exact-dupe pass." Clever Cleaner (free) and LuminaClean ($17.99 lifetime) are already winning Reddit/press coverage on exactly this axis.

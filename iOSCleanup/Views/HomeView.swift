@@ -1,10 +1,14 @@
 import SwiftUI
+import Photos
+import UIKit
+import UniformTypeIdentifiers
 
 struct HomeView: View {
     @ObservedObject var viewModel: HomeViewModel
     @Binding var isHomeTabSelected: Bool
     @EnvironmentObject private var purchaseManager: PurchaseManager
     @EnvironmentObject private var deletionManager: DeletionManager
+    @EnvironmentObject private var exportAlbum: ExportAlbumStore
 
     @State private var showPaywall = false
     @State private var showCompletion = false
@@ -404,6 +408,17 @@ struct HomeView: View {
                 label: "Reviewable"
             )
             StatMiniCard(value: viewModel.reclaimableFormatted, label: "Reclaimable")
+            StatMiniCard(
+                value: ByteCountFormatter.string(
+                    fromByteCount: deletionManager.lifetimeBytesFreed,
+                    countStyle: .file
+                ),
+                label: "Freed with PhotoDuck"
+            )
+            StatMiniCard(
+                value: deletionManager.lifetimeItemsFreed.formatted(),
+                label: "Items cleaned"
+            )
         }
     }
 
@@ -440,6 +455,61 @@ struct HomeView: View {
                     PhotoResultsView(groups: visuallySimilarGroups)
                         .environmentObject(purchaseManager)
                         .environmentObject(deletionManager)
+                }
+            )
+
+            HomeCategoryTile(
+                icon: "rectangle.on.rectangle",
+                color: .accentDeep,
+                title: "Screenshots",
+                count: viewModel.screenshotAssets.count,
+                status: categoryStatus(for: viewModel.screenshotAssets.count),
+                note: viewModel.screenshotAssets.isEmpty
+                    ? "0 found"
+                    : "\(viewModel.screenshotAssets.count) ready to review",
+                destination: {
+                    PhotoCategoryReviewView(
+                        title: "Screenshots",
+                        subtitle: "Screenshots stay separate from camera photos.",
+                        assets: viewModel.screenshotAssets
+                    )
+                    .environmentObject(purchaseManager)
+                    .environmentObject(deletionManager)
+                }
+            )
+
+            HomeCategoryTile(
+                icon: "camera.macro",
+                color: .warning,
+                title: "Blurry",
+                count: viewModel.blurryAssets.count,
+                status: categoryStatus(for: viewModel.blurryAssets.count),
+                note: viewModel.blurryAssets.isEmpty
+                    ? "0 found"
+                    : "\(viewModel.blurryAssets.count) review only",
+                destination: {
+                    PhotoCategoryReviewView(
+                        title: "Blurry Photos",
+                        subtitle: "Conservative suggestions. Nothing is selected automatically.",
+                        assets: viewModel.blurryAssets
+                    )
+                    .environmentObject(purchaseManager)
+                    .environmentObject(deletionManager)
+                }
+            )
+
+            HomeCategoryTile(
+                icon: "externaldrive.fill.badge.checkmark",
+                color: .accentPrimary,
+                title: "Export Album",
+                count: exportAlbum.count,
+                status: exportAlbum.count > 0 ? "Ready" : "Empty",
+                note: exportAlbum.count > 0
+                    ? "\(exportAlbum.count) queued"
+                    : "Add photos from review",
+                navigatesWhenEmpty: true,
+                destination: {
+                    ExportAlbumView()
                 }
             )
 
@@ -694,12 +764,13 @@ private struct HomeCategoryTile<Destination: View>: View {
     let status: String
     let note: String
     var sizeBadge: String? = nil
+    var navigatesWhenEmpty = false
     @ViewBuilder let destination: () -> Destination
 
     var body: some View {
         DuckCard {
             Group {
-                if count > 0 {
+                if count > 0 || navigatesWhenEmpty {
                     NavigationLink(destination: destination) {
                         tileContent
                     }
@@ -764,7 +835,9 @@ private struct CompletionOverlay: View {
 
                 PrimaryMetricCard(
                     title: "Scan complete",
-                    value: "\(viewModel.lastCompletedGroupsCount) groups ready",
+                    value: viewModel.lastCompletedGroupsCount > 0
+                        ? "\(viewModel.lastCompletedGroupsCount) groups ready"
+                        : "\(viewModel.photoReviewCategoryCount) photos to review",
                     detail: "\(viewModel.lastCompletedReviewableCount) photos to review · \(ByteCountFormatter.string(fromByteCount: viewModel.lastCompletedReclaimableBytes, countStyle: .file)) potentially reclaimable",
                     accent: .accentPrimary,
                     progress: 1
@@ -809,5 +882,538 @@ private struct CompletionOverlay: View {
             .padding(.horizontal, 16)
         }
         .background(Color.backgroundBlush.ignoresSafeArea())
+    }
+}
+
+private struct PhotoCategoryReviewView: View {
+    let title: String
+    let subtitle: String
+    let assets: [PHAsset]
+
+    @EnvironmentObject private var purchaseManager: PurchaseManager
+    @EnvironmentObject private var deletionManager: DeletionManager
+    @EnvironmentObject private var exportAlbum: ExportAlbumStore
+    @State private var selectedAssetIDs: Set<String> = []
+    @State private var showPaywall = false
+    @State private var deletionError: String?
+    @State private var exportChipMessage: String?
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 4),
+        GridItem(.flexible(), spacing: 4),
+        GridItem(.flexible(), spacing: 4)
+    ]
+
+    private var selectedAssets: [PHAsset] {
+        assets.filter { selectedAssetIDs.contains($0.localIdentifier) }
+    }
+
+    private var selectedBytes: Int64 {
+        selectedAssets.reduce(into: Int64(0)) { $0 += $1.estimatedFileSize }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                DuckCard {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(subtitle)
+                            .font(.duckBody)
+                            .foregroundStyle(Color.textPrimary)
+                        Text("Select photos explicitly before deleting. Items remain in Recently Deleted for up to 30 days.")
+                            .font(.duckCaption)
+                            .foregroundStyle(Color.textSecondary)
+
+                        Button {
+                            let explicitSelection = selectedAssets
+                            exportAlbum.add(explicitSelection)
+                            exportChipMessage = "\(explicitSelection.count) added to Export Album"
+                        } label: {
+                            Label(
+                                selectedAssetIDs.isEmpty
+                                    ? "Add to Export"
+                                    : "Add \(selectedAssetIDs.count) to Export",
+                                systemImage: "plus"
+                            )
+                            .font(.duckCaption.weight(.semibold))
+                            .foregroundStyle(Color.accentPrimary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(
+                                Color.accentPrimary.opacity(0.1),
+                                in: Capsule()
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(selectedAssetIDs.isEmpty)
+                        .opacity(selectedAssetIDs.isEmpty ? 0.5 : 1)
+                        .accessibilityHint("Adds the selected photos to the Export Album without deleting them")
+
+                        if let exportChipMessage {
+                            Text(exportChipMessage)
+                                .font(.duckCaption.weight(.semibold))
+                                .foregroundStyle(Color.success)
+                        }
+                    }
+                    .padding(14)
+                }
+
+                if assets.isEmpty {
+                    EmptyStateView(
+                        title: "Nothing to review",
+                        icon: "checkmark.circle",
+                        message: "Run a fresh photo scan after adding new photos."
+                    )
+                } else {
+                    LazyVGrid(columns: columns, spacing: 4) {
+                        ForEach(assets, id: \.localIdentifier) { asset in
+                            Button {
+                                toggleSelection(for: asset)
+                            } label: {
+                                CategoryPhotoThumbnail(
+                                    asset: asset,
+                                    isSelected: selectedAssetIDs.contains(asset.localIdentifier)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(
+                                selectedAssetIDs.contains(asset.localIdentifier)
+                                    ? "Selected photo"
+                                    : "Unselected photo"
+                            )
+                        }
+                    }
+                }
+            }
+            .padding(16)
+            .padding(.bottom, 96)
+        }
+        .background(Color.backgroundBlush.ignoresSafeArea())
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom) {
+            if !assets.isEmpty {
+                categoryActionBar
+            }
+        }
+        .sheet(isPresented: $showPaywall) {
+            PaywallView().environmentObject(purchaseManager)
+        }
+        .alert(
+            "Couldn’t Delete Photos",
+            isPresented: Binding(
+                get: { deletionError != nil },
+                set: { if !$0 { deletionError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { deletionError = nil }
+        } message: {
+            Text(deletionError ?? "")
+        }
+    }
+
+    private var categoryActionBar: some View {
+        VStack(spacing: 6) {
+            Button {
+                if selectedAssetIDs.count > 1, !purchaseManager.isPurchased {
+                    showPaywall = true
+                } else {
+                    Task { await deleteSelectedAssets() }
+                }
+            } label: {
+                Text(actionTitle)
+                    .font(.duckButton)
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .background(
+                        selectedAssetIDs.isEmpty ? Color.textSecondary : Color.danger,
+                        in: RoundedRectangle(cornerRadius: DuckRadius.m, style: .continuous)
+                    )
+            }
+            .disabled(selectedAssetIDs.isEmpty || deletionManager.hasPendingDeletion)
+
+            if !selectedAssetIDs.isEmpty {
+                Text("\(selectedAssetIDs.count) selected · \(ByteCountFormatter.string(fromByteCount: selectedBytes, countStyle: .file))")
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.textSecondary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+    }
+
+    private var actionTitle: String {
+        guard !selectedAssetIDs.isEmpty else { return "Select Photos" }
+        if selectedAssetIDs.count > 1, !purchaseManager.isPurchased {
+            return "Delete Selected · Pro"
+        }
+        return selectedAssetIDs.count == 1 ? "Delete 1 Photo" : "Delete Selected"
+    }
+
+    private func toggleSelection(for asset: PHAsset) {
+        let id = asset.localIdentifier
+        if selectedAssetIDs.contains(id) {
+            selectedAssetIDs.remove(id)
+        } else {
+            selectedAssetIDs.insert(id)
+        }
+    }
+
+    @MainActor
+    private func deleteSelectedAssets() async {
+        let explicitSelection = selectedAssets
+        guard !explicitSelection.isEmpty else { return }
+        do {
+            try await deletionManager.delete(assets: explicitSelection)
+            selectedAssetIDs.removeAll()
+        } catch {
+            deletionError = error.localizedDescription
+        }
+    }
+}
+
+private struct ExportAlbumView: View {
+    @EnvironmentObject private var exportAlbum: ExportAlbumStore
+    @EnvironmentObject private var deletionManager: DeletionManager
+
+    @State private var showExternalFolderPicker = false
+    @State private var showPostExportActions = false
+    @State private var isExporting = false
+    @State private var exportResult: ExternalPhotoExportResult?
+    @State private var exportedAssetIDs: Set<String> = []
+    @State private var exportStatus: String?
+    @State private var errorMessage: String?
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 4),
+        GridItem(.flexible(), spacing: 4),
+        GridItem(.flexible(), spacing: 4)
+    ]
+
+    private var unavailableAssetIDs: Set<String> {
+        Set(exportAlbum.assetIDs).subtracting(
+            exportAlbum.assets.map(\.localIdentifier)
+        )
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                DuckCard {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(
+                            "One album, one export",
+                            systemImage: "externaldrive.fill.badge.checkmark"
+                        )
+                        .font(.duckBody.weight(.semibold))
+                        .foregroundStyle(Color.textPrimary)
+
+                        Text("Add photos while reviewing, then choose an SSD or another folder in Files. PhotoDuck copies and verifies every resource before offering to delete originals.")
+                            .font(.duckCaption)
+                            .foregroundStyle(Color.textSecondary)
+
+                        if let exportStatus {
+                            Text(exportStatus)
+                                .font(.duckCaption.weight(.semibold))
+                                .foregroundStyle(Color.success)
+                        }
+                    }
+                    .padding(14)
+                }
+
+                if !unavailableAssetIDs.isEmpty {
+                    DuckCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("\(unavailableAssetIDs.count) queued item(s) are no longer available with the current Photos access.")
+                                .font(.duckCaption)
+                                .foregroundStyle(Color.warning)
+
+                            Button("Remove Unavailable") {
+                                exportAlbum.remove(assetIDs: unavailableAssetIDs)
+                            }
+                            .font(.duckCaption.weight(.semibold))
+                            .foregroundStyle(Color.accentPrimary)
+                        }
+                        .padding(14)
+                    }
+                }
+
+                if exportAlbum.assets.isEmpty {
+                    EmptyStateView(
+                        title: "Export Album is empty",
+                        icon: "externaldrive.badge.plus",
+                        message: "Select photos in a review screen and tap Add to Export."
+                    )
+                } else {
+                    LazyVGrid(columns: columns, spacing: 4) {
+                        ForEach(exportAlbum.assets, id: \.localIdentifier) { asset in
+                            ZStack(alignment: .topTrailing) {
+                                CategoryPhotoThumbnail(
+                                    asset: asset,
+                                    isSelected: false,
+                                    showsSelectionIndicator: false
+                                )
+
+                                Button {
+                                    exportAlbum.remove(
+                                        assetIDs: [asset.localIdentifier]
+                                    )
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.title3)
+                                        .symbolRenderingMode(.palette)
+                                        .foregroundStyle(.white, Color.berryBlack.opacity(0.72))
+                                        .padding(6)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Remove from Export Album")
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(16)
+            .padding(.bottom, 104)
+        }
+        .background(Color.backgroundBlush.ignoresSafeArea())
+        .navigationTitle("Export Album")
+        .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom) {
+            if exportAlbum.count > 0 {
+                exportActionBar
+            }
+        }
+        .onAppear {
+            exportAlbum.refreshAssets()
+        }
+        .sheet(isPresented: $showExternalFolderPicker) {
+            ExternalFolderPicker { directoryURL in
+                showExternalFolderPicker = false
+                Task { await exportAlbum(to: directoryURL) }
+            }
+        }
+        .confirmationDialog(
+            "Export verified",
+            isPresented: $showPostExportActions,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Originals", role: .destructive) {
+                Task { await deleteExportedOriginals() }
+            }
+            Button("Export Only & Clear Album") {
+                clearSuccessfullyExportedAssets()
+            }
+            Button("Keep in Export Album", role: .cancel) {}
+        } message: {
+            if let exportResult {
+                Text(
+                    "\(exportResult.fileCount) files (\(ByteCountFormatter.string(fromByteCount: exportResult.totalBytes, countStyle: .file))) were verified in \(exportResult.directoryURL.lastPathComponent)."
+                )
+            }
+        }
+        .alert(
+            "Export Couldn’t Finish",
+            isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    private var exportActionBar: some View {
+        VStack(spacing: 8) {
+            Button {
+                showExternalFolderPicker = true
+            } label: {
+                HStack(spacing: 8) {
+                    if isExporting {
+                        ProgressView().tint(.white)
+                    } else {
+                        Image(systemName: "externaldrive.badge.plus")
+                    }
+                    Text(isExporting ? "Exporting & Verifying…" : "Export Album")
+                }
+                .font(.duckButton)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .background(
+                    Color.accentPrimary,
+                    in: RoundedRectangle(cornerRadius: DuckRadius.m)
+                )
+            }
+            .disabled(
+                isExporting
+                    || deletionManager.hasPendingDeletion
+                    || !unavailableAssetIDs.isEmpty
+                    || exportAlbum.assets.isEmpty
+            )
+            .opacity(
+                isExporting || !unavailableAssetIDs.isEmpty ? 0.6 : 1
+            )
+
+            Button("Clear Album") {
+                exportAlbum.clear()
+                exportStatus = nil
+            }
+            .font(.duckCaption.weight(.semibold))
+            .foregroundStyle(Color.textSecondary)
+            .disabled(isExporting)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+    }
+
+    @MainActor
+    private func exportAlbum(to directoryURL: URL) async {
+        let explicitAssets = exportAlbum.assets
+        let explicitIDs = Set(explicitAssets.map(\.localIdentifier))
+        guard !isExporting,
+              !explicitAssets.isEmpty,
+              explicitAssets.count == exportAlbum.assetIDs.count else {
+            errorMessage =
+                "Some queued photos are unavailable. Remove unavailable items before exporting."
+            return
+        }
+
+        isExporting = true
+        exportStatus = nil
+        defer { isExporting = false }
+
+        do {
+            let result = try await ExternalPhotoExportService().export(
+                assets: explicitAssets,
+                to: directoryURL
+            )
+            exportResult = result
+            exportedAssetIDs = explicitIDs
+            exportStatus =
+                "Verified \(result.fileCount) files in \(result.directoryURL.lastPathComponent)."
+            showPostExportActions = true
+        } catch {
+            exportResult = nil
+            exportedAssetIDs.removeAll()
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func deleteExportedOriginals() async {
+        let assetsToDelete = exportAlbum.assets.filter {
+            exportedAssetIDs.contains($0.localIdentifier)
+        }
+        guard !exportedAssetIDs.isEmpty,
+              assetsToDelete.count == exportedAssetIDs.count else {
+            errorMessage =
+                "The album changed after export. The copied files are safe, and no originals were deleted."
+            exportedAssetIDs.removeAll()
+            return
+        }
+
+        do {
+            try await deletionManager.delete(assets: assetsToDelete)
+            exportAlbum.remove(assetIDs: exportedAssetIDs)
+            exportedAssetIDs.removeAll()
+            exportStatus =
+                "Original deletion is waiting in the undo window."
+        } catch {
+            errorMessage =
+                "The export is safe, but PhotoDuck could not delete the originals: \(error.localizedDescription)"
+        }
+    }
+
+    private func clearSuccessfullyExportedAssets() {
+        exportAlbum.remove(assetIDs: exportedAssetIDs)
+        exportedAssetIDs.removeAll()
+    }
+}
+
+struct ExternalFolderPicker: UIViewControllerRepresentable {
+    let onPick: (URL) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPick: onPick)
+    }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: [.folder],
+            asCopy: false
+        )
+        picker.allowsMultipleSelection = false
+        picker.shouldShowFileExtensions = true
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(
+        _ uiViewController: UIDocumentPickerViewController,
+        context: Context
+    ) {}
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: (URL) -> Void
+
+        init(onPick: @escaping (URL) -> Void) {
+            self.onPick = onPick
+        }
+
+        func documentPicker(
+            _ controller: UIDocumentPickerViewController,
+            didPickDocumentsAt urls: [URL]
+        ) {
+            guard let url = urls.first else { return }
+            onPick(url)
+        }
+    }
+}
+
+private struct CategoryPhotoThumbnail: View {
+    let asset: PHAsset
+    let isSelected: Bool
+    var showsSelectionIndicator = true
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Color.surfaceElevated
+                        .overlay { ProgressView().tint(Color.accentPrimary) }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .aspectRatio(1, contentMode: .fit)
+            .clipped()
+
+            if showsSelectionIndicator {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(isSelected ? Color.danger : Color.white)
+                    .shadow(color: .black.opacity(0.35), radius: 2)
+                    .padding(7)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(isSelected ? Color.danger : Color.clear, lineWidth: 3)
+        }
+        .task(id: asset.localIdentifier) {
+            image = await asset.loadImage(
+                targetSize: CGSize(width: 300, height: 300),
+                deliveryMode: .opportunistic,
+                allowNetwork: true
+            )
+        }
     }
 }

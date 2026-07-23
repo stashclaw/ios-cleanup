@@ -465,10 +465,11 @@ private struct DuckAssetCard: View {
             .task(id: "\(Int(targetSize.width.rounded()))x\(Int(targetSize.height.rounded()))") {
                 image = await asset.loadImage(
                     targetSize: targetSize,
-                    deliveryMode: .opportunistic,
+                    deliveryMode: .highQualityFormat,
                     allowNetwork: true,
                     contentMode: .aspectFill,
-                    acceptsDegradedResult: true
+                    acceptsDegradedResult: false,
+                    timeout: 20
                 )
             }
         }

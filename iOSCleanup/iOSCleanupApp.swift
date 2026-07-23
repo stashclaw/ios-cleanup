@@ -5,6 +5,7 @@ import UserNotifications
 struct iOSCleanupApp: App {
     @StateObject private var purchaseManager = PurchaseManager()
     @StateObject private var deletionManager = DeletionManager()
+    @StateObject private var exportAlbum = ExportAlbumStore()
     private let notificationRouter = CleanupNotificationRouter()
 
     init() {
@@ -21,6 +22,7 @@ struct iOSCleanupApp: App {
                 .deletionUndoToast()
                 .environmentObject(purchaseManager)
                 .environmentObject(deletionManager)
+                .environmentObject(exportAlbum)
                 .environmentObject(notificationRouter)
                 .task { await purchaseManager.updatePurchaseStatus() }
         }

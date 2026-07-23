@@ -50,6 +50,7 @@
 		AA00003000000000000006A /* Manrope-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00003000000000000006B /* Manrope-Medium.ttf */; };
 		AA00003000000000000007A /* Manrope-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00003000000000000007B /* Manrope-SemiBold.ttf */; };
 		AA00003000000000000008A /* Manrope-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = AA00003000000000000008B /* Manrope-Bold.ttf */; };
+		AA00003100000000000001A /* ExternalPhotoExportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00003100000000000001B /* ExternalPhotoExportService.swift */; };
 		AA00000D000000000000005A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA00000D000000000000005B /* Assets.xcassets */; };
 		AA00000E000000000000001A /* UndoToast.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000E000000000000001B /* UndoToast.swift */; };
 		AA00000E000000000000002A /* DeletionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000E000000000000002B /* DeletionManager.swift */; };
@@ -136,6 +137,7 @@
 		AA00003000000000000006B /* Manrope-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Manrope-Medium.ttf"; sourceTree = "<group>"; };
 		AA00003000000000000007B /* Manrope-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Manrope-SemiBold.ttf"; sourceTree = "<group>"; };
 		AA00003000000000000008B /* Manrope-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Manrope-Bold.ttf"; sourceTree = "<group>"; };
+		AA00003100000000000001B /* ExternalPhotoExportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalPhotoExportService.swift; sourceTree = "<group>"; };
 		AA00000D000000000000005B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AA00000E000000000000001B /* UndoToast.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UndoToast.swift; sourceTree = "<group>"; };
 		AA00000E000000000000002B /* DeletionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeletionManager.swift; sourceTree = "<group>"; };
@@ -245,6 +247,7 @@
 				AA000001000000000000009B /* ContactScanEngine.swift */,
 				AA00000100000000000000AB /* FileScanEngine.swift */,
 				AA000009000000000000001B /* VideoCompressionEngine.swift */,
+				AA00003100000000000001B /* ExternalPhotoExportService.swift */,
 				AA00000E000000000000002B /* DeletionManager.swift */,
 				AA00000E000000000000003B /* PhotoDeletionGuardrails.swift */,
 				AA000021000000000000001B /* PhotoMLStore.swift */,
@@ -524,6 +527,7 @@
 				AA000020000000000000001A /* DuckBottomActionBar.swift in Sources */,
 				AA00000E000000000000001A /* UndoToast.swift in Sources */,
 				AA00000E000000000000002A /* DeletionManager.swift in Sources */,
+				AA00003100000000000001A /* ExternalPhotoExportService.swift in Sources */,
 				AA00000E000000000000003A /* PhotoDeletionGuardrails.swift in Sources */,
 				AA00000F000000000000002A /* PhotoDuckShellView.swift in Sources */,
 				AA00000F000000000000004A /* PHAsset+FileSize.swift in Sources */,

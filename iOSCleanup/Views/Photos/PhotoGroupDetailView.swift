@@ -9,6 +9,7 @@ struct PhotoGroupDetailView: View {
 
     @EnvironmentObject private var purchaseManager: PurchaseManager
     @EnvironmentObject private var deletionManager: DeletionManager
+    @EnvironmentObject private var exportAlbum: ExportAlbumStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var deleteSet: Set<String> = []
@@ -17,6 +18,7 @@ struct PhotoGroupDetailView: View {
     @State private var isDeleting = false
     @State private var deleteError: String?
     @State private var previewAssetID: String?
+    @State private var exportChipMessage: String?
 
     init(group: PhotoGroup, groupIndex: Int = 0, totalGroups: Int = 1, onDeleteGroup: (() -> Void)? = nil) {
         self.group = group
@@ -51,10 +53,7 @@ struct PhotoGroupDetailView: View {
                     .padding(.horizontal, 12)
                     .padding(.top, 8)
 
-                LazyVGrid(
-                    columns: [GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3)],
-                    spacing: 3
-                ) {
+                LazyVStack(spacing: 12) {
                     ForEach(Array(group.assets.enumerated()), id: \.element.localIdentifier) { index, asset in
                         photoCell(asset: asset, index: index)
                     }
@@ -265,18 +264,54 @@ struct PhotoGroupDetailView: View {
         }
     }
 
+    private func addSelectionToExportAlbum() {
+        let explicitSelection = group.assets.filter {
+            deleteSet.contains($0.localIdentifier)
+        }
+        guard !explicitSelection.isEmpty else { return }
+        exportAlbum.add(explicitSelection)
+        exportChipMessage = "\(explicitSelection.count) added to Export Album"
+    }
+
     @ViewBuilder
     private var reviewGuidance: some View {
         VStack(alignment: .leading, spacing: 6) {
-            StatusBadge(
-                title: group.recommendedAction == .keepBestTrashRest ? "High-confidence cleanup" : "Review together",
-                accent: group.isAutoCleanEligible ? .success : .textSecondary
-            )
+            HStack(spacing: 8) {
+                StatusBadge(
+                    title: group.recommendedAction == .keepBestTrashRest ? "High-confidence cleanup" : "Review together",
+                    accent: group.isAutoCleanEligible ? .success : .textSecondary
+                )
+
+                Spacer(minLength: 4)
+
+                Button(action: addSelectionToExportAlbum) {
+                    Label("Add to Export", systemImage: "plus")
+                        .font(.duckCaption.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.14), in: Capsule())
+                        .overlay {
+                            Capsule()
+                                .stroke(Color.white.opacity(0.28), lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .disabled(deleteSet.isEmpty)
+                .opacity(deleteSet.isEmpty ? 0.45 : 1)
+                .accessibilityHint("Adds the selected photos to the Export Album without deleting them")
+            }
 
             if let reason = group.reasons.first {
                 Text(reason)
                     .font(.duckCaption)
                     .foregroundStyle(Color.white.opacity(0.8))
+            }
+
+            if let exportChipMessage {
+                Text(exportChipMessage)
+                    .font(.duckCaption.weight(.semibold))
+                    .foregroundStyle(Color.success)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -299,67 +334,67 @@ private struct PhotoGroupAssetCell: View {
     @State private var image: UIImage?
 
     var body: some View {
-        Button(action: onToggle) {
-            GeometryReader { proxy in
-                let pixelSide = max(proxy.size.width * displayScale, 1)
+        GeometryReader { proxy in
+            let targetSize = displayTargetSize(for: proxy.size.width)
 
-                ZStack(alignment: .bottom) {
-                    Group {
-                        if let image {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFill()
-                        } else {
-                            Color.gray.opacity(0.25)
-                                .overlay(ProgressView().tint(.white))
-                        }
+            ZStack(alignment: .bottom) {
+                Group {
+                    if let image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                    } else {
+                        Color.gray.opacity(0.25)
+                            .overlay(ProgressView().tint(.white))
                     }
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .clipped()
-
-                    if isSelectedForDeletion {
-                        Color.danger.opacity(0.38)
-                    }
-
-                    LinearGradient(
-                        colors: [.clear, .black.opacity(0.72)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: 52)
-
-                    HStack(alignment: .bottom, spacing: 4) {
-                        Text(fileSizeLabel)
-                            .font(.duckLabel)
-                            .foregroundStyle(.white.opacity(0.9))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-
-                        Spacer()
-
-                        Image(systemName: isSelectedForDeletion ? "xmark.circle.fill" : "checkmark.circle.fill")
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(.white, isSelectedForDeletion ? Color.danger : Color.success)
-                            .font(.title2)   // filled 22pt selection circle
-                            .shadow(radius: 2)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 8)
                 }
-                .task(id: Int(pixelSide.rounded())) {
-                    image = await asset.loadImage(
-                        targetSize: CGSize(width: pixelSide, height: pixelSide),
-                        deliveryMode: .opportunistic,
-                        allowNetwork: true,
-                        contentMode: .aspectFill,
-                        acceptsDegradedResult: true
-                    )
+                .frame(width: proxy.size.width, height: proxy.size.height)
+
+                if isSelectedForDeletion {
+                    Color.danger.opacity(0.30)
                 }
+
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.72)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 52)
+
+                HStack(alignment: .bottom, spacing: 4) {
+                    Text(fileSizeLabel)
+                        .font(.duckLabel)
+                        .foregroundStyle(.white.opacity(0.9))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+
+                    Spacer()
+
+                    Image(systemName: isSelectedForDeletion ? "xmark.circle.fill" : "checkmark.circle.fill")
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, isSelectedForDeletion ? Color.danger : Color.success)
+                        .font(.title2)
+                        .shadow(radius: 2)
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+            }
+            .task(id: "\(Int(targetSize.width))x\(Int(targetSize.height))") {
+                image = await asset.loadImage(
+                    targetSize: targetSize,
+                    deliveryMode: .highQualityFormat,
+                    allowNetwork: true,
+                    contentMode: .aspectFit,
+                    acceptsDegradedResult: false,
+                    timeout: 20
+                )
             }
         }
-        .buttonStyle(.plain)
-        .aspectRatio(1, contentMode: .fit)
-        .clipped()
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2, perform: onPreview)
+        .onTapGesture(count: 1, perform: onToggle)
+        .aspectRatio(assetAspectRatio, contentMode: .fit)
+        .background(Color.black)
         .clipShape(RoundedRectangle(cornerRadius: DuckRadius.s, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: DuckRadius.s, style: .continuous)
@@ -411,6 +446,22 @@ private struct PhotoGroupAssetCell: View {
                 : (isSelectedForDeletion ? "Double tap to keep this photo" : "Double tap to mark this photo for deletion")
         )
         .accessibilityAddTraits(isSelectedForDeletion ? .isSelected : [])
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: "Toggle selection", onToggle)
+        .accessibilityAction(named: "Open fullscreen comparison", onPreview)
+    }
+
+    private var assetAspectRatio: CGFloat {
+        CGFloat(max(asset.pixelWidth, 1)) / CGFloat(max(asset.pixelHeight, 1))
+    }
+
+    private func displayTargetSize(for displayWidth: CGFloat) -> CGSize {
+        let pixelWidth = min(max(displayWidth * displayScale, 1_200), 2_048)
+        let pixelHeight = min(
+            max(pixelWidth / assetAspectRatio, 1),
+            2_048
+        )
+        return CGSize(width: pixelWidth, height: pixelHeight)
     }
 
     private var fileSizeLabel: String {
@@ -530,7 +581,7 @@ private struct ZoomablePhotoCanvas: View {
         }
         .task {
             image = await asset.loadImage(
-                targetSize: CGSize(width: 1_600, height: 1_600),
+                targetSize: PHImageManagerMaximumSize,
                 deliveryMode: .highQualityFormat,
                 allowNetwork: true,
                 contentMode: .aspectFit,

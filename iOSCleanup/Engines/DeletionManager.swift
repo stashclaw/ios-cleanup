@@ -16,6 +16,53 @@ enum DeletionManagerError: Error, LocalizedError {
     }
 }
 
+struct CleanupStats: Codable, Equatable, Sendable {
+    var lifetimeBytesFreed: Int64 = 0
+    var lifetimeItemsFreed: Int = 0
+}
+
+final class CleanupStatsStore {
+    private static let key = "photoduck.cleanup-stats.v1"
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func load() -> CleanupStats {
+        guard let data = defaults.data(forKey: Self.key),
+              let stats = try? JSONDecoder().decode(CleanupStats.self, from: data) else {
+            return CleanupStats()
+        }
+        return stats
+    }
+
+    @discardableResult
+    func recordConfirmedDeletion(bytes: Int64, itemCount: Int) -> CleanupStats {
+        var stats = load()
+        stats.lifetimeBytesFreed = Self.addingWithoutOverflow(
+            stats.lifetimeBytesFreed,
+            max(bytes, 0)
+        )
+        stats.lifetimeItemsFreed = Self.addingWithoutOverflow(
+            stats.lifetimeItemsFreed,
+            max(itemCount, 0)
+        )
+        if let data = try? JSONEncoder().encode(stats) {
+            defaults.set(data, forKey: Self.key)
+        }
+        return stats
+    }
+
+    private static func addingWithoutOverflow<T: FixedWidthInteger>(
+        _ lhs: T,
+        _ rhs: T
+    ) -> T {
+        let (result, overflowed) = lhs.addingReportingOverflow(rhs)
+        return overflowed ? .max : result
+    }
+}
+
 @MainActor
 final class DeletionManager: ObservableObject {
     @Published var toastVisible: Bool = false
@@ -35,6 +82,8 @@ final class DeletionManager: ObservableObject {
     @Published private(set) var bulkProcessedBytes: Int64 = 0
     @Published var totalBytesFreed: Int64 = 0
     @Published var totalItemsFreed: Int = 0
+    @Published private(set) var lifetimeBytesFreed: Int64
+    @Published private(set) var lifetimeItemsFreed: Int
     @Published var toastFreedCount: Int = 0
 
     private var pendingAssets: [PHAsset] = []
@@ -42,6 +91,14 @@ final class DeletionManager: ObservableObject {
     private var pendingCommitStarted = false
     private var commitTask: Task<Void, Never>?
     private let undoWindowSeconds: TimeInterval = 10
+    private let cleanupStatsStore: CleanupStatsStore
+
+    init(cleanupStatsStore: CleanupStatsStore = CleanupStatsStore()) {
+        self.cleanupStatsStore = cleanupStatsStore
+        let stats = cleanupStatsStore.load()
+        lifetimeBytesFreed = stats.lifetimeBytesFreed
+        lifetimeItemsFreed = stats.lifetimeItemsFreed
+    }
 
     var hasPendingDeletion: Bool {
         commitTask != nil || isDeleting
@@ -126,6 +183,7 @@ final class DeletionManager: ObservableObject {
         bulkProcessedBytes = bulkTotalBytes
         totalBytesFreed += bulkTotalBytes
         totalItemsFreed += total
+        recordConfirmedDeletion(bytes: bulkTotalBytes, itemCount: total)
         DuckHaptics.success()
     }
 
@@ -175,6 +233,10 @@ final class DeletionManager: ObservableObject {
                 self.lastCommittedToastID = scheduledToastID
                 self.totalBytesFreed += scheduledBytes
                 self.totalItemsFreed += scheduledAssets.count
+                self.recordConfirmedDeletion(
+                    bytes: scheduledBytes,
+                    itemCount: scheduledAssets.count
+                )
                 DuckHaptics.success()
                 self.clearPendingDeletion(for: scheduledToastID)
             } catch is CancellationError {
@@ -205,6 +267,10 @@ final class DeletionManager: ObservableObject {
             lastCommittedToastID = scheduledToastID
             totalBytesFreed += scheduledBytes
             totalItemsFreed += scheduledAssets.count
+            recordConfirmedDeletion(
+                bytes: scheduledBytes,
+                itemCount: scheduledAssets.count
+            )
             DuckHaptics.success()
             clearPendingDeletion(for: scheduledToastID)
         } catch {
@@ -250,5 +316,14 @@ final class DeletionManager: ObservableObject {
         assets.reduce(into: Int64(0)) { acc, a in
             acc += a.estimatedFileSize
         }
+    }
+
+    private func recordConfirmedDeletion(bytes: Int64, itemCount: Int) {
+        let stats = cleanupStatsStore.recordConfirmedDeletion(
+            bytes: bytes,
+            itemCount: itemCount
+        )
+        lifetimeBytesFreed = stats.lifetimeBytesFreed
+        lifetimeItemsFreed = stats.lifetimeItemsFreed
     }
 }

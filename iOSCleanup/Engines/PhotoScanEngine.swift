@@ -25,11 +25,16 @@ struct PhotoScanUpdate: Sendable {
     let unanalyzedPhotoCount: Int
     let progressFraction: Double
     let groups: [PhotoGroup]
+    let screenshotAssets: [PHAsset]
+    let blurryAssets: [PHAsset]
     let groupsFoundCount: Int
     let reviewablePhotosCount: Int
     let reclaimableBytesFoundSoFar: Int64
     let hasPartialResults: Bool
     let isComplete: Bool
+    /// Assets analyzed for this run. Incremental callers use this to replace
+    /// only affected cached groups instead of clearing the whole library result.
+    var evaluatedAssetIDs: Set<String> = []
 
     var hasUnanalyzedPhotos: Bool {
         unanalyzedPhotoCount > 0
@@ -155,13 +160,15 @@ actor PhotoScanEngine {
 
     nonisolated func scan(
         mode: CleanupMode,
-        allowNetworkAccess: Bool = PhotoScanDefaults.allowNetworkAccess
+        allowNetworkAccess: Bool = PhotoScanDefaults.allowNetworkAccess,
+        requiredAssetIDs: Set<String>? = nil
     ) -> AsyncThrowingStream<PhotoScanUpdate, Error> {
         AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let scanTask = Task(priority: .utility) {
                 await self.performScan(
                     mode: mode,
                     allowNetworkAccess: allowNetworkAccess,
+                    requiredAssetIDs: requiredAssetIDs,
                     continuation: continuation
                 )
             }
@@ -174,15 +181,25 @@ actor PhotoScanEngine {
     private func performScan(
         mode: CleanupMode,
         allowNetworkAccess: Bool,
+        requiredAssetIDs: Set<String>?,
         continuation: AsyncThrowingStream<PhotoScanUpdate, Error>.Continuation
     ) async {
         do {
             isPaused = false
             let allAssets = try await assetProvider.fetchImageAssets()
-            let targetAssets = prioritizedAssets(from: allAssets, mode: mode)
+            let targetAssets: [PHAsset]
+            if let requiredAssetIDs {
+                targetAssets = incrementalAssets(
+                    from: allAssets,
+                    requiredAssetIDs: requiredAssetIDs
+                )
+            } else {
+                targetAssets = prioritizedAssets(from: allAssets, mode: mode)
+            }
             let preferenceProfile = await PhotoPreferenceProfileStore.shared.snapshot()
             let totalCount = allAssets.count
             let targetCount = targetAssets.count
+            let evaluatedAssetIDs = Set(targetAssets.map(\.localIdentifier))
 
             guard !targetAssets.isEmpty else {
                 continuation.yield(
@@ -195,11 +212,14 @@ actor PhotoScanEngine {
                         unanalyzedPhotoCount: 0,
                         progressFraction: 1,
                         groups: [],
+                        screenshotAssets: [],
+                        blurryAssets: [],
                         groupsFoundCount: 0,
                         reviewablePhotosCount: 0,
                         reclaimableBytesFoundSoFar: 0,
                         hasPartialResults: false,
-                        isComplete: true
+                        isComplete: true,
+                        evaluatedAssetIDs: []
                     )
                 )
                 await performMLRetentionAfterSuccessfulScan(
@@ -229,6 +249,8 @@ actor PhotoScanEngine {
             var analyzedPhotoCount = 0
             var unanalyzedPhotoCount = 0
             var latestGroups: [PhotoGroup] = []
+            var screenshotAssets: [PHAsset] = []
+            var blurryAssets: [PHAsset] = []
             // Four concurrent PhotoKit/Vision requests keeps progress moving without
             // saturating the shared image manager used by the foreground UI.
             let batchSize = 4
@@ -246,11 +268,14 @@ actor PhotoScanEngine {
                     unanalyzedPhotoCount: 0,
                     progressFraction: 0,
                     groups: [],
+                    screenshotAssets: [],
+                    blurryAssets: [],
                     groupsFoundCount: 0,
                     reviewablePhotosCount: 0,
                     reclaimableBytesFoundSoFar: 0,
                     hasPartialResults: false,
-                    isComplete: false
+                    isComplete: false,
+                    evaluatedAssetIDs: evaluatedAssetIDs
                 )
             )
 
@@ -286,9 +311,11 @@ actor PhotoScanEngine {
                             batchAnalyzedPhotoCount += 1
                         }
                         let attemptedCount = processedCount + analyses.count
-                        let reviewableCount = latestGroups.reduce(0) {
-                            $0 + max($1.assets.count - 1, 0)
-                        }
+                        let reviewableCount = PhotoReviewCategoryClassifier.reviewableCount(
+                            groups: latestGroups,
+                            screenshotAssets: screenshotAssets,
+                            blurryAssets: blurryAssets
+                        )
                         continuation.yield(
                             PhotoScanUpdate(
                                 mode: mode,
@@ -299,11 +326,14 @@ actor PhotoScanEngine {
                                 unanalyzedPhotoCount: unanalyzedPhotoCount + batchUnanalyzedPhotoCount,
                                 progressFraction: Double(attemptedCount) / Double(targetCount),
                                 groups: latestGroups,
+                                screenshotAssets: screenshotAssets,
+                                blurryAssets: blurryAssets,
                                 groupsFoundCount: latestGroups.count,
                                 reviewablePhotosCount: reviewableCount,
                                 reclaimableBytesFoundSoFar: latestGroups.totalReclaimableBytes,
                                 hasPartialResults: !latestGroups.isEmpty,
-                                isComplete: false
+                                isComplete: false,
+                                evaluatedAssetIDs: evaluatedAssetIDs
                             )
                         )
                     }
@@ -336,6 +366,17 @@ actor PhotoScanEngine {
                     }
                     if let keeperSignals = analysis.featureValue.keeperSignals {
                         keeperSignalsByID[analysis.assetID] = keeperSignals
+                    }
+                    switch PhotoReviewCategoryClassifier.classify(
+                        isScreenshot: descriptor.isScreenshot,
+                        sharpness: analysis.featureValue.keeperSignals?.sharpness
+                    ) {
+                    case .screenshot:
+                        screenshotAssets.append(asset)
+                    case .blurry:
+                        blurryAssets.append(asset)
+                    case nil:
+                        break
                     }
 
                     let candidateIDs = comparisonCandidateIDs(
@@ -514,9 +555,11 @@ actor PhotoScanEngine {
                     )
                 }
 
-                let reviewableCount = latestGroups.reduce(0) {
-                    $0 + max($1.assets.count - 1, 0)
-                }
+                let reviewableCount = PhotoReviewCategoryClassifier.reviewableCount(
+                    groups: latestGroups,
+                    screenshotAssets: screenshotAssets,
+                    blurryAssets: blurryAssets
+                )
                 let reclaimableBytes = latestGroups.totalReclaimableBytes
                 let isComplete = processedCount >= targetCount
                 continuation.yield(
@@ -529,11 +572,14 @@ actor PhotoScanEngine {
                         unanalyzedPhotoCount: unanalyzedPhotoCount,
                         progressFraction: Double(processedCount) / Double(targetCount),
                         groups: latestGroups,
+                        screenshotAssets: screenshotAssets,
+                        blurryAssets: blurryAssets,
                         groupsFoundCount: latestGroups.count,
                         reviewablePhotosCount: reviewableCount,
                         reclaimableBytesFoundSoFar: reclaimableBytes,
-                        hasPartialResults: !isComplete && !latestGroups.isEmpty,
-                        isComplete: isComplete
+                        hasPartialResults: !isComplete && reviewableCount > 0,
+                        isComplete: isComplete,
+                        evaluatedAssetIDs: evaluatedAssetIDs
                     )
                 )
                 await Task.yield()
@@ -579,10 +625,31 @@ actor PhotoScanEngine {
             deliveryMode: .fastFormat,
             allowNetwork: allowNetworkAccess,
             contentMode: .aspectFill,
-            acceptsDegradedResult: true,
+            // Degraded PhotoKit thumbnails can be soft because the original is
+            // still in iCloud. They are not valid evidence of camera blur.
+            acceptsDegradedResult: false,
             timeout: 4
         ), let cgImage = image.cgImage else {
             return .unavailable
+        }
+
+        var keeperSignals = makeKeeperSignals(from: cgImage, asset: asset)
+        if let sharpness = keeperSignals?.sharpness,
+           sharpness <= PhotoScanDefaults.blurryPhotoSharpnessCeiling {
+            // Confirm a low-resolution blur signal against a larger,
+            // non-degraded representation. If it is unavailable locally, leave
+            // the asset unanalyzed for blur instead of blaming an iCloud cache.
+            let confirmationImage = await asset.loadImage(
+                targetSize: CGSize(width: 1_024, height: 1_024),
+                deliveryMode: .highQualityFormat,
+                allowNetwork: allowNetworkAccess,
+                contentMode: .aspectFit,
+                acceptsDegradedResult: false,
+                timeout: allowNetworkAccess ? 15 : 4
+            )
+            keeperSignals = confirmationImage?.cgImage.flatMap {
+                makeKeeperSignals(from: $0, asset: asset)
+            }
         }
 
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
@@ -600,14 +667,14 @@ actor PhotoScanEngine {
                 observation: observation,
                 embedding: observation?.data,
                 perceptualHash: makePerceptualHash(from: cgImage),
-                keeperSignals: makeKeeperSignals(from: cgImage, asset: asset)
+                keeperSignals: keeperSignals
             )
         } catch {
             return PhotoScanAssetAnalysis(
                 observation: nil,
                 embedding: nil,
                 perceptualHash: makePerceptualHash(from: cgImage),
-                keeperSignals: makeKeeperSignals(from: cgImage, asset: asset)
+                keeperSignals: keeperSignals
             )
         }
     }
@@ -1074,6 +1141,64 @@ actor PhotoScanEngine {
         }
     }
 
+    private nonisolated func incrementalAssets(
+        from assets: [PHAsset],
+        requiredAssetIDs: Set<String>
+    ) -> [PHAsset] {
+        guard !requiredAssetIDs.isEmpty else { return [] }
+
+        let requiredAssets = assets.filter {
+            requiredAssetIDs.contains($0.localIdentifier)
+        }
+        guard !requiredAssets.isEmpty else { return [] }
+
+        var includedIDs = Set(requiredAssets.map(\.localIdentifier))
+        let chronological = assets.sortedByCreationDate()
+
+        for required in requiredAssets {
+            let requiredDate = required.creationDate
+            let requiredBurstID = required.burstIdentifier
+            let isScreenshot = required.mediaSubtypes.contains(.photoScreenshot)
+            var screenshotContextCount = 0
+
+            for candidate in chronological.reversed() {
+                guard !includedIDs.contains(candidate.localIdentifier) else {
+                    continue
+                }
+
+                if let requiredBurstID,
+                   candidate.burstIdentifier == requiredBurstID {
+                    includedIDs.insert(candidate.localIdentifier)
+                    continue
+                }
+
+                if let requiredDate,
+                   let candidateDate = candidate.creationDate,
+                   abs(requiredDate.timeIntervalSince(candidateDate))
+                    <= SimilarityThresholds.visualSessionWindowSeconds {
+                    includedIDs.insert(candidate.localIdentifier)
+                    continue
+                }
+
+                // Old screenshot duplicates can be far apart in time. Recheck a
+                // bounded set with matching dimensions rather than the full library.
+                if isScreenshot,
+                   candidate.mediaSubtypes.contains(.photoScreenshot),
+                   candidate.pixelWidth == required.pixelWidth,
+                   candidate.pixelHeight == required.pixelHeight,
+                   screenshotContextCount
+                    < SimilarityThresholds.maxFeatureComparisonsPerAsset {
+                    includedIDs.insert(candidate.localIdentifier)
+                    screenshotContextCount += 1
+                }
+            }
+        }
+
+        return chronological.filter {
+            includedIDs.contains($0.localIdentifier)
+        }
+    }
+
     private nonisolated func assetPriority(
         _ asset: PHAsset,
         recentCutoff: Date
@@ -1098,6 +1223,45 @@ enum ScanError: Error {
 enum PhotoScanDefaults {
     // iCloud downloads require an explicit caller opt-in.
     static let allowNetworkAccess = false
+    // This category is review-only. Keep the initial cutoff conservative until
+    // device telemetry can separate intentional softness from accidental blur.
+    static let blurryPhotoSharpnessCeiling = 0.22
+}
+
+enum PhotoReviewCategory: Equatable, Sendable {
+    case screenshot
+    case blurry
+}
+
+enum PhotoReviewCategoryClassifier {
+    static func classify(
+        isScreenshot: Bool,
+        sharpness: Double?
+    ) -> PhotoReviewCategory? {
+        if isScreenshot {
+            return .screenshot
+        }
+        guard let sharpness,
+              sharpness <= PhotoScanDefaults.blurryPhotoSharpnessCeiling else {
+            return nil
+        }
+        return .blurry
+    }
+
+    static func reviewableCount(
+        groups: [PhotoGroup],
+        screenshotAssets: [PHAsset],
+        blurryAssets: [PHAsset]
+    ) -> Int {
+        let groupedAssetIDs = Set(groups.flatMap(\.assets).map(\.localIdentifier))
+        let groupReviewCount = groups.reduce(0) {
+            $0 + max($1.assets.count - 1, 0)
+        }
+        let categoryOnlyIDs = Set(
+            (screenshotAssets + blurryAssets).map(\.localIdentifier)
+        ).subtracting(groupedAssetIDs)
+        return groupReviewCount + categoryOnlyIDs.count
+    }
 }
 
 private struct AssetWorkItem: @unchecked Sendable {
@@ -1201,6 +1365,12 @@ enum PhotoScanCandidateSelector {
             }
 
             let timeDelta = abs(currentDate.timeIntervalSince(candidateDate))
+            // Assets are processed in ascending capture order. Once the reversed
+            // walk crosses the session window, every remaining candidate is older.
+            if currentDate >= candidateDate,
+               timeDelta > SimilarityThresholds.extendedVisualSessionWindowSeconds {
+                break
+            }
             if timeDelta <= SimilarityThresholds.visualSessionWindowSeconds {
                 primaryCandidates.append(candidateID)
             } else if timeDelta <= SimilarityThresholds.extendedVisualSessionWindowSeconds {

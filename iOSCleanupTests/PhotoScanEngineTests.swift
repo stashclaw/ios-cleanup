@@ -246,6 +246,8 @@ final class PhotoScanEngineTests: XCTestCase {
             unanalyzedPhotoCount: 7,
             progressFraction: 1,
             groups: [],
+            screenshotAssets: [],
+            blurryAssets: [],
             groupsFoundCount: 0,
             reviewablePhotosCount: 0,
             reclaimableBytesFoundSoFar: 0,
@@ -258,6 +260,68 @@ final class PhotoScanEngineTests: XCTestCase {
             update.analyzedPhotoCount + update.unanalyzedPhotoCount
         )
         XCTAssertTrue(update.hasUnanalyzedPhotos)
+    }
+
+    func testScreenshotCategoryTakesPriorityOverBlurSignal() {
+        XCTAssertEqual(
+            PhotoReviewCategoryClassifier.classify(
+                isScreenshot: true,
+                sharpness: 0
+            ),
+            .screenshot
+        )
+    }
+
+    func testBlurryCategoryUsesConservativeTuningBoundary() {
+        XCTAssertEqual(
+            PhotoReviewCategoryClassifier.classify(
+                isScreenshot: false,
+                sharpness: PhotoScanDefaults.blurryPhotoSharpnessCeiling
+            ),
+            .blurry
+        )
+        XCTAssertNil(
+            PhotoReviewCategoryClassifier.classify(
+                isScreenshot: false,
+                sharpness: PhotoScanDefaults.blurryPhotoSharpnessCeiling + 0.001
+            )
+        )
+        XCTAssertNil(
+            PhotoReviewCategoryClassifier.classify(
+                isScreenshot: false,
+                sharpness: nil
+            )
+        )
+    }
+
+    func testReviewableCountDoesNotDoubleCountCategoryAssetsInGroups() {
+        let first = PhotoScanTestAsset(
+            localIdentifier: "group-first",
+            creationDate: Date(timeIntervalSinceReferenceDate: 0)
+        )
+        let second = PhotoScanTestAsset(
+            localIdentifier: "group-second",
+            creationDate: Date(timeIntervalSinceReferenceDate: 1)
+        )
+        let categoryOnly = PhotoScanTestAsset(
+            localIdentifier: "category-only",
+            creationDate: Date(timeIntervalSinceReferenceDate: 2)
+        )
+        let group = PhotoGroup(
+            assets: [first, second],
+            similarity: 0.1,
+            reason: .visuallySimilar,
+            recommendedAction: .reviewManually
+        )
+
+        XCTAssertEqual(
+            PhotoReviewCategoryClassifier.reviewableCount(
+                groups: [group],
+                screenshotAssets: [first],
+                blurryAssets: [categoryOnly, categoryOnly]
+            ),
+            2
+        )
     }
 
     func testInjectedAssetProviderCompletesDegradedScanWithoutFalseCleanResult() async throws {
@@ -290,6 +354,71 @@ final class PhotoScanEngineTests: XCTestCase {
         XCTAssertEqual(finalUpdate?.unanalyzedPhotoCount, assets.count)
         XCTAssertTrue(finalUpdate?.hasUnanalyzedPhotos == true)
         XCTAssertTrue(finalUpdate?.groups.isEmpty == true)
+    }
+
+    func testIncrementalScanWithUnchangedInventoryPerformsNoAnalysis() async throws {
+        let asset = PhotoScanTestAsset(
+            localIdentifier: "existing",
+            creationDate: Date(timeIntervalSinceReferenceDate: 1)
+        )
+        let invocationCounter = LockedInvocationCounter()
+        let engine = PhotoScanEngine(
+            assetProvider: StubPhotoScanAssetProvider(assets: [asset]),
+            assetAnalyzer: { _, _ in
+                invocationCounter.increment()
+                return .unavailable
+            }
+        )
+
+        var finalUpdate: PhotoScanUpdate?
+        for try await update in engine.scan(
+            mode: .deepClean,
+            requiredAssetIDs: []
+        ) {
+            finalUpdate = update
+        }
+
+        XCTAssertEqual(invocationCounter.value, 0)
+        XCTAssertEqual(finalUpdate?.scanTargetCount, 0)
+        XCTAssertEqual(finalUpdate?.evaluatedAssetIDs, [])
+        XCTAssertTrue(finalUpdate?.isComplete == true)
+    }
+
+    func testIncrementalScanAnalyzesNewAssetAndBoundedSessionContext() async throws {
+        let farAsset = PhotoScanTestAsset(
+            localIdentifier: "far",
+            creationDate: Date(timeIntervalSinceReferenceDate: 0)
+        )
+        let nearbyAsset = PhotoScanTestAsset(
+            localIdentifier: "nearby",
+            creationDate: Date(timeIntervalSinceReferenceDate: 10_000)
+        )
+        let newAsset = PhotoScanTestAsset(
+            localIdentifier: "new",
+            creationDate: Date(timeIntervalSinceReferenceDate: 10_001)
+        )
+        let engine = PhotoScanEngine(
+            assetProvider: StubPhotoScanAssetProvider(
+                assets: [farAsset, nearbyAsset, newAsset]
+            ),
+            assetAnalyzer: { _, _ in .unavailable }
+        )
+
+        var finalUpdate: PhotoScanUpdate?
+        for try await update in engine.scan(
+            mode: .deepClean,
+            requiredAssetIDs: ["new"]
+        ) {
+            if update.isComplete {
+                finalUpdate = update
+            }
+        }
+
+        XCTAssertEqual(
+            finalUpdate?.evaluatedAssetIDs,
+            ["nearby", "new"]
+        )
+        XCTAssertEqual(finalUpdate?.processedPhotoCount, 2)
     }
 
     func testScanCancellationPropagatesIntoInFlightAssetAnalysis() async {
@@ -338,7 +467,9 @@ final class PhotoScanEngineTests: XCTestCase {
             let cache = PhotoAnalysisCache()
             let snapshot = makeAnalysisSnapshot(
                 analyzedPhotoCount: 7,
-                unanalyzedPhotoCount: 3
+                unanalyzedPhotoCount: 3,
+                screenshotAssetIdentifiers: ["screen-1"],
+                blurryAssetIdentifiers: ["blur-1"]
             )
 
             await cache.saveSnapshot(snapshot)
@@ -352,7 +483,46 @@ final class PhotoScanEngineTests: XCTestCase {
             XCTAssertEqual(loaded?.analyzedPhotoCount, 7)
             XCTAssertEqual(loaded?.unanalyzedPhotoCount, 3)
             XCTAssertEqual(loaded?.cleanupMode, .deepClean)
+            XCTAssertEqual(loaded?.screenshotAssetIdentifiers, ["screen-1"])
+            XCTAssertEqual(loaded?.blurryAssetIdentifiers, ["blur-1"])
+            XCTAssertEqual(
+                loaded?.libraryAssetIdentifiers,
+                ["library-1", "library-2"]
+            )
+            XCTAssertEqual(loaded?.libraryAssets.count, 2)
         }
+    }
+
+    func testCleanupStatsStorePersistsConfirmedTotalsAndClampsOverflow() {
+        let suiteName = "CleanupStatsStoreTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = CleanupStatsStore(defaults: defaults)
+
+        XCTAssertEqual(
+            store.recordConfirmedDeletion(bytes: 4_096, itemCount: 2),
+            CleanupStats(lifetimeBytesFreed: 4_096, lifetimeItemsFreed: 2)
+        )
+        XCTAssertEqual(
+            CleanupStatsStore(defaults: defaults).load(),
+            CleanupStats(lifetimeBytesFreed: 4_096, lifetimeItemsFreed: 2)
+        )
+
+        _ = store.recordConfirmedDeletion(bytes: .max, itemCount: .max)
+        let clamped = store.recordConfirmedDeletion(bytes: 1, itemCount: 1)
+        XCTAssertEqual(clamped.lifetimeBytesFreed, .max)
+        XCTAssertEqual(clamped.lifetimeItemsFreed, .max)
+    }
+
+    func testCleanupStatsStoreIgnoresNegativeDeltas() {
+        let suiteName = "CleanupStatsStoreNegativeTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = CleanupStatsStore(defaults: defaults)
+
+        let stats = store.recordConfirmedDeletion(bytes: -100, itemCount: -2)
+
+        XCTAssertEqual(stats, CleanupStats())
     }
 
     func testAnalysisCacheRejectsOlderSchemaVersion() async throws {
@@ -377,11 +547,17 @@ final class PhotoScanEngineTests: XCTestCase {
         }
     }
 
-    func testCachedGroupRehydrationForcesManualReview() {
-        let keeper = PHAsset()
-        let deleteCandidate = PHAsset()
+    func testCompleteCachedGroupRehydrationPreservesValidatedAction() {
         let keeperID = "cached-keeper"
         let deleteCandidateID = "cached-delete-candidate"
+        let keeper = PhotoScanTestAsset(
+            localIdentifier: keeperID,
+            creationDate: Date(timeIntervalSinceReferenceDate: 1)
+        )
+        let deleteCandidate = PhotoScanTestAsset(
+            localIdentifier: deleteCandidateID,
+            creationDate: Date(timeIntervalSinceReferenceDate: 2)
+        )
         let cachedGroup = CachedPhotoGroup(
             id: UUID(),
             assetIdentifiers: [keeperID, deleteCandidateID],
@@ -405,15 +581,58 @@ final class PhotoScanEngineTests: XCTestCase {
             ]
         )
 
+        XCTAssertEqual(rehydrated?.recommendedAction, .keepBestTrashRest)
+        XCTAssertEqual(rehydrated?.deleteCandidateIDs, [deleteCandidateID])
+        XCTAssertEqual(rehydrated?.reclaimableBytes, 4_096)
+        XCTAssertTrue(rehydrated?.isAutoCleanEligible == true)
+    }
+
+    func testIncompleteCachedGroupRehydrationForcesManualReview() {
+        let keeperID = "cached-keeper"
+        let survivingCandidateID = "cached-survivor"
+        let missingCandidateID = "cached-missing"
+        let keeper = PhotoScanTestAsset(
+            localIdentifier: keeperID,
+            creationDate: Date(timeIntervalSinceReferenceDate: 1)
+        )
+        let survivingCandidate = PhotoScanTestAsset(
+            localIdentifier: survivingCandidateID,
+            creationDate: Date(timeIntervalSinceReferenceDate: 2)
+        )
+        let cachedGroup = CachedPhotoGroup(
+            id: UUID(),
+            assetIdentifiers: [
+                keeperID,
+                survivingCandidateID,
+                missingCandidateID
+            ],
+            similarity: 0.01,
+            reason: .nearDuplicate,
+            groupType: .nearDuplicate,
+            groupConfidence: .high,
+            reviewState: .unreviewed,
+            recommendedAction: .keepBestTrashRest,
+            keeperAssetID: keeperID,
+            deleteCandidateIDs: [
+                survivingCandidateID,
+                missingCandidateID
+            ],
+            bestShotPhotoId: keeperID,
+            groupReasonsSummary: ["Previously classified as a near duplicate."],
+            reclaimableBytes: 8_192
+        )
+
+        let rehydrated = cachedGroup.makeGroup(
+            using: [
+                keeperID: keeper,
+                survivingCandidateID: survivingCandidate
+            ]
+        )
+
         XCTAssertEqual(rehydrated?.recommendedAction, .reviewManually)
         XCTAssertEqual(rehydrated?.deleteCandidateIDs, [])
         XCTAssertEqual(rehydrated?.reclaimableBytes, 0)
         XCTAssertFalse(rehydrated?.isAutoCleanEligible ?? true)
-        XCTAssertTrue(
-            rehydrated?.groupReasonsSummary.contains(
-                "Cached result requires live revalidation."
-            ) == true
-        )
     }
 
     func testCompleteLinkPreventsChaining() {
@@ -610,7 +829,9 @@ final class PhotoScanEngineTests: XCTestCase {
 
     private func makeAnalysisSnapshot(
         analyzedPhotoCount: Int,
-        unanalyzedPhotoCount: Int
+        unanalyzedPhotoCount: Int,
+        screenshotAssetIdentifiers: [String] = [],
+        blurryAssetIdentifiers: [String] = []
     ) -> CachedPhotoAnalysisSnapshot {
         CachedPhotoAnalysisSnapshot(
             savedAt: Date(timeIntervalSinceReferenceDate: 123),
@@ -625,7 +846,26 @@ final class PhotoScanEngineTests: XCTestCase {
             reclaimableBytesFoundSoFar: 0,
             cleanupMode: .deepClean,
             resultsFreshnessState: .live,
-            groups: []
+            groups: [],
+            screenshotAssetIdentifiers: screenshotAssetIdentifiers,
+            blurryAssetIdentifiers: blurryAssetIdentifiers,
+            libraryAssetIdentifiers: ["library-1", "library-2"],
+            libraryAssets: [
+                CachedPhotoAssetMetadata(
+                    localIdentifier: "library-1",
+                    modificationDate: nil,
+                    pixelWidth: 4_032,
+                    pixelHeight: 3_024,
+                    mediaSubtypesRawValue: 0
+                ),
+                CachedPhotoAssetMetadata(
+                    localIdentifier: "library-2",
+                    modificationDate: Date(timeIntervalSinceReferenceDate: 2),
+                    pixelWidth: 4_032,
+                    pixelHeight: 3_024,
+                    mediaSubtypesRawValue: 0
+                )
+            ]
         )
     }
 
