@@ -3,13 +3,10 @@ import Photos
 import SwiftUI
 
 enum DeletionManagerError: Error, LocalizedError {
-    case deletionAlreadyPending
     case photoLibraryRejectedDeletion
 
     var errorDescription: String? {
         switch self {
-        case .deletionAlreadyPending:
-            return "Another deletion is waiting for confirmation. Undo it or let it finish first."
         case .photoLibraryRejectedDeletion:
             return "The photo library did not complete the deletion."
         }
@@ -74,12 +71,6 @@ final class DeletionManager: ObservableObject {
     @Published private(set) var undoEventID = UUID()
     @Published private(set) var lastUndoneAssetIDs: Set<String> = []
     @Published private(set) var lastFailedAssetIDs: Set<String> = []
-    @Published var isDeleting: Bool = false
-    @Published var deletionProgress: Double = 0
-    @Published private(set) var bulkTotalCount: Int = 0
-    @Published private(set) var bulkProcessedCount: Int = 0
-    @Published private(set) var bulkTotalBytes: Int64 = 0
-    @Published private(set) var bulkProcessedBytes: Int64 = 0
     @Published var totalBytesFreed: Int64 = 0
     @Published var totalItemsFreed: Int = 0
     @Published private(set) var lifetimeBytesFreed: Int64
@@ -89,6 +80,9 @@ final class DeletionManager: ObservableObject {
     private var pendingAssets: [PHAsset] = []
     private var pendingFreedBytes: Int64 = 0
     private var pendingCommitStarted = false
+    /// Keepers protected by any deletion already waiting in the undo window.
+    /// A later request that coalesces into the same batch must not delete them.
+    private var pendingProtectedKeeperIDs: Set<String> = []
     private var commitTask: Task<Void, Never>?
     private let undoWindowSeconds: TimeInterval = 10
     private let cleanupStatsStore: CleanupStatsStore
@@ -101,30 +95,30 @@ final class DeletionManager: ObservableObject {
     }
 
     var hasPendingDeletion: Bool {
-        commitTask != nil || isDeleting
+        commitTask != nil
     }
 
     // MARK: - Public API
 
     func keepBest(from group: PhotoGroup) async throws {
         let toDelete = try PhotoDeletionGuardrails.deleteAssets(in: group)
-        try await scheduleDelete(assets: toDelete)
+        try await scheduleDelete(
+            assets: toDelete,
+            protectedKeeperIDs: Set([group.keeperAssetID].compactMap { $0 })
+        )
     }
 
     func keepBest(from groups: [PhotoGroup]) async throws {
         try PhotoDeletionGuardrails.validate(groups: groups)
         let assets = uniqueAssets(from: groups.flatMap(\.deleteCandidateAssets))
-        try await scheduleDelete(assets: assets)
+        try await scheduleDelete(
+            assets: assets,
+            protectedKeeperIDs: Set(groups.compactMap(\.keeperAssetID))
+        )
     }
 
     func delete(assets: [PHAsset]) async throws {
         try await scheduleDelete(assets: assets)
-    }
-
-    func bulkDelete(groups: [PhotoGroup]) async throws {
-        try PhotoDeletionGuardrails.validate(groups: groups)
-        let assets = uniqueAssets(from: groups.flatMap(\.deleteCandidateAssets))
-        try await bulkDelete(assets: assets)
     }
 
     func undoLast() {
@@ -147,54 +141,14 @@ final class DeletionManager: ObservableObject {
         lastDeletionError = nil
     }
 
-    // MARK: - Bulk delete (no undo toast — scale too large)
-
-    func bulkDelete(assets: [PHAsset]) async throws {
-        if pendingCommitStarted, let commitTask {
-            await commitTask.value
-        } else if commitTask != nil {
-            try await commitPendingDeletionNow()
-        }
-        guard !isDeleting else {
-            throw DeletionManagerError.deletionAlreadyPending
-        }
-        isDeleting = true
-        deletionProgress = 0
-        bulkTotalCount = assets.count
-        bulkProcessedCount = 0
-        bulkTotalBytes = estimatedBytes(for: assets)
-        bulkProcessedBytes = 0
-        defer {
-            isDeleting = false
-        }
-
-        let total = assets.count
-        guard total > 0 else { return }
-        let identifiers = assets.map(\.localIdentifier)
-        guard Set(identifiers).count == identifiers.count else {
-            throw PhotoDeletionGuardrailError.duplicateDeleteCandidateIDs
-        }
-
-        // Keep the user-confirmed plan atomic. Batched PhotoKit requests can leave
-        // a partially deleted queue that is unsafe to retry after a later failure.
-        try await performDelete(assets: assets)
-        deletionProgress = 1
-        bulkProcessedCount = total
-        bulkProcessedBytes = bulkTotalBytes
-        totalBytesFreed += bulkTotalBytes
-        totalItemsFreed += total
-        recordConfirmedDeletion(bytes: bulkTotalBytes, itemCount: total)
-        DuckHaptics.success()
-    }
-
     // MARK: - Private
 
-    private func scheduleDelete(assets: [PHAsset]) async throws {
+    private func scheduleDelete(
+        assets: [PHAsset],
+        protectedKeeperIDs: Set<String> = []
+    ) async throws {
         if pendingCommitStarted, let commitTask {
             await commitTask.value
-        }
-        guard !isDeleting else {
-            throw DeletionManagerError.deletionAlreadyPending
         }
         guard !assets.isEmpty else {
             throw PhotoDeletionGuardrailError.emptyDeleteCandidateList
@@ -204,7 +158,19 @@ final class DeletionManager: ObservableObject {
             throw PhotoDeletionGuardrailError.duplicateDeleteCandidateIDs
         }
 
+        // Coalescing merges this request into any batch still inside the undo
+        // window, so the keeper/delete conflict check must span the merged
+        // batch, not just the current call. Doing the same requests as one call
+        // would have failed cross-group validation; the merged batch must too.
+        let mergedDeleteIDs = Set(pendingAssets.map(\.localIdentifier))
+            .union(identifiers)
+        let mergedKeeperIDs = pendingProtectedKeeperIDs.union(protectedKeeperIDs)
+        guard mergedKeeperIDs.isDisjoint(with: mergedDeleteIDs) else {
+            throw PhotoDeletionGuardrailError.crossGroupKeeperConflict
+        }
+
         pendingAssets = uniqueAssets(from: pendingAssets + assets)
+        pendingProtectedKeeperIDs = mergedKeeperIDs
         pendingFreedBytes = estimatedBytes(for: pendingAssets)
         pendingCommitStarted = false
         toastFreedCount = pendingAssets.count
@@ -219,9 +185,11 @@ final class DeletionManager: ObservableObject {
 
         let scheduledToastID = toastID
         commitTask?.cancel()
-        commitTask = Task { [weak self] in
+        commitTask = Task { [weak self, undoWindowSeconds] in
             do {
-                try await Task.sleep(nanoseconds: 10_000_000_000)
+                try await Task.sleep(
+                    nanoseconds: UInt64(undoWindowSeconds * 1_000_000_000)
+                )
                 try Task.checkCancellation()
                 guard let self, self.toastID == scheduledToastID else { return }
 
@@ -252,34 +220,6 @@ final class DeletionManager: ObservableObject {
         // UI optimistically while the user retains one coalesced undo window.
     }
 
-    private func commitPendingDeletionNow() async throws {
-        guard !pendingAssets.isEmpty else { return }
-
-        let scheduledToastID = toastID
-        let scheduledAssets = pendingAssets
-        let scheduledBytes = pendingFreedBytes
-        commitTask?.cancel()
-        commitTask = nil
-        pendingCommitStarted = true
-
-        do {
-            try await performDelete(assets: scheduledAssets)
-            lastCommittedToastID = scheduledToastID
-            totalBytesFreed += scheduledBytes
-            totalItemsFreed += scheduledAssets.count
-            recordConfirmedDeletion(
-                bytes: scheduledBytes,
-                itemCount: scheduledAssets.count
-            )
-            DuckHaptics.success()
-            clearPendingDeletion(for: scheduledToastID)
-        } catch {
-            lastFailedAssetIDs = Set(scheduledAssets.map(\.localIdentifier))
-            clearPendingDeletion(for: scheduledToastID)
-            throw error
-        }
-    }
-
     private func performDelete(assets: [PHAsset]) async throws {
         guard !assets.isEmpty else { return }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -303,6 +243,7 @@ final class DeletionManager: ObservableObject {
         pendingAssets = []
         pendingFreedBytes = 0
         pendingCommitStarted = false
+        pendingProtectedKeeperIDs = []
         toastFreedCount = 0
         toastVisible = false
     }

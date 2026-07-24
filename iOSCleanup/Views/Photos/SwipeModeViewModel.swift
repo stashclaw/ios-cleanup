@@ -53,6 +53,8 @@ final class SwipeModeViewModel: ObservableObject {
     var remainingCount: Int { max(totalReviewableCount - reviewedCount, 0) }
     var isTransitioning: Bool { transitionDecision != nil }
     var hasPendingDeletes: Bool { !toDeleteAssets.isEmpty }
+
+    var pendingDeleteCount: Int { toDeleteAssets.count }
     var canUndoLastSwipe: Bool { !swipeHistory.isEmpty && !isTransitioning }
     var pendingDeleteAssets: [PHAsset] { toDeleteAssets }
 

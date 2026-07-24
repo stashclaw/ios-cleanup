@@ -125,6 +125,7 @@ final class HomeViewModel: ObservableObject {
     @Published var scanErrorMessage: String?
 
     private var scanTask: Task<Void, Never>?
+    private var supportingScansTask: Task<Void, Never>?
     private var libraryChangeTask: Task<Void, Never>?
     private var activePhotoScanEngine: PhotoScanEngine?
     private var activeScanID: UUID?
@@ -135,22 +136,54 @@ final class HomeViewModel: ObservableObject {
     private var startedSupportingScansForActiveScan = false
     private var knownLibraryAssetIdentifiers: Set<String> = []
     private var knownLibraryAssetMetadata: [String: CachedPhotoAssetMetadata] = [:]
+    private var checkpointEvaluatedAssetIDs = Set<String>()
+    private var checkpointTargetAssetIDs = Set<String>()
+    private var checkpointUnanalyzedAssetIDs = Set<String>()
+    private var checkpointProcessedPhotoCount = 0
+    private var checkpointAnalyzedPhotoCount = 0
+    private var checkpointUnanalyzedPhotoCount = 0
     private let analysisCache = PhotoAnalysisCache.shared
     private let mlBridge = PhotoMLBridge.shared
-    private lazy var photoLibraryObserver = PhotoLibraryChangeObserverProxy { [weak self] in
-        Task { @MainActor [weak self] in
-            self?.schedulePhotoLibraryRefresh()
-        }
-    }
+    private var photoLibraryObserver: PhotoLibraryChangeObserverProxy?
+    private var hasBootstrappedLibraryState = false
 
     init() {
         loadPersistedCleanupState()
-        _ = photoLibraryObserver
+        bootstrapLibraryStateIfNeeded()
+    }
+
+    /// Touching PhotoKit while authorization is undetermined triggers the
+    /// system permission dialog. Onboarding owns that moment; stay out of the
+    /// library entirely until the user has answered, then run the one-time
+    /// startup restore. Safe to call repeatedly.
+    func bootstrapLibraryStateIfNeeded() {
+        photoAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard !hasBootstrappedLibraryState,
+              photoAuthorizationStatus != .notDetermined else {
+            return
+        }
+        hasBootstrappedLibraryState = true
+        startPhotoLibraryObservationIfDetermined()
         Task(priority: .utility) {
             await restoreCachedAnalysisIfNeeded()
             await scanNewPhotosIfNeeded()
             await refreshPersistenceHealth()
             await refreshNotificationAuthorization()
+        }
+    }
+
+    /// Registering a PHPhotoLibrary change observer while authorization is
+    /// `.notDetermined` presents the system permission prompt. Register only
+    /// once the user has made a choice.
+    private func startPhotoLibraryObservationIfDetermined() {
+        guard photoLibraryObserver == nil,
+              PHPhotoLibrary.authorizationStatus(for: .readWrite) != .notDetermined else {
+            return
+        }
+        photoLibraryObserver = PhotoLibraryChangeObserverProxy { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.schedulePhotoLibraryRefresh()
+            }
         }
     }
 
@@ -196,6 +229,21 @@ final class HomeViewModel: ObservableObject {
 
     var photoAccessNeedsSettings: Bool {
         photoAuthorizationStatus == .denied || photoAuthorizationStatus == .restricted
+    }
+
+    var photoAccessNotYetRequested: Bool {
+        photoAuthorizationStatus == .notDetermined
+    }
+
+    /// Explicit, user-initiated permission request for people who skipped the
+    /// onboarding photos step. This is the only Home-screen path that may
+    /// present the system dialog.
+    func requestPhotoAccess() {
+        Task {
+            _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+            bootstrapLibraryStateIfNeeded()
+            await refreshLibraryMetadata()
+        }
     }
 
     // MARK: - Storage usage (single cached filesystem stat)
@@ -336,7 +384,7 @@ final class HomeViewModel: ObservableObject {
             return "\(findingsSoFarLabel) · ready to review now"
         case .completedResultsAvailable:
             if unanalyzedPhotoCount > 0 {
-                return "\(unanalyzedPhotoCount.formatted()) photos could not be analyzed without downloading from iCloud."
+                return "\(unanalyzedPhotoCount.formatted()) photos couldn't be analyzed yet, so this result may be incomplete."
             }
             if resultsFreshnessState == .stale {
                 return "Last known results · library changed since the last scan"
@@ -444,7 +492,7 @@ final class HomeViewModel: ObservableObject {
 
     var completedOutcomeLabel: String {
         if unanalyzedPhotoCount > 0 {
-            return "\(unanalyzedPhotoCount.formatted()) photos still need an iCloud-enabled pass."
+            return "\(unanalyzedPhotoCount.formatted()) photos still need another pass. Tap Rescan to retry them."
         }
         if lastCompletedGroupsCount == 0 {
             return "0 photos need attention."
@@ -502,7 +550,8 @@ final class HomeViewModel: ObservableObject {
     func scanPhotos(
         mode: CleanupMode,
         allowNetworkAccess: Bool = PhotoScanDefaults.allowNetworkAccess,
-        forceFullRescan: Bool = false
+        forceFullRescan: Bool = false,
+        retryUnanalyzed: Bool = false
     ) async {
         if let activePhotoScanEngine {
             await activePhotoScanEngine.resume()
@@ -512,40 +561,62 @@ final class HomeViewModel: ObservableObject {
         await restoreCachedAnalysisIfNeeded()
         await refreshLibraryMetadata()
 
-        let cachedSnapshot = await analysisCache.loadSnapshot()
-        let cachedLibraryIDs = Set(cachedSnapshot?.libraryAssetIdentifiers ?? [])
-        let cachedMetadata = Dictionary(
-            uniqueKeysWithValues: (cachedSnapshot?.libraryAssets ?? []).map {
-                ($0.localIdentifier, $0)
+        var cachedSnapshot = await analysisCache.loadSnapshot()
+        if let snapshot = cachedSnapshot,
+           !snapshot.hasConsistentCompletionState {
+            cachedSnapshot = await repairPrematureCompletion(snapshot)
+            if let cachedSnapshot {
+                await analysisCache.saveSnapshot(cachedSnapshot)
             }
-        )
-        let incrementalRequiredIDs: Set<String>?
-        if !forceFullRescan,
-           !cachedLibraryIDs.isEmpty,
-           cachedSnapshot?.cleanupMode == .deepClean || mode == .speedClean {
-            let newIDs = knownLibraryAssetIdentifiers.subtracting(cachedLibraryIDs)
-            let modifiedIDs = Set<String>(
-                knownLibraryAssetMetadata.compactMap { entry -> String? in
-                    let (id, metadata) = entry
-                    guard let cached = cachedMetadata[id] else { return nil }
-                    return cached == metadata ? nil : id
-                }
-            )
-            incrementalRequiredIDs = newIDs.union(modifiedIDs)
-        } else {
-            incrementalRequiredIDs = nil
         }
+        let incrementalRequiredIDs = PhotoScanResumePlanner.requiredAssetIDs(
+            snapshot: cachedSnapshot,
+            currentAssetIDs: knownLibraryAssetIdentifiers,
+            currentMetadata: knownLibraryAssetMetadata,
+            mode: mode,
+            forceFullRescan: forceFullRescan,
+            retryAssetIDs: retryUnanalyzed
+                ? Set(cachedSnapshot?.unanalyzedAssetIdentifiers ?? [])
+                : []
+        )
+        let isResumingCheckpoint = cachedSnapshot?.isComplete == false
+            && incrementalRequiredIDs != nil
+        let progressOffset = isResumingCheckpoint
+            ? cachedSnapshot?.processedPhotoCount ?? 0
+            : 0
+        let analyzedOffset = isResumingCheckpoint
+            ? cachedSnapshot?.analyzedPhotoCount ?? 0
+            : 0
+        let unanalyzedOffset = isResumingCheckpoint
+            ? cachedSnapshot?.unanalyzedPhotoCount ?? 0
+            : 0
+        let resumedTargetCount = isResumingCheckpoint
+            ? max(
+                cachedSnapshot?.scanTargetCount ?? 0,
+                progressOffset + (incrementalRequiredIDs?.count ?? 0)
+            )
+            : nil
 
         if let incrementalRequiredIDs, incrementalRequiredIDs.isEmpty {
             // An unchanged inventory means persisted analysis is still current.
-            // Do not rerun Vision just because the app was reopened.
+            // Do not rerun Vision just because the app was reopened, and do not
+            // rewrite the snapshot: re-stamping savedAt would claim a check
+            // happened now, and a fabricated "complete" snapshot could mark
+            // never-analyzed assets as evaluated.
             scanState = .completed
             isPaused = false
             resultsFreshnessState = .live
             lastCompletedAt = cachedSnapshot?.savedAt ?? lastCompletedAt
             lastCompletedLibraryTotalCount = knownLibraryAssetIdentifiers.count
+            if let cachedSnapshot {
+                // Legacy snapshots know the failure count but not the IDs;
+                // never let the smaller number hide known failures.
+                unanalyzedPhotoCount = max(
+                    cachedSnapshot.unanalyzedAssetIdentifiers.count,
+                    cachedSnapshot.unanalyzedPhotoCount
+                )
+            }
             persistCleanupState()
-            saveCompletedAnalysisSnapshot()
             return
         }
 
@@ -567,15 +638,32 @@ final class HomeViewModel: ObservableObject {
         lastRateSampleProcessedCount = 0
         startedSupportingScansForActiveScan = false
         scanRatePhotosPerMinute = 0
-        processedPhotoCount = 0
-        analyzedPhotoCount = 0
-        unanalyzedPhotoCount = 0
-        screenshotAssets = []
-        blurryAssets = []
-        progressFraction = 0
+        processedPhotoCount = progressOffset
+        analyzedPhotoCount = analyzedOffset
+        unanalyzedPhotoCount = unanalyzedOffset
+        screenshotAssets = isResumingCheckpoint ? preservedScreenshots : []
+        blurryAssets = isResumingCheckpoint ? preservedBlurryAssets : []
+        progressFraction = resumedTargetCount.map {
+            $0 == 0 ? 1 : Double(progressOffset) / Double($0)
+        } ?? 0
         groupsFoundCount = 0
         reviewablePhotosCount = 0
         reclaimableBytesFoundSoFar = 0
+        checkpointEvaluatedAssetIDs = isResumingCheckpoint
+            ? Set(cachedSnapshot?.evaluatedAssetIdentifiers ?? [])
+            : []
+        checkpointTargetAssetIDs = isResumingCheckpoint
+            ? Set(cachedSnapshot?.scanTargetAssetIdentifiers ?? [])
+            : []
+        // Carry unanalyzed assets across any incremental pass (resume or
+        // new-photos-only) so earlier failures are still reported and can be
+        // retried later. A full rescan starts the record fresh.
+        checkpointUnanalyzedAssetIDs = incrementalRequiredIDs == nil
+            ? []
+            : Set(cachedSnapshot?.unanalyzedAssetIdentifiers ?? [])
+        checkpointProcessedPhotoCount = progressOffset
+        checkpointAnalyzedPhotoCount = analyzedOffset
+        checkpointUnanalyzedPhotoCount = unanalyzedOffset
 
         persistCleanupState()
 
@@ -590,14 +678,24 @@ final class HomeViewModel: ObservableObject {
                     allowNetworkAccess: allowNetworkAccess,
                     requiredAssetIDs: incrementalRequiredIDs
                 ) {
-                    await MainActor.run {
-                        guard self.activeScanID == scanID else { return }
-                        self.apply(
+                    let checkpoint: CachedPhotoAnalysisSnapshot? = await MainActor.run {
+                        guard self.activeScanID == scanID else { return nil }
+                        return self.apply(
                             update: update,
                             preservingGroups: preservedGroups,
                             preservingScreenshots: preservedScreenshots,
-                            preservingBlurryAssets: preservedBlurryAssets
+                            preservingBlurryAssets: preservedBlurryAssets,
+                            progressOffset: progressOffset,
+                            analyzedOffset: analyzedOffset,
+                            unanalyzedOffset: unanalyzedOffset,
+                            resumedTargetCount: resumedTargetCount
                         )
+                    }
+                    if let checkpoint {
+                        // Await the atomic file replacement before allowing more
+                        // scan work. A killed process can now lose at most the
+                        // currently uncommitted four-asset batch.
+                        await self.analysisCache.saveSnapshot(checkpoint)
                     }
                 }
 
@@ -632,12 +730,12 @@ final class HomeViewModel: ObservableObject {
                             ? "PhotoDuck checked your library and found no actionable issues."
                             : self.groupsFoundCount == 0
                                 && self.photoReviewCategoryCount == 0
-                                ? "\(self.unanalyzedPhotoCount) iCloud photos need an optional downloaded pass."
+                                ? "\(self.unanalyzedPhotoCount) photos couldn't be analyzed and can be retried."
                             : self.groupsFoundCount == 0
                                 ? "Tap to review \(self.photoReviewCategoryCount) screenshot or blurry-photo suggestions."
                             : "Tap to review \(self.groupsFoundCount) groups and reclaim \(ByteCountFormatter.string(fromByteCount: self.reclaimableBytesFoundSoFar, countStyle: .file))."
                     )
-                    self.saveCompletedAnalysisSnapshot()
+                    self.saveAnalysisSnapshot(isComplete: true)
                 }
             } catch is CancellationError {
                 await MainActor.run {
@@ -676,10 +774,20 @@ final class HomeViewModel: ObservableObject {
 
     func retryIncludingICloudPhotos() {
         Task(priority: .utility) {
+            // Retry only the assets that previously failed analysis (plus any
+            // new or changed photos), with iCloud download allowed. A full
+            // rescan would throw away every already-valid result for nothing.
+            // Snapshots written before per-asset failure tracking existed know
+            // how many assets failed but not which ones — only they need the
+            // full pass.
+            let snapshot = await analysisCache.loadSnapshot()
+            let isLegacyFailureRecord = (snapshot?.unanalyzedPhotoCount ?? 0) > 0
+                && snapshot?.unanalyzedAssetIdentifiers.isEmpty == true
             await scanPhotos(
-                mode: .deepClean,
+                mode: lastCompletedMode ?? .deepClean,
                 allowNetworkAccess: true,
-                forceFullRescan: true
+                forceFullRescan: isLegacyFailureRecord,
+                retryUnanalyzed: true
             )
         }
     }
@@ -710,9 +818,9 @@ final class HomeViewModel: ObservableObject {
         fileScanState = .scanning
         let engine = FileScanEngine()
         do {
-            largeFiles = try await Task(priority: .utility) {
-                try await engine.scan()
-            }.value
+            largeFiles = try await engine.scan { [self] partialFiles in
+                await publishLargeFiles(partialFiles)
+            }
             fileScanState = .completed
         } catch let error as FileScanError {
             fileScanState = .permissionRequired
@@ -721,6 +829,10 @@ final class HomeViewModel: ObservableObject {
         } catch {
             fileScanState = .failed
         }
+    }
+
+    private func publishLargeFiles(_ files: [LargeFile]) {
+        largeFiles = files
     }
 
     // MARK: - Scene / refresh
@@ -742,6 +854,10 @@ final class HomeViewModel: ObservableObject {
 
     func refreshLibraryMetadata() async {
         photoAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        // Never fetch while undetermined: PhotoKit would raise the system
+        // permission dialog outside the onboarding flow that owns it.
+        guard photoAuthorizationStatus != .notDetermined else { return }
+        startPhotoLibraryObservationIfDetermined()
         let currentMetadata = await currentLibraryPhotoMetadata()
         knownLibraryAssetMetadata = currentMetadata
         knownLibraryAssetIdentifiers = Set(currentMetadata.keys)
@@ -815,14 +931,33 @@ final class HomeViewModel: ObservableObject {
         update: PhotoScanUpdate,
         preservingGroups: [PhotoGroup] = [],
         preservingScreenshots: [PHAsset] = [],
-        preservingBlurryAssets: [PHAsset] = []
-    ) {
+        preservingBlurryAssets: [PHAsset] = [],
+        progressOffset: Int = 0,
+        analyzedOffset: Int = 0,
+        unanalyzedOffset: Int = 0,
+        resumedTargetCount: Int? = nil
+    ) -> CachedPhotoAnalysisSnapshot? {
         libraryTotalCount = update.libraryTotalCount
-        scanTargetCount = update.scanTargetCount
-        processedPhotoCount = update.processedPhotoCount
-        analyzedPhotoCount = update.analyzedPhotoCount
-        unanalyzedPhotoCount = update.unanalyzedPhotoCount
-        progressFraction = update.progressFraction
+        scanTargetCount = resumedTargetCount ?? update.scanTargetCount
+        processedPhotoCount = progressOffset + update.processedPhotoCount
+        analyzedPhotoCount = analyzedOffset + update.analyzedPhotoCount
+        progressFraction = scanTargetCount == 0
+            ? 1
+            : min(Double(processedPhotoCount) / Double(scanTargetCount), 1)
+        checkpointEvaluatedAssetIDs.formUnion(update.evaluatedAssetIDs)
+        checkpointTargetAssetIDs.formUnion(update.targetAssetIDs)
+        // A retried asset that now succeeds leaves the unanalyzed record; a
+        // fresh failure joins it. The published count is derived from the set
+        // so carried-over failures are never double counted.
+        checkpointUnanalyzedAssetIDs.subtract(update.evaluatedAssetIDs)
+        checkpointUnanalyzedAssetIDs.formUnion(update.unanalyzedAssetIDs)
+        unanalyzedPhotoCount = checkpointUnanalyzedAssetIDs.count
+        checkpointProcessedPhotoCount = progressOffset
+            + (update.committedProcessedPhotoCount ?? 0)
+        checkpointAnalyzedPhotoCount = analyzedOffset
+            + (update.committedAnalyzedPhotoCount ?? 0)
+        checkpointUnanalyzedPhotoCount = unanalyzedOffset
+            + (update.committedUnanalyzedPhotoCount ?? 0)
         let replacedIDs = update.evaluatedAssetIDs
         let unaffectedGroups = preservingGroups.filter { group in
             replacedIDs.isDisjoint(
@@ -853,7 +988,13 @@ final class HomeViewModel: ObservableObject {
 
         if !startedSupportingScansForActiveScan {
             startedSupportingScansForActiveScan = true
-            Task { await scanSupportingCategoriesIfNeeded() }
+            supportingScansTask?.cancel()
+            supportingScansTask = Task { [weak self] in
+                await self?.scanSupportingCategoriesIfNeeded()
+                await MainActor.run { [weak self] in
+                    self?.supportingScansTask = nil
+                }
+            }
         }
 
         // Throttle UserDefaults writes: at most once every 3 s during scanning,
@@ -862,8 +1003,10 @@ final class HomeViewModel: ObservableObject {
         if update.isComplete || isPaused || now.timeIntervalSince(lastPersistTime) >= 3 {
             persistCleanupState()
             lastPersistTime = now
+            return makeAnalysisSnapshot(isComplete: update.isComplete)
         }
 
+        return nil
     }
 
     private func scanSupportingCategoriesIfNeeded() async {
@@ -883,6 +1026,17 @@ final class HomeViewModel: ObservableObject {
     }
 
     private func reconcilePhotoLibraryChange() async {
+        if scanState == .scanning || scanState == .paused {
+            // PhotoKit can report metadata changes while a scan is active.
+            // Never let that observer mutate, finalize, or restart live results.
+            await refreshLibraryMetadata()
+            persistCleanupState()
+            await analysisCache.saveSnapshot(
+                makeAnalysisSnapshot(isComplete: false)
+            )
+            return
+        }
+
         let photoIDs = Set(photoGroups.flatMap(\.assets).map(\.localIdentifier))
             .union(screenshotAssets.map(\.localIdentifier))
             .union(blurryAssets.map(\.localIdentifier))
@@ -938,7 +1092,7 @@ final class HomeViewModel: ObservableObject {
            !assetIDsRequiringAnalysis(comparedTo: snapshot).isEmpty {
             await scanPhotos(mode: lastCompletedMode ?? snapshot.cleanupMode)
         } else {
-            saveCompletedAnalysisSnapshot()
+            saveAnalysisSnapshot(isComplete: true)
         }
     }
 
@@ -1018,19 +1172,63 @@ final class HomeViewModel: ObservableObject {
         lastRateSampleProcessedCount = processedCount
     }
 
-    private func saveCompletedAnalysisSnapshot() {
-        let snapshot = CachedPhotoAnalysisSnapshot(
+    private func saveAnalysisSnapshot(isComplete: Bool) {
+        let snapshot = makeAnalysisSnapshot(isComplete: isComplete)
+
+        let groupAssets = snapshot.isComplete ? photoGroups.flatMap(\.assets) : []
+        Task(priority: .utility) { [weak self, analysisCache, mlBridge] in
+            await analysisCache.saveSnapshot(snapshot)
+            if !groupAssets.isEmpty {
+                let featureRecords = await Task.detached(priority: .utility) {
+                    mlBridge.makeFeatureRecords(for: groupAssets, embeddings: [:])
+                }.value
+                await mlBridge.persistFeatureRecords(featureRecords)
+            }
+            await self?.refreshPersistenceHealth()
+        }
+    }
+
+    private func makeAnalysisSnapshot(
+        isComplete: Bool
+    ) -> CachedPhotoAnalysisSnapshot {
+        let snapshotIsComplete = isComplete
+            && scanState == .completed
+            && (scanTargetCount == 0
+                || (processedPhotoCount >= scanTargetCount
+                    && progressFraction >= 0.999))
+        let snapshotProcessedCount = snapshotIsComplete
+            ? processedPhotoCount
+            : checkpointProcessedPhotoCount
+        let snapshotAnalyzedCount = snapshotIsComplete
+            ? analyzedPhotoCount
+            : checkpointAnalyzedPhotoCount
+        let snapshotUnanalyzedCount = snapshotIsComplete
+            ? unanalyzedPhotoCount
+            : checkpointUnanalyzedPhotoCount
+        let snapshotProgress = scanTargetCount == 0
+            ? 1
+            : min(Double(snapshotProcessedCount) / Double(scanTargetCount), 1)
+
+        return CachedPhotoAnalysisSnapshot(
             libraryTotalCount: libraryTotalCount,
             scanTargetCount: scanTargetCount,
-            processedPhotoCount: processedPhotoCount,
-            analyzedPhotoCount: analyzedPhotoCount,
-            unanalyzedPhotoCount: unanalyzedPhotoCount,
-            progressFraction: progressFraction,
+            processedPhotoCount: snapshotProcessedCount,
+            analyzedPhotoCount: snapshotAnalyzedCount,
+            unanalyzedPhotoCount: snapshotUnanalyzedCount,
+            progressFraction: snapshotProgress,
             groupsFoundCount: groupsFoundCount,
             reviewablePhotosCount: reviewablePhotosCount,
             reclaimableBytesFoundSoFar: reclaimableBytesFoundSoFar,
             cleanupMode: cleanupMode,
             resultsFreshnessState: .lastKnown,
+            isComplete: snapshotIsComplete,
+            evaluatedAssetIdentifiers: snapshotIsComplete
+                ? knownLibraryAssetIdentifiers.sorted()
+                : checkpointEvaluatedAssetIDs.sorted(),
+            scanTargetAssetIdentifiers: snapshotIsComplete
+                ? []
+                : checkpointTargetAssetIDs.sorted(),
+            unanalyzedAssetIdentifiers: checkpointUnanalyzedAssetIDs.sorted(),
             groups: photoGroups.map { group in
                 CachedPhotoGroup(
                     id: group.id,
@@ -1077,16 +1275,6 @@ final class HomeViewModel: ObservableObject {
                 $0.localIdentifier < $1.localIdentifier
             }
         )
-
-        let groupAssets = photoGroups.flatMap(\.assets)
-        Task(priority: .utility) { [weak self, analysisCache, mlBridge] in
-            await analysisCache.saveSnapshot(snapshot)
-            let featureRecords = await Task.detached(priority: .utility) {
-                mlBridge.makeFeatureRecords(for: groupAssets, embeddings: [:])
-            }.value
-            await mlBridge.persistFeatureRecords(featureRecords)
-            await self?.refreshPersistenceHealth()
-        }
     }
 
     private func restoreCachedAnalysisIfNeeded() async {
@@ -1100,22 +1288,22 @@ final class HomeViewModel: ObservableObject {
         let restoredBlurryAssets = await analysisCache.rehydrateAssets(
             with: snapshot.blurryAssetIdentifiers
         )
-        guard !restoredGroups.isEmpty
-                || !restoredScreenshots.isEmpty
-                || !restoredBlurryAssets.isEmpty else {
-            return
-        }
-
         photoGroups = restoredGroups
         screenshotAssets = restoredScreenshots
         blurryAssets = restoredBlurryAssets
         cleanupMode = snapshot.cleanupMode
-        scanState = .completed
-        isPaused = false
+        let snapshotIsComplete = snapshot.isComplete
+            && snapshot.hasConsistentCompletionState
+        scanState = snapshotIsComplete ? .completed : .paused
+        isPaused = !snapshotIsComplete
         isBackgroundExecutionState = false
         processedPhotoCount = snapshot.processedPhotoCount
         analyzedPhotoCount = snapshot.analyzedPhotoCount
-        unanalyzedPhotoCount = snapshot.unanalyzedPhotoCount
+        checkpointUnanalyzedAssetIDs = Set(snapshot.unanalyzedAssetIdentifiers)
+        unanalyzedPhotoCount = max(
+            snapshot.unanalyzedPhotoCount,
+            checkpointUnanalyzedAssetIDs.count
+        )
         scanTargetCount = snapshot.scanTargetCount
         progressFraction = snapshot.progressFraction
         groupsFoundCount = restoredGroups.count
@@ -1141,8 +1329,57 @@ final class HomeViewModel: ObservableObject {
                 ($0.localIdentifier, $0)
             }
         )
+        checkpointEvaluatedAssetIDs = snapshotIsComplete
+            ? Set(snapshot.evaluatedAssetIdentifiers)
+            : Set(
+                snapshot.hasConsistentCompletionState
+                    ? snapshot.evaluatedAssetIdentifiers
+                    : []
+            )
+        checkpointTargetAssetIDs = snapshotIsComplete
+            ? []
+            : Set(
+                snapshot.hasConsistentCompletionState
+                    ? snapshot.scanTargetAssetIdentifiers
+                    : []
+            )
+        checkpointProcessedPhotoCount = snapshot.processedPhotoCount
+        checkpointAnalyzedPhotoCount = snapshot.analyzedPhotoCount
+        checkpointUnanalyzedPhotoCount = snapshot.unanalyzedPhotoCount
         resultsFreshnessState = .lastKnown
         persistCleanupState()
+    }
+
+    private func repairPrematureCompletion(
+        _ snapshot: CachedPhotoAnalysisSnapshot
+    ) async -> CachedPhotoAnalysisSnapshot? {
+        guard snapshot.cleanupMode == .deepClean,
+              snapshot.processedPhotoCount > 0 else {
+            return nil
+        }
+
+        let orderedIDs = await Task.detached(priority: .utility) {
+            let result = PHAsset.fetchAssets(with: .image, options: nil)
+            var assets: [PHAsset] = []
+            assets.reserveCapacity(result.count)
+            result.enumerateObjects { asset, _, _ in
+                assets.append(asset)
+            }
+            return assets.sortedByCreationDate().map(\.localIdentifier)
+        }.value
+        guard snapshot.processedPhotoCount < orderedIDs.count else {
+            return nil
+        }
+
+        // Deep Clean's chronological ordering is deterministic, so the prefix
+        // is the only safe reconstruction available for the legacy race.
+        let evaluatedIDs = Array(
+            orderedIDs.prefix(snapshot.processedPhotoCount)
+        )
+        return snapshot.repairingPrematureCompletion(
+            evaluatedAssetIdentifiers: evaluatedIDs,
+            scanTargetAssetIdentifiers: orderedIDs
+        )
     }
 
     private func refreshPersistenceHealth() async {

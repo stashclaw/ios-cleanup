@@ -11,8 +11,8 @@ struct CachedPhotoAssetMetadata: Codable, Hashable, Sendable {
 }
 
 struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
-    // Version 7 records the complete Photos inventory so future scans can analyze
-    // only new assets plus bounded comparison context.
+    // Checkpoint fields are additive and decode safely from existing version 7
+    // completed snapshots, avoiding a one-time full rescan after this update.
     static let schemaVersion = 7
 
     let schemaVersion: Int
@@ -28,11 +28,64 @@ struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
     let reclaimableBytesFoundSoFar: Int64
     let cleanupMode: CleanupMode
     let resultsFreshnessState: CleanupResultsFreshnessState
+    let isComplete: Bool
+    let evaluatedAssetIdentifiers: [String]
+    let scanTargetAssetIdentifiers: [String]
+    /// Assets that were attempted but produced no usable analysis. These stay
+    /// persisted across completed scans so an explicit retry can target them;
+    /// they are never silently folded into "evaluated and clean".
+    let unanalyzedAssetIdentifiers: [String]
     let groups: [CachedPhotoGroup]
     let screenshotAssetIdentifiers: [String]
     let blurryAssetIdentifiers: [String]
     let libraryAssetIdentifiers: [String]
     let libraryAssets: [CachedPhotoAssetMetadata]
+
+    var hasConsistentCompletionState: Bool {
+        guard isComplete else { return true }
+        guard scanTargetCount > 0 else { return true }
+        return processedPhotoCount >= scanTargetCount
+            && progressFraction >= 0.999
+    }
+
+    func repairingPrematureCompletion(
+        evaluatedAssetIdentifiers: [String],
+        scanTargetAssetIdentifiers: [String]
+    ) -> CachedPhotoAnalysisSnapshot {
+        CachedPhotoAnalysisSnapshot(
+            savedAt: Date(),
+            libraryTotalCount: libraryTotalCount,
+            scanTargetCount: scanTargetAssetIdentifiers.count,
+            processedPhotoCount: evaluatedAssetIdentifiers.count,
+            analyzedPhotoCount: min(
+                analyzedPhotoCount,
+                evaluatedAssetIdentifiers.count
+            ),
+            unanalyzedPhotoCount: max(
+                evaluatedAssetIdentifiers.count
+                    - min(analyzedPhotoCount, evaluatedAssetIdentifiers.count),
+                0
+            ),
+            progressFraction: scanTargetAssetIdentifiers.isEmpty
+                ? 1
+                : Double(evaluatedAssetIdentifiers.count)
+                    / Double(scanTargetAssetIdentifiers.count),
+            groupsFoundCount: groupsFoundCount,
+            reviewablePhotosCount: reviewablePhotosCount,
+            reclaimableBytesFoundSoFar: reclaimableBytesFoundSoFar,
+            cleanupMode: cleanupMode,
+            resultsFreshnessState: .lastKnown,
+            isComplete: false,
+            evaluatedAssetIdentifiers: evaluatedAssetIdentifiers,
+            scanTargetAssetIdentifiers: scanTargetAssetIdentifiers,
+            unanalyzedAssetIdentifiers: unanalyzedAssetIdentifiers,
+            groups: groups,
+            screenshotAssetIdentifiers: screenshotAssetIdentifiers,
+            blurryAssetIdentifiers: blurryAssetIdentifiers,
+            libraryAssetIdentifiers: libraryAssetIdentifiers,
+            libraryAssets: libraryAssets
+        )
+    }
 
     init(
         savedAt: Date = Date(),
@@ -47,6 +100,10 @@ struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
         reclaimableBytesFoundSoFar: Int64,
         cleanupMode: CleanupMode,
         resultsFreshnessState: CleanupResultsFreshnessState,
+        isComplete: Bool = true,
+        evaluatedAssetIdentifiers: [String] = [],
+        scanTargetAssetIdentifiers: [String] = [],
+        unanalyzedAssetIdentifiers: [String] = [],
         groups: [CachedPhotoGroup],
         screenshotAssetIdentifiers: [String] = [],
         blurryAssetIdentifiers: [String] = [],
@@ -66,11 +123,136 @@ struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
         self.reclaimableBytesFoundSoFar = reclaimableBytesFoundSoFar
         self.cleanupMode = cleanupMode
         self.resultsFreshnessState = resultsFreshnessState
+        self.isComplete = isComplete
+        self.evaluatedAssetIdentifiers = evaluatedAssetIdentifiers
+        self.scanTargetAssetIdentifiers = scanTargetAssetIdentifiers
+        self.unanalyzedAssetIdentifiers = unanalyzedAssetIdentifiers
         self.groups = groups
         self.screenshotAssetIdentifiers = screenshotAssetIdentifiers
         self.blurryAssetIdentifiers = blurryAssetIdentifiers
         self.libraryAssetIdentifiers = libraryAssetIdentifiers
         self.libraryAssets = libraryAssets
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case savedAt
+        case libraryTotalCount
+        case scanTargetCount
+        case processedPhotoCount
+        case analyzedPhotoCount
+        case unanalyzedPhotoCount
+        case progressFraction
+        case groupsFoundCount
+        case reviewablePhotosCount
+        case reclaimableBytesFoundSoFar
+        case cleanupMode
+        case resultsFreshnessState
+        case isComplete
+        case evaluatedAssetIdentifiers
+        case scanTargetAssetIdentifiers
+        case unanalyzedAssetIdentifiers
+        case groups
+        case screenshotAssetIdentifiers
+        case blurryAssetIdentifiers
+        case libraryAssetIdentifiers
+        case libraryAssets
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        savedAt = try container.decode(Date.self, forKey: .savedAt)
+        libraryTotalCount = try container.decode(Int.self, forKey: .libraryTotalCount)
+        scanTargetCount = try container.decode(Int.self, forKey: .scanTargetCount)
+        processedPhotoCount = try container.decode(Int.self, forKey: .processedPhotoCount)
+        analyzedPhotoCount = try container.decode(Int.self, forKey: .analyzedPhotoCount)
+        unanalyzedPhotoCount = try container.decode(Int.self, forKey: .unanalyzedPhotoCount)
+        progressFraction = try container.decode(Double.self, forKey: .progressFraction)
+        groupsFoundCount = try container.decode(Int.self, forKey: .groupsFoundCount)
+        reviewablePhotosCount = try container.decode(Int.self, forKey: .reviewablePhotosCount)
+        reclaimableBytesFoundSoFar = try container.decode(
+            Int64.self,
+            forKey: .reclaimableBytesFoundSoFar
+        )
+        cleanupMode = try container.decode(CleanupMode.self, forKey: .cleanupMode)
+        resultsFreshnessState = try container.decode(
+            CleanupResultsFreshnessState.self,
+            forKey: .resultsFreshnessState
+        )
+        isComplete = try container.decodeIfPresent(Bool.self, forKey: .isComplete) ?? true
+        groups = try container.decode([CachedPhotoGroup].self, forKey: .groups)
+        screenshotAssetIdentifiers = try container.decode(
+            [String].self,
+            forKey: .screenshotAssetIdentifiers
+        )
+        blurryAssetIdentifiers = try container.decode(
+            [String].self,
+            forKey: .blurryAssetIdentifiers
+        )
+        libraryAssetIdentifiers = try container.decode(
+            [String].self,
+            forKey: .libraryAssetIdentifiers
+        )
+        libraryAssets = try container.decode(
+            [CachedPhotoAssetMetadata].self,
+            forKey: .libraryAssets
+        )
+        evaluatedAssetIdentifiers = try container.decodeIfPresent(
+            [String].self,
+            forKey: .evaluatedAssetIdentifiers
+        ) ?? (isComplete ? libraryAssetIdentifiers : [])
+        scanTargetAssetIdentifiers = try container.decodeIfPresent(
+            [String].self,
+            forKey: .scanTargetAssetIdentifiers
+        ) ?? []
+        unanalyzedAssetIdentifiers = try container.decodeIfPresent(
+            [String].self,
+            forKey: .unanalyzedAssetIdentifiers
+        ) ?? []
+    }
+}
+
+enum PhotoScanResumePlanner {
+    static func requiredAssetIDs(
+        snapshot: CachedPhotoAnalysisSnapshot?,
+        currentAssetIDs: Set<String>,
+        currentMetadata: [String: CachedPhotoAssetMetadata],
+        mode: CleanupMode,
+        forceFullRescan: Bool,
+        retryAssetIDs: Set<String> = []
+    ) -> Set<String>? {
+        guard !forceFullRescan, let snapshot else { return nil }
+
+        let cachedMetadata = Dictionary(
+            uniqueKeysWithValues: snapshot.libraryAssets.map {
+                ($0.localIdentifier, $0)
+            }
+        )
+        let modifiedIDs = Set(
+            currentMetadata.compactMap { id, metadata -> String? in
+                guard let cached = cachedMetadata[id] else { return nil }
+                return cached == metadata ? nil : id
+            }
+        )
+
+        if !snapshot.isComplete {
+            let evaluatedIDs = Set(snapshot.evaluatedAssetIdentifiers)
+            let plannedIDs = Set(snapshot.scanTargetAssetIdentifiers)
+            let validPlannedIDs = plannedIDs.intersection(currentAssetIDs)
+            return validPlannedIDs
+                .subtracting(evaluatedIDs)
+                .union(modifiedIDs.intersection(evaluatedIDs))
+        }
+
+        guard !snapshot.libraryAssetIdentifiers.isEmpty,
+              snapshot.cleanupMode == .deepClean || mode == .speedClean else {
+            return nil
+        }
+        return currentAssetIDs
+            .subtracting(snapshot.libraryAssetIdentifiers)
+            .union(modifiedIDs)
+            .union(retryAssetIDs.intersection(currentAssetIDs))
     }
 }
 
@@ -235,6 +417,7 @@ actor PhotoAnalysisCache {
     private static let logger = Logger(subsystem: "com.photoduck.app", category: "PhotoAnalysisCache")
     private let fileURL: URL
     private(set) var persistenceHealthy = true
+    private var latestSavedAt: Date = .distantPast
 
     init() {
         let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -267,6 +450,13 @@ actor PhotoAnalysisCache {
                 Self.logger.info("Ignoring cache from schema \(snapshot.schemaVersion)")
                 return nil
             }
+            if !snapshot.hasConsistentCompletionState {
+                persistenceHealthy = false
+                Self.logger.error(
+                    "Loaded a cache marked complete before its scan target was processed"
+                )
+            }
+            latestSavedAt = max(latestSavedAt, snapshot.savedAt)
             return snapshot
         } catch {
             persistenceHealthy = false
@@ -276,9 +466,13 @@ actor PhotoAnalysisCache {
     }
 
     func saveSnapshot(_ snapshot: CachedPhotoAnalysisSnapshot) {
+        // Snapshot writes are launched off the main actor. Ignore an older task
+        // that arrives after a newer checkpoint or completed result.
+        guard snapshot.savedAt >= latestSavedAt else { return }
         do {
             let data = try JSONEncoder().encode(snapshot)
             try data.write(to: fileURL, options: [.atomic])
+            latestSavedAt = snapshot.savedAt
             persistenceHealthy = true
         } catch {
             persistenceHealthy = false

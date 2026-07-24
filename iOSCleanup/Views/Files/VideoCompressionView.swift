@@ -4,6 +4,9 @@ import Photos
 
 struct VideoCompressionView: View {
     let file: LargeFile
+    /// Called when compression succeeded and the original was moved to
+    /// Recently Deleted, so the parent list can drop the stale row.
+    var onOriginalDeleted: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedPreset: VideoCompressionEngine.Preset = .p720
@@ -329,6 +332,9 @@ struct VideoCompressionView: View {
                 hasSavedCopy = true
                 savedCopyAssetIdentifier = outcome.savedAssetIdentifier
                 compressionState = .success(outcome)
+                if case .savedAndDeleted = outcome {
+                    onOriginalDeleted?()
+                }
             }
         } catch is CancellationError {
             if let output = pendingOutput {

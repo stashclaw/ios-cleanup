@@ -106,7 +106,11 @@ struct PaywallView: View {
                                     in: RoundedRectangle(cornerRadius: 50)
                                 )
                         } else {
-                            DuckPrimaryButton(title: "Unlock PhotoDuck") {
+                            DuckPrimaryButton(
+                                title: purchaseManager.product == nil
+                                    ? "Unlock Unavailable"
+                                    : "Unlock PhotoDuck"
+                            ) {
                                 Task {
                                     await purchaseManager.purchase()
                                     if purchaseManager.isPurchased {
@@ -117,6 +121,9 @@ struct PaywallView: View {
                         }
                     }
                     .disabled(purchaseManager.isLoading || purchaseManager.product == nil)
+                    // A disabled unlock that still looks tappable reads as a
+                    // broken button; dim it so the Try Again path is obvious.
+                    .opacity(purchaseManager.product == nil && !purchaseManager.isLoading ? 0.45 : 1)
                     .padding(.horizontal, 32)
 
                     // Restore

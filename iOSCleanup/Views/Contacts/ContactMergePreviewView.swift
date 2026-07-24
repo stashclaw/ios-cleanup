@@ -3,6 +3,7 @@ import Contacts
 
 struct ContactMergePreviewView: View {
     let match: ContactMatch
+    var onMerged: (() -> Void)? = nil
     @EnvironmentObject private var purchaseManager: PurchaseManager
     @Environment(\.dismiss) private var dismiss
 
@@ -14,8 +15,14 @@ struct ContactMergePreviewView: View {
     var body: some View {
         Group {
             if isMerged {
-                EmptyStateView(title: "Merged!", icon: "checkmark.circle.fill", message: "")
-                    .tint(Color.success)
+                EmptyStateView(
+                    title: "Merged!",
+                    icon: "checkmark.circle.fill",
+                    message: "The duplicate was folded into \(fullName(match.primary)).",
+                    actionTitle: "Done",
+                    action: { dismiss() }
+                )
+                .tint(Color.success)
             } else {
                 ScrollView {
                     VStack(spacing: 20) {
@@ -29,7 +36,9 @@ struct ContactMergePreviewView: View {
         }
         .navigationTitle("Merge Preview")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showPaywall) { PaywallView() }
+        .sheet(isPresented: $showPaywall) {
+            PaywallView().environmentObject(purchaseManager)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .purchaseDidSucceed)) { _ in
             showPaywall = false
         }
@@ -153,6 +162,7 @@ struct ContactMergePreviewView: View {
     // MARK: - Merge logic
 
     private func merge() async {
+        guard !isMerged else { return }
         isMerging = true
         defer { isMerging = false }
         let store = CNContactStore()
@@ -180,6 +190,7 @@ struct ContactMergePreviewView: View {
         do {
             try store.execute(request)
             isMerged = true
+            onMerged?()
         } catch {
             mergeError = error.localizedDescription
         }

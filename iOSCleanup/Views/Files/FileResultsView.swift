@@ -1,5 +1,6 @@
 import Photos
 import SwiftUI
+import UIKit
 
 enum FileDeletionErrorPolicy {
     static func isBenignCancellation(_ error: Error) -> Bool {
@@ -14,6 +15,7 @@ enum FileDeletionErrorPolicy {
 
 struct FileResultsView: View {
     let files: [LargeFile]
+    let scanState: HomeViewModel.ScanState
     let onRefresh: (() async -> Void)?
 
     @EnvironmentObject private var purchaseManager: PurchaseManager
@@ -25,8 +27,13 @@ struct FileResultsView: View {
     @State private var hiddenFileIDs = Set<UUID>()
     @State private var pendingPhotoFileIDs = Set<UUID>()
 
-    init(files: [LargeFile], onRefresh: (() async -> Void)? = nil) {
+    init(
+        files: [LargeFile],
+        scanState: HomeViewModel.ScanState = .completed,
+        onRefresh: (() async -> Void)? = nil
+    ) {
         self.files = files
+        self.scanState = scanState
         self.onRefresh = onRefresh
     }
 
@@ -39,7 +46,16 @@ struct FileResultsView: View {
             .navigationTitle("Large Files")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(item: $compressionTarget) { file in
-                VideoCompressionView(file: file).environmentObject(purchaseManager)
+                VideoCompressionView(
+                    file: file,
+                    onOriginalDeleted: {
+                        // The original is in Recently Deleted; drop the stale
+                        // row instead of letting Delete/Compress act on it.
+                        hiddenFileIDs.insert(file.id)
+                        Task { await onRefresh?() }
+                    }
+                )
+                .environmentObject(purchaseManager)
             }
             .sheet(isPresented: $showPaywall) {
                 PaywallView().environmentObject(purchaseManager)
@@ -81,12 +97,28 @@ struct FileResultsView: View {
 
     @ViewBuilder
     private var resultsContent: some View {
-        if visibleFiles.isEmpty {
+        if scanState == .permissionRequired {
             ScrollView {
                 EmptyStateView(
-                    title: "No Large Files",
+                    title: "Photos Access Needed",
+                    icon: "exclamationmark.triangle.fill",
+                    message: "PhotoDuck can't look for large videos until you allow photo access in Settings.",
+                    style: .neutral,
+                    actionTitle: "Open Settings",
+                    action: {
+                        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                        UIApplication.shared.open(url)
+                    }
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .background(Color.duckBlush.ignoresSafeArea())
+        } else if visibleFiles.isEmpty {
+            ScrollView {
+                EmptyStateView(
+                    title: "No Large Videos",
                     icon: "doc.fill",
-                    message: "No files or videos over 50 MB were found."
+                    message: "No videos over 100 MB were found."
                 )
                 .frame(maxWidth: .infinity)
             }

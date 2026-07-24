@@ -6,6 +6,7 @@ struct SwipeModeView: View {
     @EnvironmentObject private var deletionManager: DeletionManager
     @Environment(\.dismiss) private var dismiss
     @StateObject private var viewModel: SwipeModeViewModel
+    @State private var showDoneConfirmation = false
 
     init(groups: [PhotoGroup]) {
         self.groups = groups
@@ -30,8 +31,16 @@ struct SwipeModeView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                        .foregroundStyle(Color.white)
+                    Button("Done") {
+                        // Leaving mid-queue must never silently throw away
+                        // swipe decisions the user already made.
+                        if viewModel.hasPendingDeletes, !viewModel.isComplete {
+                            showDoneConfirmation = true
+                        } else {
+                            dismiss()
+                        }
+                    }
+                    .foregroundStyle(Color.white)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -50,6 +59,24 @@ struct SwipeModeView: View {
         .onChange(of: deletionManager.lastDeletionError) { error in
             guard error != nil else { return }
             viewModel.restoreUndoneAssets(deletionManager.lastFailedAssetIDs)
+        }
+        .confirmationDialog(
+            "\(viewModel.pendingDeleteCount) photos are marked for deletion",
+            isPresented: $showDoneConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Move \(viewModel.pendingDeleteCount) to Recently Deleted") {
+                Task {
+                    await viewModel.commitDeletes(using: deletionManager)
+                    dismiss()
+                }
+            }
+            Button("Discard Decisions", role: .destructive) {
+                dismiss()
+            }
+            Button("Keep Reviewing", role: .cancel) {}
+        } message: {
+            Text("You can commit what you've decided so far, or discard the marks and keep the photos.")
         }
     }
 
@@ -292,46 +319,27 @@ private struct DuckModeCompletion: View {
                     Text(error).font(.duckCaption).foregroundStyle(Color.danger)
                 }
 
-                if deletionManager.isDeleting {
-                    VStack(spacing: 12) {
-                        StatusBadge(title: "Moving to Recently Deleted...", accent: .duckPink)
-                        DuckProgressBar(progress: deletionManager.deletionProgress, color: .duckPink)
-                            .frame(height: 12)
-                            .padding(.horizontal, 20)
-                        Text("\(ByteCountFormatter.string(fromByteCount: deletionManager.bulkProcessedBytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: deletionManager.bulkTotalBytes, countStyle: .file)) selected")
-                            .font(.duckBody)
-                            .foregroundStyle(Color.duckRose)
-                        Text("\(deletionManager.bulkProcessedCount) of \(deletionManager.bulkTotalCount) photos")
-                            .font(.duckCaption)
-                            .foregroundStyle(Color.duckBerry)
-                        Text("Space is permanently reclaimed after Recently Deleted is emptied.")
+                VStack(spacing: 12) {
+                    if viewModel.hasPendingDeletes {
+                        DuckPrimaryButton(title: "Move to Recently Deleted") {
+                            Task {
+                                await viewModel.commitDeletes(using: deletionManager)
+                            }
+                        }
+                        .padding(.horizontal, 32)
+
+                        Text("Potential space is reclaimed after Recently Deleted is emptied.")
                             .font(.duckCaption)
                             .foregroundStyle(Color.duckRose)
                             .multilineTextAlignment(.center)
-                    }
-                } else {
-                    VStack(spacing: 12) {
-                        if viewModel.hasPendingDeletes {
-                            DuckPrimaryButton(title: "Move to Recently Deleted") {
-                                Task {
-                                    await viewModel.commitDeletes(using: deletionManager)
-                                }
-                            }
                             .padding(.horizontal, 32)
+                    }
 
-                            Text("Potential space is reclaimed after Recently Deleted is emptied.")
-                                .font(.duckCaption)
-                                .foregroundStyle(Color.duckRose)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 32)
+                    if !isEmptyReview {
+                        DuckOutlineButton(title: "Review again", color: .duckRose) {
+                            viewModel.resetQueue()
                         }
-
-                        if !isEmptyReview {
-                            DuckOutlineButton(title: "Review again", color: .duckRose) {
-                                viewModel.resetQueue()
-                            }
-                            .padding(.horizontal, 20)
-                        }
+                        .padding(.horizontal, 20)
                     }
                 }
 

@@ -128,6 +128,14 @@ final class FileScanEngineTests: XCTestCase {
         XCTAssertGreaterThan(highResolution, FileScanEngine.minimumFileSizeBytes)
     }
 
+    func testLargeVideoThresholdIsOneHundredMegabytes() {
+        let threshold = Int64(100 * 1024 * 1024)
+
+        XCTAssertEqual(FileScanEngine.minimumFileSizeBytes, threshold)
+        XCTAssertFalse(FileScanPolicy.qualifies(byteSize: threshold - 1))
+        XCTAssertTrue(FileScanPolicy.qualifies(byteSize: threshold))
+    }
+
     func testDeniedAuthorizationThrowsTypedPermissionErrorWithoutRequestingAgain() async {
         let engine = FileScanEngine(
             authorizationProvider: FileScanAuthorizationProvider(

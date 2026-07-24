@@ -468,6 +468,12 @@ actor VideoCompressionEngine {
 
     /// A save failure is retryable. Once the copy is saved, deletion is reported separately and
     /// never throws the UI back into an export retry that could create another compressed copy.
+    ///
+    /// Documented exemption from the DeletionManager invariant: this delete is
+    /// part of an atomic save-then-replace the user explicitly confirmed, and
+    /// PhotoKit shows its own system confirmation for it. Routing it through
+    /// the 10-second coalesced undo window would let an undo strand the saved
+    /// copy alongside the original with no cleanup path.
     func saveAndDeleteOriginal(
         compressedURL: URL,
         originalAsset: PHAsset

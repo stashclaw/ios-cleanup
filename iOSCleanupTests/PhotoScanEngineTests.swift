@@ -169,6 +169,7 @@ final class PhotoScanEngineTests: XCTestCase {
     }
 
     func testTuningConstantsStayPrecisionFirstAndBounded() {
+        XCTAssertEqual(PhotoScanDefaults.analysisBatchSize, 8)
         XCTAssertFalse(PhotoScanDefaults.allowNetworkAccess)
         XCTAssertLessThan(
             SimilarityThresholds.maxNearDuplicateFeatureDistance,
@@ -421,6 +422,62 @@ final class PhotoScanEngineTests: XCTestCase {
         XCTAssertEqual(finalUpdate?.processedPhotoCount, 2)
     }
 
+    func testBufferedProgressCarriesDurableCheckpointIntoResumePlan() async throws {
+        let assets = (0..<12).map {
+            PhotoScanTestAsset(
+                localIdentifier: "resume-\($0)",
+                creationDate: Date(
+                    timeIntervalSinceReferenceDate: TimeInterval($0 * 10_000)
+                )
+            )
+        }
+        let engine = PhotoScanEngine(
+            assetProvider: StubPhotoScanAssetProvider(assets: assets),
+            assetAnalyzer: { _, _ in
+                try? await Task.sleep(nanoseconds: 5_000_000)
+                return .unavailable
+            }
+        )
+
+        var checkpointUpdate: PhotoScanUpdate?
+        for try await update in engine.scan(mode: .deepClean) {
+            if !update.isComplete,
+               let committedCount = update.committedProcessedPhotoCount,
+               committedCount >= 4 {
+                checkpointUpdate = update
+                break
+            }
+        }
+
+        let update = try XCTUnwrap(checkpointUpdate)
+        let committedCount = try XCTUnwrap(update.committedProcessedPhotoCount)
+        XCTAssertEqual(committedCount, update.evaluatedAssetIDs.count)
+
+        let allIDs = Set(assets.map(\.localIdentifier))
+        let metadata = makeLibraryMetadata(ids: Array(allIDs))
+        let snapshot = makeAnalysisSnapshot(
+            analyzedPhotoCount: update.committedAnalyzedPhotoCount ?? 0,
+            unanalyzedPhotoCount: update.committedUnanalyzedPhotoCount ?? 0,
+            isComplete: false,
+            evaluatedAssetIdentifiers: Array(update.evaluatedAssetIDs),
+            scanTargetAssetIdentifiers: Array(update.targetAssetIDs),
+            libraryMetadata: metadata
+        )
+
+        let required = try XCTUnwrap(
+            PhotoScanResumePlanner.requiredAssetIDs(
+                snapshot: snapshot,
+                currentAssetIDs: allIDs,
+                currentMetadata: metadata,
+                mode: .deepClean,
+                forceFullRescan: false
+            )
+        )
+
+        XCTAssertTrue(required.isDisjoint(with: update.evaluatedAssetIDs))
+        XCTAssertEqual(required, allIDs.subtracting(update.evaluatedAssetIDs))
+    }
+
     func testScanCancellationPropagatesIntoInFlightAssetAnalysis() async {
         let assets = (0..<12).map {
             PhotoScanTestAsset(
@@ -485,12 +542,165 @@ final class PhotoScanEngineTests: XCTestCase {
             XCTAssertEqual(loaded?.cleanupMode, .deepClean)
             XCTAssertEqual(loaded?.screenshotAssetIdentifiers, ["screen-1"])
             XCTAssertEqual(loaded?.blurryAssetIdentifiers, ["blur-1"])
+            XCTAssertTrue(loaded?.isComplete == true)
             XCTAssertEqual(
                 loaded?.libraryAssetIdentifiers,
                 ["library-1", "library-2"]
             )
             XCTAssertEqual(loaded?.libraryAssets.count, 2)
         }
+    }
+
+    func testExistingVersionSevenSnapshotDecodesAsCompleted() throws {
+        let snapshot = makeAnalysisSnapshot(
+            analyzedPhotoCount: 2,
+            unanalyzedPhotoCount: 0
+        )
+        let encoded = try JSONEncoder().encode(snapshot)
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        object.removeValue(forKey: "isComplete")
+        object.removeValue(forKey: "evaluatedAssetIdentifiers")
+        object.removeValue(forKey: "scanTargetAssetIdentifiers")
+
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(
+            CachedPhotoAnalysisSnapshot.self,
+            from: legacyData
+        )
+
+        XCTAssertTrue(decoded.isComplete)
+        XCTAssertEqual(
+            decoded.evaluatedAssetIdentifiers,
+            decoded.libraryAssetIdentifiers
+        )
+        XCTAssertTrue(decoded.scanTargetAssetIdentifiers.isEmpty)
+    }
+
+    func testAnalysisCacheSurfacesPrematureCompleteSnapshotForRepair() async throws {
+        try await withIsolatedAnalysisCacheFile { cacheURL in
+            let cache = PhotoAnalysisCache()
+            let snapshot = makeAnalysisSnapshot(
+                analyzedPhotoCount: 10,
+                unanalyzedPhotoCount: 0
+            )
+            let encoded = try JSONEncoder().encode(snapshot)
+            var object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+            )
+            object["isComplete"] = true
+            object["scanTargetCount"] = 100
+            object["processedPhotoCount"] = 10
+            object["progressFraction"] = 0.1
+            let inconsistentData = try JSONSerialization.data(withJSONObject: object)
+            try inconsistentData.write(to: cacheURL, options: .atomic)
+
+            let loaded = await cache.loadSnapshot()
+
+            XCTAssertNotNil(loaded)
+            XCTAssertFalse(loaded?.hasConsistentCompletionState ?? true)
+            let persistenceHealthy = await cache.persistenceHealthy
+            XCTAssertFalse(persistenceHealthy)
+        }
+    }
+
+    func testPrematureCompleteSnapshotRepairsToPartialPrefix() {
+        let metadata = makeLibraryMetadata(
+            ids: ["asset-1", "asset-2", "asset-3", "asset-4"]
+        )
+        let snapshot = makeAnalysisSnapshot(
+            analyzedPhotoCount: 2,
+            unanalyzedPhotoCount: 0,
+            isComplete: true,
+            evaluatedAssetIdentifiers: Array(metadata.keys),
+            libraryMetadata: metadata
+        )
+
+        let repaired = snapshot.repairingPrematureCompletion(
+            evaluatedAssetIdentifiers: ["asset-1", "asset-2"],
+            scanTargetAssetIdentifiers: [
+                "asset-1", "asset-2", "asset-3", "asset-4"
+            ]
+        )
+
+        XCTAssertFalse(repaired.isComplete)
+        XCTAssertTrue(repaired.hasConsistentCompletionState)
+        XCTAssertEqual(repaired.processedPhotoCount, 2)
+        XCTAssertEqual(repaired.progressFraction, 0.5)
+        XCTAssertEqual(
+            repaired.evaluatedAssetIdentifiers,
+            ["asset-1", "asset-2"]
+        )
+        XCTAssertEqual(repaired.scanTargetAssetIdentifiers.count, 4)
+    }
+
+    func testPartialScanResumePlannerOnlyRequestsUnfinishedAssets() {
+        let metadata = makeLibraryMetadata(ids: ["asset-1", "asset-2", "asset-3"])
+        let snapshot = makeAnalysisSnapshot(
+            analyzedPhotoCount: 2,
+            unanalyzedPhotoCount: 0,
+            isComplete: false,
+            evaluatedAssetIdentifiers: ["asset-1", "asset-2"],
+            scanTargetAssetIdentifiers: ["asset-1", "asset-2", "asset-3"],
+            libraryMetadata: metadata
+        )
+
+        let required = PhotoScanResumePlanner.requiredAssetIDs(
+            snapshot: snapshot,
+            currentAssetIDs: Set(metadata.keys),
+            currentMetadata: metadata,
+            mode: .deepClean,
+            forceFullRescan: false
+        )
+
+        XCTAssertEqual(required, ["asset-3"])
+    }
+
+    func testPartialSpeedCleanResumeDoesNotExpandPastOriginalTarget() {
+        let metadata = makeLibraryMetadata(
+            ids: ["asset-1", "asset-2", "asset-3", "outside-speed-target"]
+        )
+        let snapshot = makeAnalysisSnapshot(
+            analyzedPhotoCount: 1,
+            unanalyzedPhotoCount: 0,
+            isComplete: false,
+            evaluatedAssetIdentifiers: ["asset-1"],
+            scanTargetAssetIdentifiers: ["asset-1", "asset-2", "asset-3"],
+            libraryMetadata: metadata
+        )
+
+        let required = PhotoScanResumePlanner.requiredAssetIDs(
+            snapshot: snapshot,
+            currentAssetIDs: Set(metadata.keys),
+            currentMetadata: metadata,
+            mode: .speedClean,
+            forceFullRescan: false
+        )
+
+        XCTAssertEqual(required, ["asset-2", "asset-3"])
+    }
+
+    func testCompletedScanResumePlannerOnlyRequestsNewAssets() {
+        let cachedMetadata = makeLibraryMetadata(ids: ["asset-1", "asset-2"])
+        let currentMetadata = makeLibraryMetadata(ids: ["asset-1", "asset-2", "asset-3"])
+        let snapshot = makeAnalysisSnapshot(
+            analyzedPhotoCount: 2,
+            unanalyzedPhotoCount: 0,
+            isComplete: true,
+            evaluatedAssetIdentifiers: ["asset-1", "asset-2"],
+            libraryMetadata: cachedMetadata
+        )
+
+        let required = PhotoScanResumePlanner.requiredAssetIDs(
+            snapshot: snapshot,
+            currentAssetIDs: Set(currentMetadata.keys),
+            currentMetadata: currentMetadata,
+            mode: .deepClean,
+            forceFullRescan: false
+        )
+
+        XCTAssertEqual(required, ["asset-3"])
     }
 
     func testCleanupStatsStorePersistsConfirmedTotalsAndClampsOverflow() {
@@ -831,9 +1041,16 @@ final class PhotoScanEngineTests: XCTestCase {
         analyzedPhotoCount: Int,
         unanalyzedPhotoCount: Int,
         screenshotAssetIdentifiers: [String] = [],
-        blurryAssetIdentifiers: [String] = []
+        blurryAssetIdentifiers: [String] = [],
+        isComplete: Bool = true,
+        evaluatedAssetIdentifiers: [String] = [],
+        scanTargetAssetIdentifiers: [String] = [],
+        libraryMetadata: [String: CachedPhotoAssetMetadata]? = nil
     ) -> CachedPhotoAnalysisSnapshot {
-        CachedPhotoAnalysisSnapshot(
+        let resolvedMetadata = libraryMetadata ?? makeLibraryMetadata(
+            ids: ["library-1", "library-2"]
+        )
+        return CachedPhotoAnalysisSnapshot(
             savedAt: Date(timeIntervalSinceReferenceDate: 123),
             libraryTotalCount: 12,
             scanTargetCount: 10,
@@ -846,26 +1063,35 @@ final class PhotoScanEngineTests: XCTestCase {
             reclaimableBytesFoundSoFar: 0,
             cleanupMode: .deepClean,
             resultsFreshnessState: .live,
+            isComplete: isComplete,
+            evaluatedAssetIdentifiers: evaluatedAssetIdentifiers,
+            scanTargetAssetIdentifiers: scanTargetAssetIdentifiers,
             groups: [],
             screenshotAssetIdentifiers: screenshotAssetIdentifiers,
             blurryAssetIdentifiers: blurryAssetIdentifiers,
-            libraryAssetIdentifiers: ["library-1", "library-2"],
-            libraryAssets: [
-                CachedPhotoAssetMetadata(
-                    localIdentifier: "library-1",
-                    modificationDate: nil,
-                    pixelWidth: 4_032,
-                    pixelHeight: 3_024,
-                    mediaSubtypesRawValue: 0
-                ),
-                CachedPhotoAssetMetadata(
-                    localIdentifier: "library-2",
-                    modificationDate: Date(timeIntervalSinceReferenceDate: 2),
-                    pixelWidth: 4_032,
-                    pixelHeight: 3_024,
-                    mediaSubtypesRawValue: 0
+            libraryAssetIdentifiers: resolvedMetadata.keys.sorted(),
+            libraryAssets: resolvedMetadata.values.sorted {
+                $0.localIdentifier < $1.localIdentifier
+            }
+        )
+    }
+
+    private func makeLibraryMetadata(
+        ids: [String]
+    ) -> [String: CachedPhotoAssetMetadata] {
+        Dictionary(
+            uniqueKeysWithValues: ids.enumerated().map { index, id in
+                (
+                    id,
+                    CachedPhotoAssetMetadata(
+                        localIdentifier: id,
+                        modificationDate: Date(timeIntervalSinceReferenceDate: Double(index)),
+                        pixelWidth: 4_032,
+                        pixelHeight: 3_024,
+                        mediaSubtypesRawValue: 0
+                    )
                 )
-            ]
+            }
         )
     }
 

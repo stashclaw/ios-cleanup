@@ -8,6 +8,7 @@ struct PhotoResultsView: View {
 
     @State private var hiddenGroupIDs: Set<UUID> = []
     @State private var deferredGroupIDs: [UUID] = []
+    @State private var keepBestInFlightGroupIDs: Set<UUID> = []
     @State private var showPaywall = false
     @State private var showAutoCleanAllConfirm = false
     @State private var deletionError: String?
@@ -77,10 +78,6 @@ struct PhotoResultsView: View {
                 ZStack {
                     mainContent
 
-                    if deletionManager.isDeleting {
-                        bulkProgressOverlay
-                    }
-
                     if reviewLaterToastVisible {
                         VStack {
                             Spacer()
@@ -90,7 +87,9 @@ struct PhotoResultsView: View {
                                 actionLabel: "Undo",
                                 onAction: { undoReviewLater() }
                             )
-                            .padding(.bottom, 8)
+                            // Sit above the deletion undo toast when both are
+                            // on screen instead of overlapping it.
+                            .padding(.bottom, deletionManager.toastVisible ? 84 : 8)
                         }
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
@@ -251,47 +250,6 @@ struct PhotoResultsView: View {
         .background(Color.backgroundBlush.ignoresSafeArea())
     }
 
-    // MARK: - Bulk progress overlay
-
-    private var bulkProgressOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.4).ignoresSafeArea()
-
-            VStack(spacing: 20) {
-                VStack(spacing: 12) {
-                    Text("Moving to Recently Deleted...")
-                        .font(.duckTitle)
-                        .foregroundStyle(Color.textPrimary)
-
-                    DuckProgressBar(progress: deletionManager.deletionProgress, color: .accentPrimary)
-                        .frame(height: 12)
-
-                    VStack(spacing: 6) {
-                        Text(
-                            "\(ByteCountFormatter.string(fromByteCount: deletionManager.bulkProcessedBytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: deletionManager.bulkTotalBytes, countStyle: .file)) selected"
-                        )
-                        .font(.duckBody)
-                        .foregroundStyle(Color.textSecondary)
-                        .multilineTextAlignment(.center)
-
-                        Text("\(deletionManager.bulkProcessedCount) of \(deletionManager.bulkTotalCount) photos")
-                            .font(.duckCaption)
-                            .foregroundStyle(Color.textPrimary)
-
-                        Text("Potential space is permanently reclaimed after Recently Deleted is emptied.")
-                            .font(.duckCaption)
-                            .foregroundStyle(Color.textSecondary)
-                            .multilineTextAlignment(.center)
-                    }
-                }
-                .padding(28)
-                .frame(maxWidth: .infinity)
-                .background(Color.surface, in: RoundedRectangle(cornerRadius: DuckRadius.l, style: .continuous))
-            }
-            .padding(.horizontal, 40)
-        }
-    }
-
     // MARK: - Hero card
 
     private var heroCard: some View {
@@ -378,7 +336,11 @@ struct PhotoResultsView: View {
                         HStack(spacing: 10) {
                             if group.isAutoCleanEligible {
                                 Button {
+                                    // A rapid double-tap must not enqueue the
+                                    // same group twice or double-record feedback.
+                                    guard keepBestInFlightGroupIDs.insert(group.id).inserted else { return }
                                     Task {
+                                        defer { keepBestInFlightGroupIDs.remove(group.id) }
                                         do {
                                             try await deletionManager.keepBest(from: group)
                                             _ = await PhotoFeedbackStore.shared.recordSimilarGroupDecision(
@@ -409,6 +371,7 @@ struct PhotoResultsView: View {
                                         .frame(minHeight: 44)
                                         .background(LinearGradient.duckPrimaryCTA, in: Capsule())
                                 }
+                                .disabled(keepBestInFlightGroupIDs.contains(group.id))
                             } else {
                                 Text("Review only")
                                     .font(.duckCaption.weight(.semibold))

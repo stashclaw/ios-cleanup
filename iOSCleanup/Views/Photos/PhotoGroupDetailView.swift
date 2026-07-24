@@ -88,19 +88,25 @@ struct PhotoGroupDetailView: View {
                     .padding(.top, 8)
                 }
 
-                DuckBottomActionBar(
-                    summary: actionSummary,
-                    primaryLabel: isDeleting
-                        ? "Moving…"
-                        : (purchaseManager.isPurchased ? "Delete Selected" : "Delete Selected — Pro"),
-                    primaryEnabled: !deleteSet.isEmpty
-                        && deleteSet.count < group.assets.count
-                        && !isDeleting,
-                    isPaid: !purchaseManager.isPurchased,
-                    isDark: true,
-                    onPrimary: { Task { await deleteSelected() } },
-                    onShowPaywall: { showPaywall = true }
-                )
+                // When the selection is exactly the classifier's recommended
+                // set, the free Keep Best button above already commits it.
+                // Showing a paid "Delete Selected" for the identical action
+                // would route free users into the paywall for nothing.
+                if !selectionMatchesRecommendation {
+                    DuckBottomActionBar(
+                        summary: actionSummary,
+                        primaryLabel: isDeleting
+                            ? "Moving…"
+                            : (purchaseManager.isPurchased ? "Delete Selected" : "Delete Selected — Pro"),
+                        primaryEnabled: !deleteSet.isEmpty
+                            && deleteSet.count < group.assets.count
+                            && !isDeleting,
+                        isPaid: !purchaseManager.isPurchased,
+                        isDark: true,
+                        onPrimary: { Task { await deleteSelected() } },
+                        onShowPaywall: { showPaywall = true }
+                    )
+                }
 
                 Text("Potential space is reclaimed after Recently Deleted is emptied.")
                     .font(.duckCaption)
@@ -184,6 +190,10 @@ struct PhotoGroupDetailView: View {
             notification: .announcement,
             argument: nowSelected ? "Marked for deletion" : "Kept"
         )
+    }
+
+    private var selectionMatchesRecommendation: Bool {
+        group.isAutoCleanEligible && deleteSet == Set(group.deleteCandidateIDs)
     }
 
     private var previewPresented: Binding<Bool> {

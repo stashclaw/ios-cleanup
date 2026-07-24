@@ -36,6 +36,7 @@ struct PhotoDuckShellView: View {
             NavigationStack {
                 ContactResultsView(
                     matches: dashboardModel.contactMatches,
+                    scanState: dashboardModel.contactScanState,
                     onRefresh: { await dashboardModel.scanContacts(force: true) }
                 )
                     .environmentObject(purchaseManager)
@@ -46,6 +47,7 @@ struct PhotoDuckShellView: View {
             NavigationStack {
                 FileResultsView(
                     files: dashboardModel.largeFiles,
+                    scanState: dashboardModel.fileScanState,
                     onRefresh: { await dashboardModel.scanFiles(force: true) }
                 )
                     .environmentObject(purchaseManager)
@@ -111,11 +113,19 @@ struct SimilarPhotosDashboardView: View {
         switch viewModel.scanState {
         case .scanning: return "Scanning"
         case .paused: return "Paused"
-        case .completed: return "Ready"
+        case .completed:
+            return viewModel.unanalyzedPhotoCount > 0 ? "Incomplete" : "Ready"
         case .failed: return "Needs attention"
         case .permissionRequired: return "Access needed"
         case .idle: return "Not scanned"
         }
+    }
+
+    private var scanPercentLabel: String {
+        if viewModel.scanState == .completed, viewModel.unanalyzedPhotoCount > 0 {
+            return "\(viewModel.unanalyzedPhotoCount.formatted()) not analyzed"
+        }
+        return "\(Int((scanProgress * 100).rounded()))% scanned"
     }
     private var heroMetricText: String {
         if viewModel.scanState == .scanning || viewModel.scanState == .paused {
@@ -280,7 +290,7 @@ struct SimilarPhotosDashboardView: View {
                     .padding(.vertical, 6)
                     .background(Color.white.opacity(0.16), in: Capsule(style: .continuous))
                 Spacer()
-                Text("\(Int((scanProgress * 100).rounded()))% scanned")
+                Text(scanPercentLabel)
                     .font(.duckCaption.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.9))
             }

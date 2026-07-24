@@ -28,6 +28,9 @@ struct HomeView: View {
                     if viewModel.photoAccessNeedsSettings || viewModel.hasLimitedPhotoAccess {
                         photoAccessBanner
                     }
+                    if viewModel.photoAccessNotYetRequested {
+                        photoAccessGrantBanner
+                    }
                     if viewModel.contactScanState == .permissionRequired {
                         contactsAccessBanner
                     }
@@ -193,7 +196,12 @@ struct HomeView: View {
         case .deepCleanPaused:
             return "Continue scanning"
         case .completedResultsAvailable, .reviewReadyPartialResults:
-            return totalGroups > 0 ? "Review \(totalGroups) groups ready" : "All clean!"
+            if totalGroups > 0 {
+                return "Review \(totalGroups) groups ready"
+            }
+            return viewModel.unanalyzedPhotoCount > 0
+                ? "Retry \(viewModel.unanalyzedPhotoCount.formatted()) unanalyzed photos"
+                : "Scan again"
         case .scanFailure, .idlePrompt:
             return "Start scan"
         }
@@ -208,7 +216,12 @@ struct HomeView: View {
         case .deepCleanPaused:
             return "\(viewModel.processedPhotoCount.formatted()) photos safely scanned so far"
         case .completedResultsAvailable, .reviewReadyPartialResults:
-            return totalGroups > 0 ? "Tap to start cleaning now" : "Nothing to review right now"
+            if totalGroups > 0 {
+                return "Tap to start cleaning now"
+            }
+            return viewModel.unanalyzedPhotoCount > 0
+                ? "Some photos couldn't be checked yet"
+                : "No issues found · runs a fresh scan"
         default:
             return "Find duplicates & free up space"
         }
@@ -259,6 +272,8 @@ struct HomeView: View {
         case .reviewReadyPartialResults, .completedResultsAvailable:
             if !viewModel.photoGroups.isEmpty {
                 showReviewResults = true
+            } else if viewModel.unanalyzedPhotoCount > 0 {
+                showICloudScanConfirmation = true
             } else {
                 viewModel.startSpeedClean()
             }
@@ -290,6 +305,30 @@ struct HomeView: View {
                     } else {
                         viewModel.openPhotoAccessSettings()
                     }
+                }
+                .font(.duckCaption.weight(.semibold))
+                .foregroundStyle(Color.accentPrimary)
+            }
+            .padding(14)
+        }
+    }
+
+    private var photoAccessGrantBanner: some View {
+        DuckCard {
+            HStack(spacing: 12) {
+                Image(systemName: "photo.on.rectangle.angled")
+                    .foregroundStyle(Color.accentPrimary)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Photos access not set up")
+                        .font(.duckBody.weight(.semibold))
+                        .foregroundStyle(Color.textPrimary)
+                    Text("PhotoDuck needs photo access before it can find duplicates.")
+                        .font(.duckCaption)
+                        .foregroundStyle(Color.textSecondary)
+                }
+                Spacer()
+                Button("Allow") {
+                    viewModel.requestPhotoAccess()
                 }
                 .font(.duckCaption.weight(.semibold))
                 .foregroundStyle(Color.accentPrimary)
@@ -350,7 +389,7 @@ struct HomeView: View {
                     Text("\(viewModel.unanalyzedPhotoCount.formatted()) photos not analyzed")
                         .font(.duckBody.weight(.semibold))
                         .foregroundStyle(Color.textPrimary)
-                    Text("They appear to be stored in iCloud. Your current results may be incomplete.")
+                    Text("These couldn't be checked, so results may be incomplete. Rescan retries them and downloads originals from iCloud if needed.")
                         .font(.duckCaption)
                         .foregroundStyle(Color.textSecondary)
                 }
@@ -1021,14 +1060,19 @@ private struct PhotoCategoryReviewView: View {
                     Task { await deleteSelectedAssets() }
                 }
             } label: {
-                Text(actionTitle)
-                    .font(.duckButton)
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity, minHeight: 48)
-                    .background(
-                        selectedAssetIDs.isEmpty ? Color.textSecondary : Color.danger,
-                        in: RoundedRectangle(cornerRadius: DuckRadius.m, style: .continuous)
-                    )
+                HStack(spacing: 6) {
+                    if selectedAssetIDs.count > 1, !purchaseManager.isPurchased {
+                        Image(systemName: "lock.fill")
+                    }
+                    Text(actionTitle)
+                }
+                .font(.duckButton)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .background(
+                    selectedAssetIDs.isEmpty ? Color.textSecondary : Color.danger,
+                    in: RoundedRectangle(cornerRadius: DuckRadius.m, style: .continuous)
+                )
             }
             .disabled(selectedAssetIDs.isEmpty || deletionManager.hasPendingDeletion)
 
@@ -1036,6 +1080,14 @@ private struct PhotoCategoryReviewView: View {
                 Text("\(selectedAssetIDs.count) selected · \(ByteCountFormatter.string(fromByteCount: selectedBytes, countStyle: .file))")
                     .font(.duckCaption)
                     .foregroundStyle(Color.textSecondary)
+            }
+            if selectedAssetIDs.count > 1, !purchaseManager.isPurchased {
+                // Say up front what the lock means so nobody selects 40 photos
+                // and only then discovers multi-delete is paid.
+                Text("Deleting several at once is a Pro feature. Deleting one photo at a time is free.")
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.textSecondary)
+                    .multilineTextAlignment(.center)
             }
         }
         .padding(.horizontal, 16)

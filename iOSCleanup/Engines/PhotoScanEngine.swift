@@ -35,6 +35,17 @@ struct PhotoScanUpdate: Sendable {
     /// Assets analyzed for this run. Incremental callers use this to replace
     /// only affected cached groups instead of clearing the whole library result.
     var evaluatedAssetIDs: Set<String> = []
+    /// Stable work set selected when this run began. Persisting it prevents an
+    /// interrupted Speed Clean from expanding into a full-library resume.
+    var targetAssetIDs: Set<String> = []
+    /// Attempted assets whose analysis produced no usable feature print this
+    /// run. Persisted so an explicit retry pass can target exactly these.
+    var unanalyzedAssetIDs: Set<String> = []
+    /// Batch-aligned counters for durable checkpoints. Fine-grained UI progress
+    /// may be ahead of these values while a batch is still being assembled.
+    var committedProcessedPhotoCount: Int?
+    var committedAnalyzedPhotoCount: Int?
+    var committedUnanalyzedPhotoCount: Int?
 
     var hasUnanalyzedPhotos: Bool {
         unanalyzedPhotoCount > 0
@@ -199,7 +210,9 @@ actor PhotoScanEngine {
             let preferenceProfile = await PhotoPreferenceProfileStore.shared.snapshot()
             let totalCount = allAssets.count
             let targetCount = targetAssets.count
-            let evaluatedAssetIDs = Set(targetAssets.map(\.localIdentifier))
+            let targetAssetIDs = Set(targetAssets.map(\.localIdentifier))
+            var evaluatedAssetIDs = Set<String>()
+            var unanalyzedAssetIDs = Set<String>()
 
             guard !targetAssets.isEmpty else {
                 continuation.yield(
@@ -219,7 +232,11 @@ actor PhotoScanEngine {
                         reclaimableBytesFoundSoFar: 0,
                         hasPartialResults: false,
                         isComplete: true,
-                        evaluatedAssetIDs: []
+                        evaluatedAssetIDs: [],
+                        targetAssetIDs: [],
+                        committedProcessedPhotoCount: 0,
+                        committedAnalyzedPhotoCount: 0,
+                        committedUnanalyzedPhotoCount: 0
                     )
                 )
                 await performMLRetentionAfterSuccessfulScan(
@@ -249,11 +266,16 @@ actor PhotoScanEngine {
             var analyzedPhotoCount = 0
             var unanalyzedPhotoCount = 0
             var latestGroups: [PhotoGroup] = []
-            var screenshotAssets: [PHAsset] = []
+            // Screenshot membership is reliable PHAsset metadata. Publish it
+            // immediately instead of waiting for Vision or an iCloud download.
+            let screenshotAssets = targetAssets.filter {
+                $0.mediaSubtypes.contains(.photoScreenshot)
+            }
             var blurryAssets: [PHAsset] = []
-            // Four concurrent PhotoKit/Vision requests keeps progress moving without
-            // saturating the shared image manager used by the foreground UI.
-            let batchSize = 4
+            // Eight concurrent PhotoKit/Vision requests substantially improves
+            // large-library throughput while remaining bounded so foreground
+            // review thumbnails can still use the shared image manager.
+            let batchSize = PhotoScanDefaults.analysisBatchSize
             let refreshStride = max(batchSize * 2, 8)
             var nextGroupRefreshCount = min(refreshStride, targetCount)
             let assetAnalyzer = self.assetAnalyzer
@@ -268,14 +290,18 @@ actor PhotoScanEngine {
                     unanalyzedPhotoCount: 0,
                     progressFraction: 0,
                     groups: [],
-                    screenshotAssets: [],
+                    screenshotAssets: screenshotAssets,
                     blurryAssets: [],
                     groupsFoundCount: 0,
-                    reviewablePhotosCount: 0,
+                    reviewablePhotosCount: screenshotAssets.count,
                     reclaimableBytesFoundSoFar: 0,
-                    hasPartialResults: false,
+                    hasPartialResults: !screenshotAssets.isEmpty,
                     isComplete: false,
-                    evaluatedAssetIDs: evaluatedAssetIDs
+                    evaluatedAssetIDs: evaluatedAssetIDs,
+                    targetAssetIDs: targetAssetIDs,
+                    committedProcessedPhotoCount: 0,
+                    committedAnalyzedPhotoCount: 0,
+                    committedUnanalyzedPhotoCount: 0
                 )
             )
 
@@ -307,6 +333,7 @@ actor PhotoScanEngine {
                         analyses.append(analysis)
                         if analysis.featureValue.observation == nil {
                             batchUnanalyzedPhotoCount += 1
+                            unanalyzedAssetIDs.insert(analysis.assetID)
                         } else {
                             batchAnalyzedPhotoCount += 1
                         }
@@ -333,7 +360,12 @@ actor PhotoScanEngine {
                                 reclaimableBytesFoundSoFar: latestGroups.totalReclaimableBytes,
                                 hasPartialResults: !latestGroups.isEmpty,
                                 isComplete: false,
-                                evaluatedAssetIDs: evaluatedAssetIDs
+                                evaluatedAssetIDs: evaluatedAssetIDs,
+                                targetAssetIDs: targetAssetIDs,
+                                unanalyzedAssetIDs: unanalyzedAssetIDs,
+                                committedProcessedPhotoCount: processedCount,
+                                committedAnalyzedPhotoCount: analyzedPhotoCount,
+                                committedUnanalyzedPhotoCount: unanalyzedPhotoCount
                             )
                         )
                     }
@@ -372,7 +404,7 @@ actor PhotoScanEngine {
                         sharpness: analysis.featureValue.keeperSignals?.sharpness
                     ) {
                     case .screenshot:
-                        screenshotAssets.append(asset)
+                        break
                     case .blurry:
                         blurryAssets.append(asset)
                     case nil:
@@ -498,6 +530,7 @@ actor PhotoScanEngine {
                         burstIDsByIdentifier[burstIdentifier, default: []].append(descriptor.id)
                     }
                     orderedProcessedIDs.append(descriptor.id)
+                    evaluatedAssetIDs.insert(descriptor.id)
 
                     if orderedProcessedIDs.count > SimilarityThresholds.maxCandidateAssetsInspected {
                         let expiredIndex = orderedProcessedIDs.count
@@ -579,7 +612,12 @@ actor PhotoScanEngine {
                         reclaimableBytesFoundSoFar: reclaimableBytes,
                         hasPartialResults: !isComplete && reviewableCount > 0,
                         isComplete: isComplete,
-                        evaluatedAssetIDs: evaluatedAssetIDs
+                        evaluatedAssetIDs: evaluatedAssetIDs,
+                        targetAssetIDs: targetAssetIDs,
+                        unanalyzedAssetIDs: unanalyzedAssetIDs,
+                        committedProcessedPhotoCount: processedCount,
+                        committedAnalyzedPhotoCount: analyzedPhotoCount,
+                        committedUnanalyzedPhotoCount: unanalyzedPhotoCount
                     )
                 )
                 await Task.yield()
@@ -620,7 +658,7 @@ actor PhotoScanEngine {
         _ asset: PHAsset,
         allowNetworkAccess: Bool
     ) async -> PhotoScanAssetAnalysis {
-        guard let image = await asset.loadImage(
+        var loadedImage = await asset.loadImage(
             targetSize: CGSize(width: 224, height: 224),
             deliveryMode: .fastFormat,
             allowNetwork: allowNetworkAccess,
@@ -629,7 +667,22 @@ actor PhotoScanEngine {
             // still in iCloud. They are not valid evidence of camera blur.
             acceptsDegradedResult: false,
             timeout: 4
-        ), let cgImage = image.cgImage else {
+        )
+        if loadedImage == nil {
+            // fastFormat serves pre-generated derivatives; assets without one
+            // (fresh imports, some local originals) fail with "no resource
+            // found" even though the original is on device. Decoding the
+            // original is slower but keeps such photos analyzable.
+            loadedImage = await asset.loadImage(
+                targetSize: CGSize(width: 224, height: 224),
+                deliveryMode: .highQualityFormat,
+                allowNetwork: allowNetworkAccess,
+                contentMode: .aspectFill,
+                acceptsDegradedResult: false,
+                timeout: allowNetworkAccess ? 15 : 6
+            )
+        }
+        guard let image = loadedImage, let cgImage = image.cgImage else {
             return .unavailable
         }
 
@@ -1147,50 +1200,90 @@ actor PhotoScanEngine {
     ) -> [PHAsset] {
         guard !requiredAssetIDs.isEmpty else { return [] }
 
-        let requiredAssets = assets.filter {
+        let chronological = assets.sortedByCreationDate()
+        let requiredAssets = chronological.filter {
             requiredAssetIDs.contains($0.localIdentifier)
         }
         guard !requiredAssets.isEmpty else { return [] }
 
         var includedIDs = Set(requiredAssets.map(\.localIdentifier))
-        let chronological = assets.sortedByCreationDate()
 
-        for required in requiredAssets {
-            let requiredDate = required.creationDate
-            let requiredBurstID = required.burstIdentifier
-            let isScreenshot = required.mediaSubtypes.contains(.photoScreenshot)
-            var screenshotContextCount = 0
+        let requiredBurstIDs = Set(requiredAssets.compactMap(\.burstIdentifier))
+        if !requiredBurstIDs.isEmpty {
+            for candidate in chronological {
+                if let burstID = candidate.burstIdentifier,
+                   requiredBurstIDs.contains(burstID) {
+                    includedIDs.insert(candidate.localIdentifier)
+                }
+            }
+        }
 
-            for candidate in chronological.reversed() {
-                guard !includedIDs.contains(candidate.localIdentifier) else {
+        // Merge required capture windows once, then sweep the chronological
+        // library once. The old nested loop became billions of checks when a
+        // large interrupted scan resumed.
+        let window = SimilarityThresholds.visualSessionWindowSeconds
+        let requiredDates = requiredAssets.compactMap(\.creationDate).sorted()
+        var mergedWindows: [DateInterval] = []
+        for date in requiredDates {
+            let interval = DateInterval(
+                start: date.addingTimeInterval(-window),
+                end: date.addingTimeInterval(window)
+            )
+            if let last = mergedWindows.last,
+               interval.start <= last.end {
+                mergedWindows[mergedWindows.count - 1] = DateInterval(
+                    start: last.start,
+                    end: max(last.end, interval.end)
+                )
+            } else {
+                mergedWindows.append(interval)
+            }
+        }
+
+        var windowIndex = 0
+        for candidate in chronological {
+            guard let date = candidate.creationDate,
+                  windowIndex < mergedWindows.count else {
+                continue
+            }
+            while windowIndex < mergedWindows.count,
+                  date > mergedWindows[windowIndex].end {
+                windowIndex += 1
+            }
+            if windowIndex < mergedWindows.count,
+               mergedWindows[windowIndex].contains(date) {
+                includedIDs.insert(candidate.localIdentifier)
+            }
+        }
+
+        struct Dimensions: Hashable {
+            let width: Int
+            let height: Int
+        }
+        let requiredScreenshotDimensions = Set(
+            requiredAssets.compactMap { asset -> Dimensions? in
+                guard asset.mediaSubtypes.contains(.photoScreenshot) else {
+                    return nil
+                }
+                return Dimensions(width: asset.pixelWidth, height: asset.pixelHeight)
+            }
+        )
+        if !requiredScreenshotDimensions.isEmpty {
+            var contextCounts: [Dimensions: Int] = [:]
+            for candidate in chronological.reversed()
+            where candidate.mediaSubtypes.contains(.photoScreenshot) {
+                let dimensions = Dimensions(
+                    width: candidate.pixelWidth,
+                    height: candidate.pixelHeight
+                )
+                guard requiredScreenshotDimensions.contains(dimensions),
+                      !includedIDs.contains(candidate.localIdentifier),
+                      contextCounts[dimensions, default: 0]
+                        < SimilarityThresholds.maxFeatureComparisonsPerAsset else {
                     continue
                 }
-
-                if let requiredBurstID,
-                   candidate.burstIdentifier == requiredBurstID {
-                    includedIDs.insert(candidate.localIdentifier)
-                    continue
-                }
-
-                if let requiredDate,
-                   let candidateDate = candidate.creationDate,
-                   abs(requiredDate.timeIntervalSince(candidateDate))
-                    <= SimilarityThresholds.visualSessionWindowSeconds {
-                    includedIDs.insert(candidate.localIdentifier)
-                    continue
-                }
-
-                // Old screenshot duplicates can be far apart in time. Recheck a
-                // bounded set with matching dimensions rather than the full library.
-                if isScreenshot,
-                   candidate.mediaSubtypes.contains(.photoScreenshot),
-                   candidate.pixelWidth == required.pixelWidth,
-                   candidate.pixelHeight == required.pixelHeight,
-                   screenshotContextCount
-                    < SimilarityThresholds.maxFeatureComparisonsPerAsset {
-                    includedIDs.insert(candidate.localIdentifier)
-                    screenshotContextCount += 1
-                }
+                includedIDs.insert(candidate.localIdentifier)
+                contextCounts[dimensions, default: 0] += 1
             }
         }
 
@@ -1221,6 +1314,7 @@ enum ScanError: Error {
 }
 
 enum PhotoScanDefaults {
+    static let analysisBatchSize = 8
     // iCloud downloads require an explicit caller opt-in.
     static let allowNetworkAccess = false
     // This category is review-only. Keep the initial cutoff conservative until

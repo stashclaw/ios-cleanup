@@ -2,15 +2,28 @@ import SwiftUI
 
 /// iOS 16-compatible replacement for ContentUnavailableView (which requires iOS 17).
 struct EmptyStateView: View {
+    /// Celebration is for genuinely good outcomes ("your library is clean").
+    /// Neutral is for filters, permission problems, and anything where a
+    /// "Clean outcome / Ready" badge would be misleading.
+    enum Style {
+        case celebration
+        case neutral
+    }
+
     let title: String
     let icon: String
     let message: String
+    var style: Style = .celebration
+    var actionTitle: String? = nil
+    var action: (() -> Void)? = nil
 
     var body: some View {
         DuckCard {
             VStack(spacing: 16) {
-                StatusBadge(title: "Clean outcome", accent: .duckBerry)
-                    .accessibilityHidden(true)
+                if style == .celebration {
+                    StatusBadge(title: "Clean outcome", accent: .duckBerry)
+                        .accessibilityHidden(true)
+                }
 
                 PhotoDuckMascotArt(size: 120)
                     .shadow(color: .duckPink.opacity(0.18), radius: 16, x: 0, y: 10)
@@ -33,13 +46,20 @@ struct EmptyStateView: View {
                     }
                 }
 
-                Label("Ready", systemImage: icon)
-                    .font(.duckCaption.weight(.semibold))
-                    .foregroundStyle(Color.duckBerry)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.duckBlush, in: Capsule())
-                    .accessibilityLabel("Status: ready")
+                if style == .celebration {
+                    Label("Ready", systemImage: icon)
+                        .font(.duckCaption.weight(.semibold))
+                        .foregroundStyle(Color.duckBerry)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.duckBlush, in: Capsule())
+                        .accessibilityLabel("Status: ready")
+                }
+
+                if let actionTitle, let action {
+                    DuckPrimaryButton(title: actionTitle, action: action)
+                        .padding(.horizontal, 12)
+                }
             }
             .padding(20)
         }

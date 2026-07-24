@@ -1,5 +1,5 @@
 import Foundation
-import Photos
+@preconcurrency import Photos
 
 enum FileScanError: Error, Equatable, LocalizedError {
     case permissionDenied(PHAuthorizationStatus)
@@ -30,7 +30,9 @@ struct FileScanAuthorizationProvider: Sendable {
 
 actor FileScanEngine {
 
-    static let minimumFileSizeBytes: Int64 = 50 * 1024 * 1024  // 50 MB
+    /// Tuning constant for the Large Videos product category.
+    static let minimumFileSizeBytes: Int64 = 100 * 1024 * 1024
+    static let measurementBatchSize = 8
 
     private let authorizationProvider: FileScanAuthorizationProvider
 
@@ -38,9 +40,11 @@ actor FileScanEngine {
         self.authorizationProvider = authorizationProvider
     }
 
-    func scan() async throws -> [LargeFile] {
+    func scan(
+        onUpdate: (@Sendable ([LargeFile]) async -> Void)? = nil
+    ) async throws -> [LargeFile] {
         try await requireReadAuthorization()
-        return try await largePhotoAssets().sorted { $0.byteSize > $1.byteSize }
+        return try await largePhotoAssets(onUpdate: onUpdate)
     }
 
     private func requireReadAuthorization() async throws {
@@ -56,7 +60,9 @@ actor FileScanEngine {
         }
     }
 
-    private func largePhotoAssets() async throws -> [LargeFile] {
+    private func largePhotoAssets(
+        onUpdate: (@Sendable ([LargeFile]) async -> Void)?
+    ) async throws -> [LargeFile] {
         let result = PHAsset.fetchAssets(with: .video, options: nil)
 
         var assets: [PHAsset] = []
@@ -66,21 +72,52 @@ actor FileScanEngine {
         }
 
         var largeFiles: [LargeFile] = []
-        for asset in assets {
+        for batchStart in stride(
+            from: 0,
+            to: assets.count,
+            by: Self.measurementBatchSize
+        ) {
             try Task.checkCancellation()
-            let representative = await asset.representativeFile()
-            guard representative.byteSize >= FileScanEngine.minimumFileSizeBytes else { continue }
-            largeFiles.append(
-                LargeFile(
-                    id: UUID(),
-                    source: .photoLibrary(asset: asset),
-                    displayName: representative.displayName,
-                    byteSize: representative.byteSize,
-                    byteSizeIsEstimated: representative.byteSizeIsEstimated,
-                    creationDate: asset.creationDate
-                )
-            )
+            let batchEnd = min(batchStart + Self.measurementBatchSize, assets.count)
+            let batch = Array(assets[batchStart..<batchEnd])
+            let measuredFiles = await withTaskGroup(of: LargeFile?.self) { group in
+                for asset in batch {
+                    group.addTask {
+                        let representative = await asset.representativeFile()
+                        guard FileScanPolicy.qualifies(
+                            byteSize: representative.byteSize
+                        ) else {
+                            return nil
+                        }
+                        return LargeFile(
+                            id: UUID(),
+                            source: .photoLibrary(asset: asset),
+                            displayName: representative.displayName,
+                            byteSize: representative.byteSize,
+                            byteSizeIsEstimated: representative.byteSizeIsEstimated,
+                            creationDate: asset.creationDate
+                        )
+                    }
+                }
+
+                var files: [LargeFile] = []
+                for await file in group {
+                    if let file {
+                        files.append(file)
+                    }
+                }
+                return files
+            }
+            largeFiles.append(contentsOf: measuredFiles)
+            largeFiles.sort { $0.byteSize > $1.byteSize }
+            await onUpdate?(largeFiles)
         }
         return largeFiles
+    }
+}
+
+enum FileScanPolicy {
+    static func qualifies(byteSize: Int64) -> Bool {
+        byteSize >= FileScanEngine.minimumFileSizeBytes
     }
 }

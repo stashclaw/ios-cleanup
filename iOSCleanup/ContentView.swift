@@ -13,6 +13,12 @@ struct ContentView: View {
                 PhotoDuckShellView(dashboardModel: dashboardModel)
                     .environmentObject(purchaseManager)
                     .environmentObject(deletionManager)
+                    .onAppear {
+                        // The model is created while onboarding is still on
+                        // screen; run its deferred startup once the user has
+                        // answered the permission prompts.
+                        dashboardModel.bootstrapLibraryStateIfNeeded()
+                    }
                     .onChange(of: scenePhase) { phase in
                         dashboardModel.updateScenePhase(phase)
                     }

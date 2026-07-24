@@ -76,7 +76,7 @@ The shared `iOSCleanup` scheme attaches `iOSCleanup/Configuration/iOSCleanup.sto
 - **Similarity policy** lives in `SimilarityPolicyTypes.swift` and `SimilarityPolicyServices.swift`; thresholds are tuning constants, not UI behavior. Shared subject alone is never sufficient.
 - **Deletion safety** requires explicit `keeperAssetID` and `deleteCandidateIDs`; never infer destructive intent from array order. `visuallySimilar` is always review-only.
 - **Screenshots and blurry photos** are separate review categories. They never auto-select assets; a user-authored selection is required before deletion.
-- **External move safety** is copy, verify, then explicitly confirm deletion. Export failures leave Photos untouched, and all deletion still routes through `DeletionManager`.
+- **External move safety** is copy, verify, then explicitly confirm deletion. Export failures leave Photos untouched, and all deletion still routes through `DeletionManager`. One documented exemption: `VideoCompressionEngine.saveAndDeleteOriginal` deletes the original directly as part of its user-confirmed, system-dialog-guarded save-then-replace; the coalesced undo window cannot represent that atomic swap.
 - **Keeper ranking** has one authoritative path: `ConservativeKeeperRankingService`, optionally wrapped by `MLEnhancedKeeperRankingService`. Core ML must remain optional and fallback-safe.
 - Tests cover clustering, split/chaining prevention, deletion guardrails, ML schemas and persistence, file sizing, video failure paths, and cancellation. Real-device PhotoKit behavior still needs device QA.
 - **Build simulator**: `iPhone 17 Pro` (iPhone 16 not available on this machine).
