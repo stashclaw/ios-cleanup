@@ -34,15 +34,29 @@ struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
     let isComplete: Bool
     let evaluatedAssetIdentifiers: [String]
     let scanTargetAssetIdentifiers: [String]
-    /// Assets that were attempted but produced no usable analysis. These stay
-    /// persisted across completed scans so an explicit retry can target them;
-    /// they are never silently folded into "evaluated and clean".
+    /// Assets that were attempted but produced no usable analysis. They are
+    /// also present in `evaluatedAssetIdentifiers` (attempted), which is what
+    /// keeps completion consistent — but the resume planner folds this set
+    /// back into every subsequent scan, so a failure is retried rather than
+    /// treated as permanently covered. See `hasCompleteAnalysisCoverage`.
     let unanalyzedAssetIdentifiers: [String]
     let groups: [CachedPhotoGroup]
     let screenshotAssetIdentifiers: [String]
     let blurryAssetIdentifiers: [String]
     let libraryAssetIdentifiers: [String]
     let libraryAssets: [CachedPhotoAssetMetadata]
+
+    /// `evaluatedAssetIdentifiers` records assets that were *attempted*, which
+    /// is what keeps `hasConsistentCompletionState` meaningful — excluding
+    /// failures would make any scan with one bad photo permanently incomplete
+    /// and trigger a resume on every launch. Analysis coverage is therefore a
+    /// separate question, and this is the property to use before telling the
+    /// user their library has actually been checked.
+    var hasCompleteAnalysisCoverage: Bool {
+        hasConsistentCompletionState
+            && isComplete
+            && unanalyzedAssetIdentifiers.isEmpty
+    }
 
     var hasConsistentCompletionState: Bool {
         guard isComplete else { return true }
@@ -262,6 +276,8 @@ enum PhotoScanResumePlanner {
         guard !forceFullRescan, let snapshot else { return nil }
         guard snapshot.hasConsistentCompletionState else { return nil }
 
+        let previouslyUnanalyzedIDs = Set(snapshot.unanalyzedAssetIdentifiers)
+
         let cachedMetadata = Dictionary(
             uniqueKeysWithValues: snapshot.libraryAssets.map {
                 ($0.localIdentifier, $0)
@@ -293,6 +309,7 @@ enum PhotoScanResumePlanner {
                 .union(modifiedIDs)
                 .union(newIDs)
                 .union(retryAssetIDs.intersection(currentAssetIDs))
+                .union(previouslyUnanalyzedIDs.intersection(currentAssetIDs))
         }
 
         guard !snapshot.libraryAssetIdentifiers.isEmpty,
@@ -303,6 +320,12 @@ enum PhotoScanResumePlanner {
             .subtracting(snapshot.libraryAssetIdentifiers)
             .union(modifiedIDs)
             .union(retryAssetIDs.intersection(currentAssetIDs))
+            // Assets that were attempted but produced no analysis are marked
+            // evaluated so completion stays consistent. Without folding them
+            // back in here they would be treated as covered forever, and only
+            // the explicit retry CTA could ever reach them — so a plain
+            // "Scan again" silently skipped the very photos it failed on.
+            .union(previouslyUnanalyzedIDs.intersection(currentAssetIDs))
     }
 }
 

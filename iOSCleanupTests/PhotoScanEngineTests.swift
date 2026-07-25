@@ -1566,6 +1566,82 @@ final class PhotoScanEngineTests: XCTestCase {
         XCTAssertEqual(required, ["asset-3"])
     }
 
+    func testCompletedScanResumePlannerRetriesPreviouslyUnanalyzedAssets() {
+        let cachedMetadata = makeLibraryMetadata(
+            ids: ["asset-1", "asset-2", "asset-3"]
+        )
+        // asset-2 was attempted (so it counts as evaluated and the snapshot is
+        // consistently complete) but produced no usable analysis.
+        let snapshot = makeAnalysisSnapshot(
+            analyzedPhotoCount: 2,
+            unanalyzedPhotoCount: 1,
+            isComplete: true,
+            evaluatedAssetIdentifiers: ["asset-1", "asset-2", "asset-3"],
+            unanalyzedAssetIdentifiers: ["asset-2"],
+            libraryMetadata: cachedMetadata,
+            libraryTotalCount: cachedMetadata.count,
+            scanTargetCount: 3
+        )
+
+        XCTAssertTrue(snapshot.hasConsistentCompletionState)
+        // Attempted-everything is not the same as analyzed-everything.
+        XCTAssertFalse(snapshot.hasCompleteAnalysisCoverage)
+
+        let required = PhotoScanResumePlanner.requiredAssetIDs(
+            snapshot: snapshot,
+            currentAssetIDs: Set(cachedMetadata.keys),
+            currentMetadata: cachedMetadata,
+            mode: .deepClean,
+            forceFullRescan: false
+        )
+
+        // A plain rescan must reach the failed asset. Previously it was folded
+        // into "evaluated" and only the explicit retry CTA could touch it.
+        XCTAssertEqual(required, ["asset-2"])
+    }
+
+    func testResumePlannerDropsUnanalyzedAssetsThatNoLongerExist() {
+        let cachedMetadata = makeLibraryMetadata(ids: ["asset-1", "asset-2"])
+        let currentMetadata = makeLibraryMetadata(ids: ["asset-1"])
+        let snapshot = makeAnalysisSnapshot(
+            analyzedPhotoCount: 1,
+            unanalyzedPhotoCount: 1,
+            isComplete: true,
+            evaluatedAssetIdentifiers: ["asset-1", "asset-2"],
+            unanalyzedAssetIdentifiers: ["asset-2"],
+            libraryMetadata: cachedMetadata,
+            libraryTotalCount: cachedMetadata.count,
+            scanTargetCount: 2
+        )
+
+        let required = PhotoScanResumePlanner.requiredAssetIDs(
+            snapshot: snapshot,
+            currentAssetIDs: Set(currentMetadata.keys),
+            currentMetadata: currentMetadata,
+            mode: .deepClean,
+            forceFullRescan: false
+        )
+
+        // A deleted photo can never be analyzed; it must not keep the work set
+        // permanently non-empty.
+        XCTAssertEqual(required, [])
+    }
+
+    func testFullyAnalyzedSnapshotReportsCompleteCoverage() {
+        let cachedMetadata = makeLibraryMetadata(ids: ["asset-1", "asset-2"])
+        let snapshot = makeAnalysisSnapshot(
+            analyzedPhotoCount: 2,
+            unanalyzedPhotoCount: 0,
+            isComplete: true,
+            evaluatedAssetIdentifiers: ["asset-1", "asset-2"],
+            libraryMetadata: cachedMetadata,
+            libraryTotalCount: cachedMetadata.count,
+            scanTargetCount: 2
+        )
+
+        XCTAssertTrue(snapshot.hasCompleteAnalysisCoverage)
+    }
+
     func testCleanupStatsStorePersistsConfirmedTotalsAndClampsOverflow() {
         let suiteName = "CleanupStatsStoreTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -1908,6 +1984,7 @@ final class PhotoScanEngineTests: XCTestCase {
         isComplete: Bool = true,
         evaluatedAssetIdentifiers: [String] = [],
         scanTargetAssetIdentifiers: [String] = [],
+        unanalyzedAssetIdentifiers: [String] = [],
         libraryMetadata: [String: CachedPhotoAssetMetadata]? = nil,
         libraryTotalCount: Int = 12,
         scanTargetCount: Int = 10
@@ -1931,6 +2008,7 @@ final class PhotoScanEngineTests: XCTestCase {
             isComplete: isComplete,
             evaluatedAssetIdentifiers: evaluatedAssetIdentifiers,
             scanTargetAssetIdentifiers: scanTargetAssetIdentifiers,
+            unanalyzedAssetIdentifiers: unanalyzedAssetIdentifiers,
             groups: [],
             screenshotAssetIdentifiers: screenshotAssetIdentifiers,
             blurryAssetIdentifiers: blurryAssetIdentifiers,
