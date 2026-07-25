@@ -144,9 +144,9 @@ struct SimilarPhotosDashboardView: View {
     }
     private var heroMetricText: String {
         if viewModel.scanState == .scanning || viewModel.scanState == .paused {
-            return "\(viewModel.scanProgressLabel) • \(similarGroups.count) groups found"
+            return "\(viewModel.scanProgressLabel) · \(similarGroups.count) groups found"
         }
-        return "\(totalPhotoCount.formatted()) photos • \(ByteCountFormatter.string(fromByteCount: totalReclaimableBytes, countStyle: .file)) reclaimable"
+        return "\(totalPhotoCount.formatted()) photos · \(ByteCountFormatter.string(fromByteCount: totalReclaimableBytes, countStyle: .file)) reclaimable"
     }
     private var reclaimablePercent: Int {
         guard viewModel.storageTotalBytesValue > 0 else { return 0 }
@@ -253,7 +253,7 @@ struct SimilarPhotosDashboardView: View {
                         )
 #if DEBUG
                     Divider()
-                    Button(isExportingMLData ? "Exporting ML Data..." : "Export ML Training Data") {
+                    Button(isExportingMLData ? "Exporting ML Data…" : "Export ML Training Data") {
                         Task { await exportMLTrainingData() }
                     }
                     .disabled(isExportingMLData)

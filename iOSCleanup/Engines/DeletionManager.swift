@@ -133,6 +133,20 @@ final class DeletionManager: ObservableObject {
             throw PhotoDeletionGuardrailError.emptyDeleteCandidateList
         }
 
+        // This path skips the undo window, so it must still honour the same
+        // cross-batch guardrail: an asset protected as a keeper by a deletion
+        // waiting in that window may not be hard-deleted here.
+        let identifiers = Set(uniqueAssets.map(\.localIdentifier))
+        guard pendingProtectedKeeperIDs.isDisjoint(with: identifiers) else {
+            throw PhotoDeletionGuardrailError.crossGroupKeeperConflict
+        }
+        // An asset already queued in the pending batch would otherwise be
+        // deleted twice and counted twice toward lifetime freed bytes.
+        let pendingIdentifiers = Set(pendingAssets.map(\.localIdentifier))
+        guard pendingIdentifiers.isDisjoint(with: identifiers) else {
+            throw PhotoDeletionGuardrailError.duplicateDeleteAcrossGroups
+        }
+
         let freedBytes = estimatedBytes(for: uniqueAssets)
         try await performDelete(assets: uniqueAssets)
         totalBytesFreed += freedBytes

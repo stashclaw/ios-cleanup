@@ -61,7 +61,19 @@ private final class SQLiteConnection: @unchecked Sendable {
 actor PhotoMLStore {
     static let shared = PhotoMLStore()
 
-    static let schemaVersion = 4
+    // Schema history (the marker in `schema_meta` is authoritative and is read
+    // on every open):
+    // - v4: versioned `pairwise_similarity` primary key and
+    //   `training_rows.active_choice`.
+    // - v5: `photo_asset_analysis` stopped storing its own copy of the 8 KB
+    //   embedding blob; the warm-scan cache joins `photo_features` instead.
+    static let schemaVersion = 5
+
+    // Files already stamped at or above this version have the rebuilt pairwise
+    // table and the `active_choice` column, so the expensive column-sniffing
+    // migrations can be skipped entirely on open.
+    private static let columnSniffedMigrationVersion = 4
+
     static let embeddingDimension = PhotoEmbeddingContract.elementCount
     static let keeperTrainingCSVHeaders = KeeperFeatureSchema.exportHeaders
     static let groupOutcomeCSVHeaders = GroupActionFeatureSchema.exportHeaders
@@ -111,13 +123,96 @@ actor PhotoMLStore {
             try execOrThrow("PRAGMA journal_mode = WAL")
             try execOrThrow("PRAGMA synchronous = NORMAL")
             try execOrThrow("PRAGMA foreign_keys = ON")
-            try createTables()
+            try migrateSchema()
         } catch {
             sqlite3_close(handle)
             connection.handle = nil
             isOpen = false
             throw error
         }
+    }
+
+    /// Reads the persisted schema marker and uses it to decide what work this
+    /// open has to do. The marker is the only signal that can tell us a file was
+    /// written by a *newer* build, which column sniffing can never detect.
+    private func migrateSchema() throws {
+        try execOrThrow("""
+            CREATE TABLE IF NOT EXISTS schema_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+
+        let storedVersion = try loadSchemaVersion()
+        if let storedVersion, storedVersion > Self.schemaVersion {
+            // A newer build owns this file and may have rewritten tables this
+            // build cannot read. Refuse to open rather than running older
+            // migrations over it, and leave the marker alone so the newer build
+            // still recognizes its own schema.
+            throw MLStoreError.schemaVersionTooNew(
+                found: storedVersion,
+                supported: Self.schemaVersion
+            )
+        }
+
+        try createTables()
+        if storedVersion != Self.schemaVersion {
+            try runMigrations(fromStoredVersion: storedVersion)
+            try writeSchemaVersion(Self.schemaVersion)
+        }
+        try createIndexes()
+    }
+
+    private func runMigrations(fromStoredVersion storedVersion: Int?) throws {
+        if (storedVersion ?? 0) < Self.columnSniffedMigrationVersion {
+            try migratePairwiseSimilarityTableIfNeeded()
+            try migrateTrainingRowsTableIfNeeded()
+        }
+        // Column sniffed rather than version gated: files written before the
+        // marker was trusted can still carry the duplicated blob column.
+        try dropDuplicatedAnalysisEmbeddingsIfNeeded()
+    }
+
+    private func loadSchemaVersion() throws -> Int? {
+        var stmt: OpaquePointer?
+        let sql = "SELECT value FROM schema_meta WHERE key = 'version'"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw sqlError()
+        }
+        defer { sqlite3_finalize(stmt) }
+        let stepResult = sqlite3_step(stmt)
+        if stepResult == SQLITE_DONE { return nil }
+        guard stepResult == SQLITE_ROW else { throw sqlError() }
+        guard let value = sqlite3_column_text(stmt, 0) else { return nil }
+        return Int(String(cString: value))
+    }
+
+    /// The schema version this database file is stamped with, or `nil` for a
+    /// file that predates the marker.
+    func storedSchemaVersion() throws -> Int? {
+        try ensureOpen()
+        return try loadSchemaVersion()
+    }
+
+    private func writeSchemaVersion(_ version: Int) throws {
+        try execOrThrow("""
+            INSERT INTO schema_meta (key, value) VALUES ('version', '\(version)')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """)
+    }
+
+    /// v4 and earlier stored a second copy of every 8 KB embedding in
+    /// `photo_asset_analysis`. The column is dropped from the write path; null
+    /// out anything already written so the space returns to the free list (and
+    /// to the file on the next `VACUUM`). The column itself is left in place:
+    /// `ALTER TABLE ... DROP COLUMN` is not available on every deployed SQLite
+    /// build, and an unreferenced nulled column is inert.
+    private func dropDuplicatedAnalysisEmbeddingsIfNeeded() throws {
+        let columns = try tableColumnInfo("photo_asset_analysis")
+        guard columns.contains(where: { $0.name == "embedding" }) else { return }
+        try execOrThrow(
+            "UPDATE photo_asset_analysis SET embedding = NULL WHERE embedding IS NOT NULL"
+        )
     }
 
     private func createTables() throws {
@@ -144,6 +239,19 @@ actor PhotoMLStore {
 
         // Versioned scan evidence used only to avoid re-decoding unchanged
         // bounded context assets during incremental/resumed scans.
+        //
+        // Deliberately holds no embedding blob of its own (schema v5). Storing
+        // one here duplicated the 8 KB `photo_features.embedding` per asset and
+        // doubled the documented storage budget. Joining `photo_features` was
+        // chosen over capping this table's row count because it is the safer
+        // option for the warm-scan cache path: a cache hit is only useful if
+        // the derived pair rows can also be persisted, and
+        // `validatePairEmbeddingVersions` requires a matching
+        // `photo_features.embedding`. Joining makes the cache-hit condition and
+        // the pair-write precondition identical, so this cache can never hand
+        // back an embedding whose pair batch would then abort with
+        // `missingEmbedding`. A row-count cap would have left both the
+        // duplicate blob and that divergence in place.
         try execOrThrow("""
             CREATE TABLE IF NOT EXISTS photo_asset_analysis (
                 asset_id TEXT PRIMARY KEY,
@@ -154,7 +262,6 @@ actor PhotoMLStore {
                 media_subtypes_raw INT NOT NULL,
                 analyzer_version INT NOT NULL,
                 embedding_version INT NOT NULL,
-                embedding BLOB,
                 perceptual_hash_hex TEXT,
                 keeper_signals_json BLOB,
                 updated_at REAL NOT NULL
@@ -176,7 +283,6 @@ actor PhotoMLStore {
                 PRIMARY KEY (lhs_asset_id, rhs_asset_id, embedding_version)
             )
         """)
-        try migratePairwiseSimilarityTableIfNeeded()
 
         // Feedback events (mirrors PhotoReviewFeedbackEvent)
         try execOrThrow("""
@@ -260,21 +366,9 @@ actor PhotoMLStore {
                 FOREIGN KEY (event_id) REFERENCES feedback_events(id) ON DELETE CASCADE
             )
         """)
-        try migrateTrainingRowsTableIfNeeded()
+    }
 
-        // Schema version tracking
-        try execOrThrow("""
-            CREATE TABLE IF NOT EXISTS schema_meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-        """)
-
-        try execOrThrow("""
-            INSERT INTO schema_meta (key, value) VALUES ('version', '\(Self.schemaVersion)')
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-        """)
-
+    private func createIndexes() throws {
         // Indexes for common queries
         try execOrThrow("CREATE INDEX IF NOT EXISTS idx_feedback_timestamp ON feedback_events(timestamp)")
         try execOrThrow("CREATE INDEX IF NOT EXISTS idx_feedback_kind ON feedback_events(kind)")
@@ -292,12 +386,36 @@ actor PhotoMLStore {
     // MARK: - Photo Features
 
     func upsertFeature(_ feature: PhotoFeatureRecord) throws {
+        // Single-record callers still get a hard error for a malformed
+        // embedding; only batch writes degrade to skip-and-count.
+        try validateEmbedding(feature.embedding, version: feature.embeddingVersion)
         try upsertFeatures([feature])
     }
 
-    func upsertFeatures(_ features: [PhotoFeatureRecord]) throws {
+    /// Upserts a batch and returns how many records were skipped because their
+    /// embedding failed the version/byte-count contract. Validation runs before
+    /// `BEGIN`, so one malformed record can never roll back the (up to 95)
+    /// valid rows sharing its flush batch.
+    @discardableResult
+    func upsertFeatures(_ features: [PhotoFeatureRecord]) throws -> Int {
         try ensureOpen()
-        guard !features.isEmpty else { return }
+        guard !features.isEmpty else { return 0 }
+        var validFeatures: [PhotoFeatureRecord] = []
+        validFeatures.reserveCapacity(features.count)
+        var skippedCount = 0
+        for feature in features {
+            do {
+                try validateEmbedding(
+                    feature.embedding,
+                    version: feature.embeddingVersion
+                )
+                validFeatures.append(feature)
+            } catch {
+                skippedCount += 1
+            }
+        }
+        guard !validFeatures.isEmpty else { return skippedCount }
+
         let sql = """
             INSERT INTO photo_features
                 (asset_id, embedding, embedding_version, pixel_width, pixel_height,
@@ -330,11 +448,7 @@ actor PhotoMLStore {
         defer { sqlite3_finalize(stmt) }
         try execOrThrow("BEGIN TRANSACTION")
         do {
-            for feature in features {
-                try validateEmbedding(
-                    feature.embedding,
-                    version: feature.embeddingVersion
-                )
+            for feature in validFeatures {
                 sqlite3_reset(stmt)
                 sqlite3_clear_bindings(stmt)
                 sqlite3_bind_text(stmt, 1, feature.assetID, -1, SQLITE_TRANSIENT_PTR)
@@ -377,6 +491,7 @@ actor PhotoMLStore {
             rollbackIgnoringSecondaryFailure()
             throw error
         }
+        return skippedCount
     }
 
     func featureCount() throws -> Int {
@@ -440,18 +555,40 @@ actor PhotoMLStore {
 
     // MARK: - Versioned asset analysis cache
 
+    /// Upserts warm-scan cache rows and returns how many were skipped because
+    /// the analyzed embedding failed its version/byte-count contract. The
+    /// embedding blob itself is not stored here; reads join `photo_features`.
+    /// Validation runs before `BEGIN` so one malformed record cannot roll back
+    /// the valid rows sharing its flush batch.
+    @discardableResult
     func upsertAssetAnalyses(
         _ records: [PhotoAssetAnalysisCacheRecord]
-    ) throws {
+    ) throws -> Int {
         try ensureOpen()
-        guard !records.isEmpty else { return }
+        guard !records.isEmpty else { return 0 }
+        var validRecords: [PhotoAssetAnalysisCacheRecord] = []
+        validRecords.reserveCapacity(records.count)
+        var skippedCount = 0
+        for record in records {
+            do {
+                try validateEmbedding(
+                    record.embedding,
+                    version: record.embeddingVersion
+                )
+                validRecords.append(record)
+            } catch {
+                skippedCount += 1
+            }
+        }
+        guard !validRecords.isEmpty else { return skippedCount }
+
         let sql = """
             INSERT INTO photo_asset_analysis
                 (asset_id, modification_date, modification_date_is_null,
                  pixel_width, pixel_height, media_subtypes_raw,
-                 analyzer_version, embedding_version, embedding,
+                 analyzer_version, embedding_version,
                  perceptual_hash_hex, keeper_signals_json, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(asset_id) DO UPDATE SET
                 modification_date = excluded.modification_date,
                 modification_date_is_null = excluded.modification_date_is_null,
@@ -460,7 +597,6 @@ actor PhotoMLStore {
                 media_subtypes_raw = excluded.media_subtypes_raw,
                 analyzer_version = excluded.analyzer_version,
                 embedding_version = excluded.embedding_version,
-                embedding = excluded.embedding,
                 perceptual_hash_hex = excluded.perceptual_hash_hex,
                 keeper_signals_json = excluded.keeper_signals_json,
                 updated_at = excluded.updated_at
@@ -473,11 +609,7 @@ actor PhotoMLStore {
 
         try execOrThrow("BEGIN TRANSACTION")
         do {
-            for record in records {
-                try validateEmbedding(
-                    record.embedding,
-                    version: record.embeddingVersion
-                )
+            for record in validRecords {
                 sqlite3_reset(statement)
                 sqlite3_clear_bindings(statement)
                 sqlite3_bind_text(
@@ -506,22 +638,9 @@ actor PhotoMLStore {
                 )
                 sqlite3_bind_int(statement, 7, Int32(record.analyzerVersion))
                 sqlite3_bind_int(statement, 8, Int32(record.embeddingVersion))
-                if let embedding = record.embedding {
-                    _ = embedding.withUnsafeBytes { bytes in
-                        sqlite3_bind_blob(
-                            statement,
-                            9,
-                            bytes.baseAddress,
-                            Int32(bytes.count),
-                            SQLITE_TRANSIENT_PTR
-                        )
-                    }
-                } else {
-                    sqlite3_bind_null(statement, 9)
-                }
                 bindOptionalText(
                     statement,
-                    10,
+                    9,
                     record.perceptualHash.map {
                         String($0, radix: 16, uppercase: false)
                     }
@@ -530,18 +649,18 @@ actor PhotoMLStore {
                     _ = keeperSignalsJSON.withUnsafeBytes { bytes in
                         sqlite3_bind_blob(
                             statement,
-                            11,
+                            10,
                             bytes.baseAddress,
                             Int32(bytes.count),
                             SQLITE_TRANSIENT_PTR
                         )
                     }
                 } else {
-                    sqlite3_bind_null(statement, 11)
+                    sqlite3_bind_null(statement, 10)
                 }
                 sqlite3_bind_double(
                     statement,
-                    12,
+                    11,
                     Date().timeIntervalSince1970
                 )
                 guard sqlite3_step(statement) == SQLITE_DONE else {
@@ -553,6 +672,7 @@ actor PhotoMLStore {
             rollbackIgnoringSecondaryFailure()
             throw error
         }
+        return skippedCount
     }
 
     func loadValidAssetAnalyses(
@@ -560,13 +680,22 @@ actor PhotoMLStore {
     ) throws -> [String: PhotoAssetAnalysisCacheRecord] {
         try ensureOpen()
         guard !lookups.isEmpty else { return [:] }
+        // The embedding comes from photo_features rather than a duplicated blob
+        // in photo_asset_analysis (schema v5). The join conditions are exactly
+        // the precondition validatePairEmbeddingVersions enforces on write, so a
+        // cache hit always implies the pairs derived from it are persistable.
         let sql = """
-            SELECT modification_date, modification_date_is_null,
-                   pixel_width, pixel_height, media_subtypes_raw,
-                   analyzer_version, embedding_version, embedding,
-                   perceptual_hash_hex, keeper_signals_json
-            FROM photo_asset_analysis
-            WHERE asset_id = ?
+            SELECT analysis.modification_date, analysis.modification_date_is_null,
+                   analysis.pixel_width, analysis.pixel_height,
+                   analysis.media_subtypes_raw, analysis.analyzer_version,
+                   analysis.embedding_version, features.embedding,
+                   analysis.perceptual_hash_hex, analysis.keeper_signals_json
+            FROM photo_asset_analysis analysis
+            JOIN photo_features features
+                ON features.asset_id = analysis.asset_id
+            WHERE analysis.asset_id = ?
+              AND features.embedding IS NOT NULL
+              AND features.embedding_version = analysis.embedding_version
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
@@ -612,10 +741,18 @@ actor PhotoMLStore {
                 bytes: embeddingPointer,
                 count: embeddingByteCount
             )
-            try validateEmbedding(
-                embedding,
-                version: lookup.embeddingVersion
-            )
+            // A single unreadable blob must not abort the whole lookup loop:
+            // throwing here made the caller discard every other context asset
+            // and flag persistence unhealthy. Skip the row exactly like the
+            // metadata mismatches above so it is simply re-analyzed.
+            do {
+                try validateEmbedding(
+                    embedding,
+                    version: lookup.embeddingVersion
+                )
+            } catch {
+                continue
+            }
 
             let hash: UInt64? = sqlite3_column_text(statement, 8)
                 .flatMap { UInt64(String(cString: $0), radix: 16) }
@@ -648,12 +785,34 @@ actor PhotoMLStore {
     // MARK: - Pairwise Similarity Cache
 
     func upsertPairSimilarity(_ pair: PairSimilarityRecord) throws {
+        try ensureOpen()
+        // Single-pair callers still get a hard error; only batch writes degrade
+        // to skip-and-count.
+        try validatePairEmbeddingVersions(pair)
         try upsertPairSimilarities([pair])
     }
 
-    func upsertPairSimilarities(_ pairs: [PairSimilarityRecord]) throws {
+    /// Upserts a batch and returns how many pairs were skipped because their
+    /// backing embeddings were missing or version-mismatched. Validation runs
+    /// before `BEGIN`, so one bad pair cannot roll back the (up to 383) valid
+    /// rows sharing its flush batch.
+    @discardableResult
+    func upsertPairSimilarities(_ pairs: [PairSimilarityRecord]) throws -> Int {
         try ensureOpen()
-        guard !pairs.isEmpty else { return }
+        guard !pairs.isEmpty else { return 0 }
+        var validPairs: [PairSimilarityRecord] = []
+        validPairs.reserveCapacity(pairs.count)
+        var skippedCount = 0
+        for pair in pairs {
+            do {
+                try validatePairEmbeddingVersions(pair)
+                validPairs.append(pair)
+            } catch {
+                skippedCount += 1
+            }
+        }
+        guard !validPairs.isEmpty else { return skippedCount }
+
         let sql = """
             INSERT INTO pairwise_similarity
                 (lhs_asset_id, rhs_asset_id, embedding_version, feature_distance, time_delta_seconds,
@@ -674,8 +833,7 @@ actor PhotoMLStore {
         defer { sqlite3_finalize(stmt) }
         try execOrThrow("BEGIN TRANSACTION")
         do {
-            for pair in pairs {
-                try validatePairEmbeddingVersions(pair)
+            for pair in validPairs {
                 sqlite3_reset(stmt)
                 sqlite3_clear_bindings(stmt)
                 let (lhs, rhs) = pair.lhsAssetID <= pair.rhsAssetID
@@ -699,6 +857,7 @@ actor PhotoMLStore {
             rollbackIgnoringSecondaryFailure()
             throw error
         }
+        return skippedCount
     }
 
     func loadPairSimilarity(
@@ -1119,17 +1278,50 @@ actor PhotoMLStore {
         try execOrThrow("VACUUM")
     }
 
+    /// Deletes aged feature rows and the warm-scan cache rows that depend on
+    /// them, returning the number of deleted `photo_features` rows.
+    ///
+    /// The two tables must stay consistent: an orphaned `photo_asset_analysis`
+    /// row keeps serving cache hits for an asset that no longer has an
+    /// embedding, and every pair derived from it then fails
+    /// `validatePairEmbeddingVersions` with `missingEmbedding` and rolls back
+    /// its batch.
+    @discardableResult
     func deleteOldFeatures(olderThan date: Date) throws -> Int {
         try ensureOpen()
         let sql = "DELETE FROM photo_features WHERE updated_at < ?"
+        // Aged-out cache rows plus any orphan left behind by an earlier build.
+        let analysisSQL = """
+            DELETE FROM photo_asset_analysis
+            WHERE updated_at < ?
+               OR asset_id NOT IN (SELECT asset_id FROM photo_features)
+        """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw sqlError()
         }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_double(stmt, 1, date.timeIntervalSince1970)
-        guard sqlite3_step(stmt) == SQLITE_DONE else { throw sqlError() }
-        return Int(sqlite3_changes(db))
+        var analysisStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, analysisSQL, -1, &analysisStatement, nil) == SQLITE_OK else {
+            throw sqlError()
+        }
+        defer { sqlite3_finalize(analysisStatement) }
+
+        try execOrThrow("BEGIN TRANSACTION")
+        do {
+            sqlite3_bind_double(stmt, 1, date.timeIntervalSince1970)
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw sqlError() }
+            let deletedFeatureRows = Int(sqlite3_changes(db))
+
+            sqlite3_bind_double(analysisStatement, 1, date.timeIntervalSince1970)
+            guard sqlite3_step(analysisStatement) == SQLITE_DONE else { throw sqlError() }
+
+            try execOrThrow("COMMIT")
+            return deletedFeatureRows
+        } catch {
+            rollbackIgnoringSecondaryFailure()
+            throw error
+        }
     }
 
     func deleteAllData() throws {
@@ -1720,6 +1912,7 @@ struct MLStoreStats: Sendable {
 enum MLStoreError: Error, LocalizedError {
     case cannotOpen(String)
     case sqlError(String)
+    case schemaVersionTooNew(found: Int, supported: Int)
     case unsupportedEmbeddingVersion(Int)
     case invalidEmbeddingByteCount(version: Int, expected: Int, actual: Int)
     case missingEmbedding(String)
@@ -1734,6 +1927,8 @@ enum MLStoreError: Error, LocalizedError {
         switch self {
         case .cannotOpen(let msg): return "Cannot open ML store: \(msg)"
         case .sqlError(let msg): return "ML store SQL error: \(msg)"
+        case .schemaVersionTooNew(let found, let supported):
+            return "ML store file uses schema v\(found); this build supports v\(supported)"
         case .unsupportedEmbeddingVersion(let version):
             return "Unsupported embedding version: \(version)"
         case .invalidEmbeddingByteCount(let version, let expected, let actual):

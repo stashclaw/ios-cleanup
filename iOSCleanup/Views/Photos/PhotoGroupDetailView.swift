@@ -383,7 +383,7 @@ private struct PhotoGroupAssetCell: View {
                     Image(systemName: isSelectedForDeletion ? "xmark.circle.fill" : "checkmark.circle.fill")
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(.white, isSelectedForDeletion ? Color.danger : Color.success)
-                        .font(.title2)
+                        .font(.duckTitle)
                         .shadow(radius: 2)
                 }
                 .padding(.horizontal, 8)

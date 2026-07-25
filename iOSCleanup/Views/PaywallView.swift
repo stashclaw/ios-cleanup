@@ -13,6 +13,12 @@ struct PaywallView: View {
         ("checkmark.seal.fill",         "One-time unlock · No subscription"),
     ]
 
+    /// The product failed to load and no request is in flight, so the CTA is
+    /// stuck on "Unlock Unavailable" until the user retries.
+    private var showsLoadFailure: Bool {
+        purchaseManager.product == nil && !purchaseManager.isLoading
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -57,23 +63,37 @@ struct PaywallView: View {
                     }
                     .padding(.horizontal, 32)
 
-                    // Error
-                    if let error = purchaseManager.errorMessage {
+                    // Error + retry. "Try Again" must be reachable whenever the
+                    // product failed to load — including the silent case where
+                    // there is no error message, which otherwise left the user
+                    // staring at a dimmed "Unlock Unavailable" with no way out.
+                    if showsLoadFailure {
                         VStack(spacing: 8) {
-                            Text(error)
-                                .font(.duckCaption)
-                                .foregroundStyle(Color.danger)
-                                .multilineTextAlignment(.center)
-
-                            if purchaseManager.product == nil {
-                                Button("Try Again") {
-                                    Task { await purchaseManager.loadProduct() }
-                                }
-                                .font(.duckCaption.weight(.semibold))
-                                .foregroundStyle(Color.textSecondary)
+                            if let error = purchaseManager.errorMessage {
+                                Text(error)
+                                    .font(.duckCaption)
+                                    .foregroundStyle(Color.danger)
+                                    .multilineTextAlignment(.center)
+                            } else {
+                                Text("We couldn't load the unlock right now.")
+                                    .font(.duckCaption)
+                                    .foregroundStyle(Color.textSecondary)
+                                    .multilineTextAlignment(.center)
                             }
+
+                            Button("Try Again") {
+                                Task { await purchaseManager.loadProduct() }
+                            }
+                            .font(.duckCaption.weight(.semibold))
+                            .foregroundStyle(Color.textSecondary)
                         }
                         .padding(.horizontal)
+                    } else if let error = purchaseManager.errorMessage {
+                        Text(error)
+                            .font(.duckCaption)
+                            .foregroundStyle(Color.danger)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
                     }
 
                     if let message = purchaseManager.statusMessage {

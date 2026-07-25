@@ -888,6 +888,12 @@ final class HomeViewModel: ObservableObject {
         scanState = .paused
         isPaused = true
         isBackgroundExecutionState = false
+        // A paused engine parks in `waitWhilePaused()` indefinitely, so this
+        // flag would otherwise stay true for the whole pause and silently
+        // no-op Speed Clean, Deep Clean, the unanalyzed retry, the Files
+        // refresh, and library reconciliation — with no feedback at all. The
+        // scan is suspended, not finalizing.
+        isFinalizingPhotoScan = false
         persistCleanupState()
         if let activePhotoScanEngine {
             Task(priority: .utility) { [weak self, analysisCache] in

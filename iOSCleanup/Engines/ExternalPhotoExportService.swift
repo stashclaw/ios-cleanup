@@ -275,7 +275,7 @@ struct ExternalPhotoExportManifest: Codable, Equatable, Sendable {
 }
 
 struct ExternalPhotoExportSessionRecord: Codable, Equatable, Sendable {
-    struct AssetSignature: Codable, Equatable, Sendable {
+    struct AssetSignature: Codable, Equatable, Hashable, Sendable {
         let localIdentifier: String
         let modificationDate: Date?
     }
@@ -644,7 +644,11 @@ actor ExternalPhotoExportService {
                         )
                     )
                 } catch is CancellationError {
-                    try? fileManager.removeItem(at: partialURL)
+                    // Keep the .partial file. Deleting it threw away multi-
+                    // gigabyte progress and contradicted the help text shown
+                    // beside Cancel, which promises resuming on the same
+                    // destination. Committed siblings are rolled back so the
+                    // asset stays all-or-nothing.
                     committedAssetFiles.forEach {
                         try? fileManager.removeItem(at: $0)
                     }
@@ -827,7 +831,7 @@ actor ExternalPhotoExportService {
                     session.schemaVersion
                         == ExternalPhotoExportSessionRecord.schemaVersion,
                     !session.isComplete,
-                    session.requestedAssets == signatures
+                    Set(session.requestedAssets) == Set(signatures)
                 else {
                     return nil
                 }
@@ -1483,7 +1487,10 @@ final class ExportLiveActivityController {
             phase: .paused
         )
         await currentActivity?.update(
-            ActivityContent(state: state, staleDate: nil)
+            ActivityContent(
+                state: state,
+                staleDate: Date().addingTimeInterval(2 * 60)
+            )
         )
     }
 
@@ -1506,19 +1513,35 @@ final class ExportLiveActivityController {
         totalFileCount: Int
     ) async {
         guard #available(iOS 16.2, *) else { return }
+        // Derive the final fraction from the real counts. Using the last
+        // throttled sample made a finished-with-issues card read "87%" while
+        // its own status line said every item had been processed.
+        let terminalFraction: Double
+        switch phase {
+        case .finished:
+            terminalFraction = 1
+        default:
+            terminalFraction = totalFileCount > 0
+                ? min(Double(completedFileCount) / Double(totalFileCount), 1)
+                : lastReportedFraction
+        }
         let state = PhotoDuckExportActivityAttributes.ContentState(
             completedFileCount: completedFileCount,
             totalFileCount: totalFileCount,
             currentFilename: nil,
-            overallFraction: phase == .finished ? 1 : lastReportedFraction,
+            overallFraction: terminalFraction,
             phase: phase
         )
         let finishedActivity = currentActivity
         activity = nil
         isPausedBySystem = false
+        // Four hours is the ActivityKit maximum and left a completed export
+        // parked on the Lock Screen all afternoon. Success clears quickly;
+        // outcomes that need attention linger a little longer.
+        let dismissalDelay: TimeInterval = phase == .finished ? 60 : 5 * 60
         await finishedActivity?.end(
             ActivityContent(state: state, staleDate: nil),
-            dismissalPolicy: .after(.now + 4 * 60 * 60)
+            dismissalPolicy: .after(.now + dismissalDelay)
         )
     }
 

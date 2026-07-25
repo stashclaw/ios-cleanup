@@ -157,39 +157,6 @@ struct DuckOutlineButton: View {
     }
 }
 
-// MARK: - DuckBadge
-
-struct DuckBadge: View {
-    let count: Int
-    let color: Color
-
-    var body: some View {
-        Text("\(count)")
-            .font(.duckLabel)
-            .foregroundStyle(Color.white)
-            .frame(width: 22, height: 22)
-            .background(color, in: Circle())
-    }
-}
-
-// MARK: - DuckSectionHeader
-
-struct DuckSectionHeader: View {
-    let title: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.duckHeading)
-                .foregroundStyle(Color.textPrimary)
-            Rectangle()
-                .fill(Color.decorPink)
-                .frame(height: 1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
 // MARK: - DuckProgressBar
 
 struct DuckProgressBar: View {

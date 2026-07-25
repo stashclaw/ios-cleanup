@@ -239,7 +239,7 @@ struct HomeView: View {
                         .controlSize(.small)
                 } else {
                     Image(systemName: "questionmark.circle")
-                        .font(.body.weight(.semibold))
+                        .font(.duckBody.weight(.semibold))
                 }
             }
             .frame(width: 36, height: 36)
@@ -1242,7 +1242,7 @@ private struct PhotoCategoryReviewView: View {
             .disabled(selectedAssetIDs.isEmpty || deletionManager.hasPendingDeletion)
 
             if !selectedAssetIDs.isEmpty {
-                Text("\(selectedAssetIDs.count) selected · \(ByteCountFormatter.string(fromByteCount: selectedBytes, countStyle: .file))")
+                Text("\(selectedAssetIDs.count) selected · \(selectedBytes.formattedBytesStat)")
                     .font(.duckCaption)
                     .foregroundStyle(Color.textSecondary)
             }
@@ -1462,7 +1462,9 @@ struct ExportAlbumView: View {
                                         asset: asset,
                                         isSelected: selectedAssetIDs.contains(
                                             asset.localIdentifier
-                                        )
+                                        ),
+                                        // Export selection is not destructive.
+                                        selectionAccent: .accentPrimary
                                     )
                                 }
                                 .buttonStyle(.plain)
@@ -1823,9 +1825,14 @@ struct ExportAlbumView: View {
                 backgroundTaskID = .invalid
             }
         }
+        // The service counts *resources*, not assets — Live Photos, RAW+JPEG
+        // pairs and edited photos each carry several. Seeding this with the
+        // asset count made the card jump from "File 1 of 12" to "of 27" on the
+        // first update. Zero renders as "Preparing export…" until the real
+        // total arrives.
         liveActivity.start(
             destinationName: directoryURL.lastPathComponent,
-            totalFileCount: explicitAssets.count
+            totalFileCount: 0
         )
         defer {
             ExternalPhotoExportSessionGate.shared.release(
@@ -1897,6 +1904,16 @@ struct ExportAlbumView: View {
                 await deleteExportedOriginals()
             } else if !exportedAssetIDs.isEmpty {
                 showPostExportActions = true
+            } else if !result.failures.isEmpty {
+                // Nothing was verified and every item failed (drive removed,
+                // writes rejected). Previously this produced no alert and no
+                // dialog — only a caption above the fold — so the export looked
+                // like it had simply finished.
+                let detail = result.failures.first?.message
+                    ?? "PhotoDuck could not copy the selected items."
+                errorMessage = result.failures.count == 1
+                    ? detail
+                    : "\(result.failures.count) items could not be exported. \(detail) Nothing was deleted."
             }
         } catch is CancellationError {
             exportResult = nil
@@ -2060,6 +2077,10 @@ private struct CategoryPhotoThumbnail: View {
     let asset: PHAsset
     let isSelected: Bool
     var showsSelectionIndicator = true
+    /// Destructive red is correct when the selection feeds a deletion, but this
+    /// same tile is reused for Export Album selection, where nothing is
+    /// removed — showing a delete-styled selection there is misleading.
+    var selectionAccent: Color = .danger
     @State private var image: UIImage?
 
     var body: some View {
@@ -2080,8 +2101,8 @@ private struct CategoryPhotoThumbnail: View {
 
             if showsSelectionIndicator {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(isSelected ? Color.danger : Color.white)
+                    .font(.duckTitle)
+                    .foregroundStyle(isSelected ? selectionAccent : Color.white)
                     .shadow(color: .black.opacity(0.35), radius: 2)
                     .padding(7)
             }
@@ -2089,7 +2110,7 @@ private struct CategoryPhotoThumbnail: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(isSelected ? Color.danger : Color.clear, lineWidth: 3)
+                .stroke(isSelected ? selectionAccent : Color.clear, lineWidth: 3)
         }
         .task(id: asset.localIdentifier) {
             image = await PhotoImageRepository.shared.image(

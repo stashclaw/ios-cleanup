@@ -71,6 +71,9 @@ struct SwipeModeView: View {
                     dismiss()
                 }
             }
+            // A commit is already in flight (10-second undo window open);
+            // matches the guard HomeView puts on its delete actions.
+            .disabled(deletionManager.hasPendingDeletion)
             Button("Discard Decisions", role: .destructive) {
                 dismiss()
             }
@@ -258,7 +261,9 @@ struct SwipeModeView: View {
 
 private struct DuckModeCompletion: View {
     @ObservedObject var viewModel: SwipeModeViewModel
-    let deletionManager: DeletionManager
+    // Observed, not plain `let`: the commit button below disables itself while
+    // `hasPendingDeletion` is true, so this view must re-render on that change.
+    @ObservedObject var deletionManager: DeletionManager
     let onDismiss: () -> Void
 
     private var pendingGB: String {
@@ -326,6 +331,10 @@ private struct DuckModeCompletion: View {
                                 await viewModel.commitDeletes(using: deletionManager)
                             }
                         }
+                        // Mirrors HomeView: no repeat commits while a deletion
+                        // is still inside its undo window.
+                        .disabled(deletionManager.hasPendingDeletion)
+                        .opacity(deletionManager.hasPendingDeletion ? 0.55 : 1)
                         .padding(.horizontal, 32)
 
                         Text("Potential space is reclaimed after Recently Deleted is emptied.")

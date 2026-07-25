@@ -77,7 +77,8 @@ actor PhotoMLBridge {
         guard !records.isEmpty else { return }
         do {
             try await store.open()
-            try await store.upsertFeatures(records)
+            let skipped = try await store.upsertFeatures(records)
+            recordSkippedRecords(skipped, of: records.count, operation: "persist features")
             recordPersistenceSuccess()
         } catch {
             recordPersistenceFailure(error, operation: "persist features")
@@ -88,7 +89,12 @@ actor PhotoMLBridge {
         guard !records.isEmpty else { return }
         do {
             try await store.open()
-            try await store.upsertPairSimilarities(records)
+            let skipped = try await store.upsertPairSimilarities(records)
+            recordSkippedRecords(
+                skipped,
+                of: records.count,
+                operation: "persist pair similarities"
+            )
             recordPersistenceSuccess()
         } catch {
             recordPersistenceFailure(error, operation: "persist pair similarities")
@@ -207,7 +213,12 @@ actor PhotoMLBridge {
         guard !records.isEmpty else { return }
         do {
             try await store.open()
-            try await store.upsertAssetAnalyses(records)
+            let skipped = try await store.upsertAssetAnalyses(records)
+            recordSkippedRecords(
+                skipped,
+                of: records.count,
+                operation: "persist asset analyses"
+            )
             recordPersistenceSuccess()
         } catch {
             recordPersistenceFailure(error, operation: "persist asset analyses")
@@ -417,6 +428,20 @@ actor PhotoMLBridge {
 
     private func recordPersistenceSuccess() {
         persistenceHealthy = true
+    }
+
+    /// A malformed record dropped from a batch is a data-quality problem, not a
+    /// persistence failure: the rest of the batch committed, so health stays
+    /// green and the drop is only logged.
+    private func recordSkippedRecords(
+        _ skipped: Int,
+        of total: Int,
+        operation: String
+    ) {
+        guard skipped > 0 else { return }
+        Self.logger.warning(
+            "\(operation, privacy: .public): skipped \(skipped, privacy: .public) of \(total, privacy: .public) invalid record(s)"
+        )
     }
 
     private func recordPersistenceFailure(_ error: Error, operation: String) {

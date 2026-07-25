@@ -89,8 +89,15 @@ struct ExportLiveActivityWidget: Widget {
                 Text(context.attributes.destinationName)
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                Text(context.state.statusLine)
-                    .lineLimit(1)
+                // Without this, a suspended or stalled export renders exactly
+                // like a healthy one — a progress bar frozen for hours with no
+                // explanation.
+                Text(
+                    context.isStale
+                        ? "Not responding — open PhotoDuck"
+                        : context.state.statusLine
+                )
+                .lineLimit(1)
             }
             .font(.caption)
             .foregroundStyle(.secondary)

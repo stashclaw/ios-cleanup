@@ -85,7 +85,7 @@ struct VideoCompressionView: View {
         case .compressing(let progress):
             progressSection(
                 progress: progress,
-                message: "\(Int(progress * 100))% - Compressing…"
+                message: "\(Int(progress * 100))% · Compressing…"
             )
         case .saving:
             progressSection(progress: nil, message: "Saving to Photos…")
@@ -275,7 +275,7 @@ struct VideoCompressionView: View {
                 guard case .preparing = compressionState else { return }
                 compressionState = .preparing(
                     progress: progress,
-                    message: "Downloading from iCloud - \(Int(progress * 100))%"
+                    message: "Downloading from iCloud · \(Int(progress * 100))%"
                 )
             }
             try Task.checkCancellation()

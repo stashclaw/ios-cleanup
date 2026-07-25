@@ -135,8 +135,13 @@ actor FileScanEngine {
     ) async throws -> [LargeFile] {
         let assets = await assetProvider.fetchVideoAssets()
         let totalVideoCount = assets.count
+        // Scope the prune to videos. This scan only enumerated videos, so an
+        // unscoped retain evicted every photo size measured elsewhere (the
+        // export path), silently degrading deletion and reclaimable-space
+        // figures to estimates on the next launch.
         await AssetFileSizeRepository.shared.retain(
-            localIdentifiers: Set(assets.map(\.localIdentifier))
+            localIdentifiers: Set(assets.map(\.localIdentifier)),
+            limitedTo: [.video]
         )
 
         await onUpdate?(

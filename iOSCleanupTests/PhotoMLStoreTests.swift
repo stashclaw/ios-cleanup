@@ -1,3 +1,4 @@
+import SQLite3
 import XCTest
 @testable import iOSCleanup
 
@@ -72,6 +73,125 @@ final class PhotoMLStoreTests: XCTestCase {
 
     private func validEmbedding(byte: UInt8 = 0x42) -> Data {
         Data(repeating: byte, count: PhotoEmbeddingContract.byteCount)
+    }
+
+    private func makeFeature(
+        assetID: String,
+        embedding: Data?,
+        embeddingVersion: Int = PhotoEmbeddingContract.embeddingVersion
+    ) -> PhotoFeatureRecord {
+        PhotoFeatureRecord(
+            assetID: assetID,
+            embedding: embedding,
+            embeddingVersion: embeddingVersion,
+            pixelWidth: 4_032,
+            pixelHeight: 3_024,
+            creationDate: nil,
+            isFavorite: false,
+            isEdited: false,
+            isScreenshot: false,
+            isLivePhoto: false,
+            isHDR: false,
+            burstIdentifier: nil,
+            aspectRatio: 4.0 / 3.0,
+            fileSizeBytes: 1_000
+        )
+    }
+
+    private func makeAnalysisRecord(
+        assetID: String,
+        modificationDate: Date?,
+        embedding: Data?,
+        embeddingVersion: Int = PhotoEmbeddingContract.embeddingVersion,
+        analyzerVersion: Int = 3
+    ) -> PhotoAssetAnalysisCacheRecord {
+        PhotoAssetAnalysisCacheRecord(
+            assetID: assetID,
+            modificationDate: modificationDate,
+            pixelWidth: 4_032,
+            pixelHeight: 3_024,
+            mediaSubtypesRawValue: 17,
+            analyzerVersion: analyzerVersion,
+            embeddingVersion: embeddingVersion,
+            embedding: embedding,
+            perceptualHash: 0xCAFE,
+            keeperSignalsJSON: nil
+        )
+    }
+
+    private func lookup(
+        for record: PhotoAssetAnalysisCacheRecord
+    ) -> PhotoAssetAnalysisCacheLookup {
+        PhotoAssetAnalysisCacheLookup(
+            assetID: record.assetID,
+            modificationDate: record.modificationDate,
+            pixelWidth: record.pixelWidth,
+            pixelHeight: record.pixelHeight,
+            mediaSubtypesRawValue: record.mediaSubtypesRawValue,
+            analyzerVersion: record.analyzerVersion,
+            embeddingVersion: record.embeddingVersion
+        )
+    }
+
+    // MARK: - Raw database access
+    //
+    // A few behaviours (schema markers, corrupt blobs written by older builds)
+    // can only be set up by writing the file directly, because the store's own
+    // API validates them away.
+
+    private var databasePath: String {
+        tempDir
+            .appendingPathComponent("PhotoDuck/ml", isDirectory: true)
+            .appendingPathComponent("photoduck-ml.sqlite")
+            .path
+    }
+
+    private func withRawDatabase<T>(
+        _ body: (OpaquePointer) throws -> T
+    ) throws -> T {
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(databasePath, &handle, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK,
+              let handle else {
+            if let handle { sqlite3_close(handle) }
+            throw MLStoreError.cannotOpen(databasePath)
+        }
+        defer { sqlite3_close(handle) }
+        return try body(handle)
+    }
+
+    private func rawExecute(_ sql: String) throws {
+        try withRawDatabase { handle -> Void in
+            var message: UnsafeMutablePointer<CChar>?
+            guard sqlite3_exec(handle, sql, nil, nil, &message) == SQLITE_OK else {
+                let text = message.map { String(cString: $0) } ?? "unknown"
+                sqlite3_free(message)
+                throw MLStoreError.sqlError(text)
+            }
+        }
+    }
+
+    private func rawQueryString(_ sql: String) throws -> String? {
+        try withRawDatabase { handle -> String? in
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK else {
+                throw MLStoreError.sqlError(String(cString: sqlite3_errmsg(handle)))
+            }
+            defer { sqlite3_finalize(statement) }
+            guard sqlite3_step(statement) == SQLITE_ROW,
+                  let value = sqlite3_column_text(statement, 0) else {
+                return nil
+            }
+            return String(cString: value)
+        }
+    }
+
+    private func rawQueryInt(_ sql: String) throws -> Int {
+        let value = try rawQueryString(sql)
+        return Int(value ?? "0") ?? 0
+    }
+
+    private func rawSchemaVersionMarker() throws -> String? {
+        try rawQueryString("SELECT value FROM schema_meta WHERE key = 'version'")
     }
 
     private func insertPairFeatures(for assetIDs: [String]) async throws {
@@ -290,6 +410,11 @@ final class PhotoMLStoreTests: XCTestCase {
             perceptualHash: 0xCAFE,
             keeperSignalsJSON: try JSONEncoder().encode(keeperSignals)
         )
+        // The cache row carries no embedding of its own; the hit is served by
+        // joining photo_features.
+        try await store.upsertFeature(
+            makeFeature(assetID: record.assetID, embedding: validEmbedding())
+        )
         try await store.upsertAssetAnalyses([record])
 
         let matchingLookup = PhotoAssetAnalysisCacheLookup(
@@ -370,6 +495,148 @@ final class PhotoMLStoreTests: XCTestCase {
         XCTAssertTrue(otherContractMismatches.isEmpty)
     }
 
+    func testAssetAnalysisCacheRoundTripsNilModificationDate() async throws {
+        // The whole reason `modification_date_is_null` exists: a NULL
+        // modification date must round-trip as nil rather than collapsing to
+        // 1970, and must not match a lookup that carries a real date.
+        let embedding = validEmbedding(byte: 0x11)
+        let record = makeAnalysisRecord(
+            assetID: "nil-modification-date",
+            modificationDate: nil,
+            embedding: embedding
+        )
+        try await store.upsertFeature(
+            makeFeature(assetID: record.assetID, embedding: embedding)
+        )
+        try await store.upsertAssetAnalyses([record])
+
+        let nilDateLookup = lookup(for: record)
+        let epochDateLookup = PhotoAssetAnalysisCacheLookup(
+            assetID: record.assetID,
+            modificationDate: Date(timeIntervalSince1970: 0),
+            pixelWidth: record.pixelWidth,
+            pixelHeight: record.pixelHeight,
+            mediaSubtypesRawValue: record.mediaSubtypesRawValue,
+            analyzerVersion: record.analyzerVersion,
+            embeddingVersion: record.embeddingVersion
+        )
+
+        let hit = try await store.loadValidAssetAnalyses(for: [nilDateLookup])
+        let epochMiss = try await store.loadValidAssetAnalyses(for: [epochDateLookup])
+
+        XCTAssertEqual(hit.count, 1)
+        XCTAssertNil(hit[record.assetID]?.modificationDate)
+        XCTAssertEqual(hit[record.assetID]?.embedding, embedding)
+        XCTAssertTrue(
+            epochMiss.isEmpty,
+            "A real modification date must never match a stored NULL"
+        )
+
+        // A later real modification date replaces the NULL marker.
+        let datedRecord = makeAnalysisRecord(
+            assetID: record.assetID,
+            modificationDate: Date(timeIntervalSinceReferenceDate: 500),
+            embedding: embedding
+        )
+        try await store.upsertAssetAnalyses([datedRecord])
+        let staleNilLookup = try await store.loadValidAssetAnalyses(for: [nilDateLookup])
+        let datedHit = try await store.loadValidAssetAnalyses(for: [lookup(for: datedRecord)])
+
+        XCTAssertTrue(staleNilLookup.isEmpty)
+        XCTAssertEqual(
+            datedHit[record.assetID]?.modificationDate,
+            Date(timeIntervalSinceReferenceDate: 500)
+        )
+    }
+
+    func testAssetAnalysisCacheHitRequiresMatchingFeatureEmbedding() async throws {
+        // The analysis row no longer duplicates the 8KB blob, so a cache hit is
+        // only possible while photo_features still holds a matching embedding —
+        // exactly the precondition pair writes need.
+        let embedding = validEmbedding(byte: 0x21)
+        let record = makeAnalysisRecord(
+            assetID: "join-backed-analysis",
+            modificationDate: Date(timeIntervalSinceReferenceDate: 42),
+            embedding: embedding
+        )
+        try await store.upsertAssetAnalyses([record])
+
+        let withoutFeature = try await store.loadValidAssetAnalyses(
+            for: [lookup(for: record)]
+        )
+        XCTAssertTrue(
+            withoutFeature.isEmpty,
+            "No feature embedding means no usable cache entry"
+        )
+
+        try await store.upsertFeature(
+            makeFeature(assetID: record.assetID, embedding: embedding)
+        )
+        let withFeature = try await store.loadValidAssetAnalyses(
+            for: [lookup(for: record)]
+        )
+        XCTAssertEqual(withFeature[record.assetID]?.embedding, embedding)
+
+        // A feature row whose embedding version diverges from the cached
+        // analyzer contract must not be served either.
+        try await store.upsertFeature(
+            makeFeature(
+                assetID: record.assetID,
+                embedding: Data(
+                    repeating: 0x22,
+                    count: PhotoEmbeddingContract.expectedByteCount(
+                        for: PhotoEmbeddingContract.legacyEmbeddingVersion
+                    )!
+                ),
+                embeddingVersion: PhotoEmbeddingContract.legacyEmbeddingVersion
+            )
+        )
+        let mismatchedVersion = try await store.loadValidAssetAnalyses(
+            for: [lookup(for: record)]
+        )
+        XCTAssertTrue(mismatchedVersion.isEmpty)
+    }
+
+    func testCorruptFeatureEmbeddingSkipsOnlyItsOwnAnalysisLookup() async throws {
+        // One unreadable blob used to throw out of the whole lookup loop, which
+        // discarded every other context asset and flagged persistence unhealthy.
+        let goodEmbedding = validEmbedding(byte: 0x31)
+        let corruptAsset = "corrupt-embedding"
+        let goodAsset = "intact-embedding"
+        try await store.upsertFeatures([
+            makeFeature(assetID: corruptAsset, embedding: validEmbedding(byte: 0x32)),
+            makeFeature(assetID: goodAsset, embedding: goodEmbedding)
+        ])
+        let corruptRecord = makeAnalysisRecord(
+            assetID: corruptAsset,
+            modificationDate: Date(timeIntervalSinceReferenceDate: 1),
+            embedding: validEmbedding(byte: 0x32)
+        )
+        let goodRecord = makeAnalysisRecord(
+            assetID: goodAsset,
+            modificationDate: Date(timeIntervalSinceReferenceDate: 2),
+            embedding: goodEmbedding
+        )
+        try await store.upsertAssetAnalyses([corruptRecord, goodRecord])
+
+        // Simulate a truncated blob written by an older build.
+        try rawExecute("""
+            UPDATE photo_features SET embedding = X'0102'
+            WHERE asset_id = '\(corruptAsset)'
+        """)
+
+        let results = try await store.loadValidAssetAnalyses(
+            for: [lookup(for: corruptRecord), lookup(for: goodRecord)]
+        )
+
+        XCTAssertNil(results[corruptAsset], "The corrupt row must be skipped")
+        XCTAssertEqual(
+            results[goodAsset]?.embedding,
+            goodEmbedding,
+            "A corrupt row must not cost the rest of the batch its cache hits"
+        )
+    }
+
     func testRejectsInvalidEmbeddingByteCount() async throws {
         let feature = PhotoFeatureRecord(
             assetID: "invalid-embedding",
@@ -396,6 +663,57 @@ final class PhotoMLStoreTests: XCTestCase {
             XCTAssertEqual(expected, PhotoEmbeddingContract.byteCount)
             XCTAssertEqual(actual, PhotoEmbeddingContract.byteCount - 1)
         }
+    }
+
+    func testBatchFeatureUpsertSkipsInvalidRecordsInsteadOfDroppingTheBatch() async throws {
+        let features = [
+            makeFeature(assetID: "batch-valid-1", embedding: validEmbedding(byte: 0x01)),
+            makeFeature(
+                assetID: "batch-invalid",
+                embedding: Data(
+                    repeating: 0x02,
+                    count: PhotoEmbeddingContract.byteCount - 1
+                )
+            ),
+            makeFeature(assetID: "batch-valid-2", embedding: validEmbedding(byte: 0x03))
+        ]
+
+        let skipped = try await store.upsertFeatures(features)
+
+        XCTAssertEqual(skipped, 1)
+        let count = try await store.featureCount()
+        XCTAssertEqual(count, 2, "Valid rows must survive an invalid sibling")
+        let survivor = try await store.loadEmbedding(for: "batch-valid-2")
+        XCTAssertEqual(survivor, validEmbedding(byte: 0x03))
+        let rejected = try await store.loadEmbedding(for: "batch-invalid")
+        XCTAssertNil(rejected)
+    }
+
+    func testBatchAssetAnalysisUpsertSkipsInvalidRecordsInsteadOfDroppingTheBatch() async throws {
+        let validEmbeddingData = validEmbedding(byte: 0x41)
+        try await store.upsertFeatures([
+            makeFeature(assetID: "analysis-valid", embedding: validEmbeddingData),
+            makeFeature(assetID: "analysis-invalid", embedding: validEmbedding(byte: 0x42))
+        ])
+        let valid = makeAnalysisRecord(
+            assetID: "analysis-valid",
+            modificationDate: Date(timeIntervalSinceReferenceDate: 7),
+            embedding: validEmbeddingData
+        )
+        let invalid = makeAnalysisRecord(
+            assetID: "analysis-invalid",
+            modificationDate: Date(timeIntervalSinceReferenceDate: 8),
+            embedding: Data(repeating: 0x42, count: 12)
+        )
+
+        let skipped = try await store.upsertAssetAnalyses([invalid, valid])
+
+        XCTAssertEqual(skipped, 1)
+        let results = try await store.loadValidAssetAnalyses(
+            for: [lookup(for: valid), lookup(for: invalid)]
+        )
+        XCTAssertEqual(results["analysis-valid"]?.embedding, validEmbeddingData)
+        XCTAssertNil(results["analysis-invalid"])
     }
 
     // MARK: - Pairwise Similarity
@@ -578,6 +896,74 @@ final class PhotoMLStoreTests: XCTestCase {
             XCTAssertEqual(expected, PhotoEmbeddingContract.legacyEmbeddingVersion)
             XCTAssertEqual(actual, PhotoEmbeddingContract.embeddingVersion)
         }
+    }
+
+    func testBatchPairUpsertSkipsUnbackedPairsInsteadOfDroppingTheBatch() async throws {
+        try await insertPairFeatures(for: ["p-a", "p-b", "p-c"])
+        let pairs = [
+            PairSimilarityRecord(
+                lhsAssetID: "p-a",
+                rhsAssetID: "p-b",
+                featureDistance: 0.03,
+                timeDeltaSeconds: 1,
+                isBurstPair: false,
+                bucket: "nearDuplicate",
+                similarityScore: 0.8
+            ),
+            // No feature row: previously rolled back every valid pair with it.
+            PairSimilarityRecord(
+                lhsAssetID: "p-a",
+                rhsAssetID: "ghost",
+                featureDistance: 0.03,
+                timeDeltaSeconds: 1,
+                isBurstPair: false,
+                bucket: "nearDuplicate",
+                similarityScore: 0.8
+            ),
+            PairSimilarityRecord(
+                lhsAssetID: "p-b",
+                rhsAssetID: "p-c",
+                featureDistance: 0.05,
+                timeDeltaSeconds: 2,
+                isBurstPair: false,
+                bucket: "visuallySimilar",
+                similarityScore: 0.6
+            )
+        ]
+
+        let skipped = try await store.upsertPairSimilarities(pairs)
+
+        XCTAssertEqual(skipped, 1)
+        let count = try await store.pairSimilarityCount()
+        XCTAssertEqual(count, 2, "Valid pairs must survive an unbacked sibling")
+        let survivor = try await store.loadPairSimilarity(
+            lhsAssetID: "p-b",
+            rhsAssetID: "p-c"
+        )
+        XCTAssertEqual(survivor?.similarityScore, 0.6)
+    }
+
+    func testSinglePairUpsertStillThrowsForUnbackedAssets() async throws {
+        try await insertPairFeatures(for: ["single-a"])
+
+        do {
+            try await store.upsertPairSimilarity(
+                PairSimilarityRecord(
+                    lhsAssetID: "single-a",
+                    rhsAssetID: "single-ghost",
+                    featureDistance: 0.03,
+                    timeDeltaSeconds: 1,
+                    isBurstPair: false,
+                    bucket: "nearDuplicate",
+                    similarityScore: 0.8
+                )
+            )
+            XCTFail("A single unbacked pair must still be rejected loudly")
+        } catch MLStoreError.missingEmbedding(let assetID) {
+            XCTAssertEqual(assetID, "single-ghost")
+        }
+        let count = try await store.pairSimilarityCount()
+        XCTAssertEqual(count, 0)
     }
 
     // MARK: - Feedback Events
@@ -1102,6 +1488,125 @@ final class PhotoMLStoreTests: XCTestCase {
 
         let count = try await store.featureCount()
         XCTAssertEqual(count, 0)
+    }
+
+    func testDeleteOldFeaturesAlsoDropsDependentAnalysisRows() async throws {
+        let embedding = validEmbedding(byte: 0x51)
+        let record = makeAnalysisRecord(
+            assetID: "aged-asset",
+            modificationDate: Date(timeIntervalSinceReferenceDate: 9),
+            embedding: embedding
+        )
+        try await store.upsertFeature(
+            makeFeature(assetID: record.assetID, embedding: embedding)
+        )
+        try await store.upsertAssetAnalyses([record])
+
+        let deleted = try await store.deleteOldFeatures(
+            olderThan: Date().addingTimeInterval(10)
+        )
+
+        XCTAssertEqual(deleted, 1)
+        let remainingAnalysisRows = try rawQueryInt(
+            "SELECT COUNT(*) FROM photo_asset_analysis"
+        )
+        XCTAssertEqual(
+            remainingAnalysisRows,
+            0,
+            "An orphaned analysis row would keep serving cache hits for an asset with no embedding"
+        )
+        let cached = try await store.loadValidAssetAnalyses(for: [lookup(for: record)])
+        XCTAssertTrue(cached.isEmpty)
+    }
+
+    // MARK: - Schema versioning
+
+    func testSchemaVersionMarkerIsStampedAndReadableOnOpen() async throws {
+        XCTAssertEqual(
+            try rawSchemaVersionMarker(),
+            String(PhotoMLStore.schemaVersion)
+        )
+        let reported = try await store.storedSchemaVersion()
+        XCTAssertEqual(reported, PhotoMLStore.schemaVersion)
+    }
+
+    func testOpeningNewerSchemaFileIsRefusedWithoutDowngradingTheMarker() async throws {
+        let futureVersion = PhotoMLStore.schemaVersion + 1
+        try rawExecute(
+            "UPDATE schema_meta SET value = '\(futureVersion)' WHERE key = 'version'"
+        )
+
+        let olderBuildStore = PhotoMLStore(directoryURL: tempDir)
+        do {
+            try await olderBuildStore.open()
+            XCTFail("A file written by a newer build must not be opened")
+        } catch MLStoreError.schemaVersionTooNew(let found, let supported) {
+            XCTAssertEqual(found, futureVersion)
+            XCTAssertEqual(supported, PhotoMLStore.schemaVersion)
+        }
+
+        XCTAssertEqual(
+            try rawSchemaVersionMarker(),
+            String(futureVersion),
+            "The marker must never be silently downgraded"
+        )
+    }
+
+    func testStaleSchemaMarkerRunsMigrationsAndIsRestamped() async throws {
+        try rawExecute("UPDATE schema_meta SET value = '1' WHERE key = 'version'")
+
+        let reopened = PhotoMLStore(directoryURL: tempDir)
+        try await reopened.open()
+
+        let restamped = try await reopened.storedSchemaVersion()
+        XCTAssertEqual(restamped, PhotoMLStore.schemaVersion)
+        XCTAssertEqual(
+            try rawSchemaVersionMarker(),
+            String(PhotoMLStore.schemaVersion)
+        )
+    }
+
+    func testLegacyDuplicatedAnalysisEmbeddingIsPurgedOnMigration() async throws {
+        let embedding = validEmbedding(byte: 0x61)
+        let record = makeAnalysisRecord(
+            assetID: "legacy-duplicate",
+            modificationDate: Date(timeIntervalSinceReferenceDate: 11),
+            embedding: embedding
+        )
+        try await store.upsertFeature(
+            makeFeature(assetID: record.assetID, embedding: embedding)
+        )
+        try await store.upsertAssetAnalyses([record])
+
+        // Recreate the v4 file shape: a second copy of the embedding blob.
+        try rawExecute("ALTER TABLE photo_asset_analysis ADD COLUMN embedding BLOB")
+        try rawExecute("UPDATE photo_asset_analysis SET embedding = X'DEADBEEF'")
+        try rawExecute("UPDATE schema_meta SET value = '4' WHERE key = 'version'")
+        XCTAssertEqual(
+            try rawQueryInt(
+                "SELECT COUNT(*) FROM photo_asset_analysis WHERE embedding IS NOT NULL"
+            ),
+            1
+        )
+
+        let migrated = PhotoMLStore(directoryURL: tempDir)
+        try await migrated.open()
+
+        XCTAssertEqual(
+            try rawQueryInt(
+                "SELECT COUNT(*) FROM photo_asset_analysis WHERE embedding IS NOT NULL"
+            ),
+            0,
+            "The duplicated blob must be released by the v5 migration"
+        )
+        let migratedVersion = try await migrated.storedSchemaVersion()
+        XCTAssertEqual(migratedVersion, PhotoMLStore.schemaVersion)
+        let cached = try await migrated.loadValidAssetAnalyses(for: [lookup(for: record)])
+        XCTAssertEqual(
+            cached[record.assetID]?.embedding,
+            embedding,
+            "Migrated rows must still resolve their embedding through photo_features"
+        )
     }
 
     func testRetentionBoundsTrainingRowsAndRemovesInactiveAssets() async throws {

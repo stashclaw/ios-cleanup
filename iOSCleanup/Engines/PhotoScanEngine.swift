@@ -963,10 +963,14 @@ actor PhotoScanEngine {
                 await Task.yield()
             }
 
+            // Flush first: retention caps and the inactive-asset prune both
+            // operate on what is actually in the database. Running them before
+            // the final buffered batch left the cap permanently one scan
+            // behind and never counted the rows just written.
+            await mlBridge.flushBufferedWrites()
             await performMLRetentionAfterSuccessfulScan(
                 activeAssetIDs: Set(allAssets.map(\.localIdentifier))
             )
-            await mlBridge.flushBufferedWrites()
             #if DEBUG
             Self.diagnosticsLogger.debug(
                 "scan completed cache_hits=\(pairCacheHitCount) cache_misses=\(pairCacheMissCount) reanalyzed=\(processedCount)"

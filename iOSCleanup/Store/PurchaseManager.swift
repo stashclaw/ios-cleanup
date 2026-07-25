@@ -5,11 +5,84 @@ extension Notification.Name {
     static let purchaseDidSucceed = Notification.Name("purchaseDidSucceed")
 }
 
+// MARK: - Entitlement seam
+
+/// A verification-agnostic snapshot of one StoreKit entitlement record.
+///
+/// `StoreKit.Transaction` and `VerificationResult` cannot be constructed by
+/// tests, so the entitlement state machine reads this reduced view instead.
+/// It carries exactly the two facts the state machine acts on: which product
+/// the record belongs to, and whether a verified record has been revoked.
+enum EntitlementRecord: Equatable, Sendable {
+    case verified(productID: String, revocationDate: Date?)
+    case unverified(productID: String)
+
+    var productID: String {
+        switch self {
+        case .verified(let productID, _): return productID
+        case .unverified(let productID): return productID
+        }
+    }
+
+    init(_ result: VerificationResult<StoreKit.Transaction>) {
+        switch result {
+        case .verified(let transaction):
+            self = .verified(
+                productID: transaction.productID,
+                revocationDate: transaction.revocationDate
+            )
+        case .unverified(let transaction, _):
+            self = .unverified(productID: transaction.productID)
+        }
+    }
+}
+
+/// Injection point for the two static StoreKit entitlement queries.
+protocol EntitlementSource: Sendable {
+    func currentEntitlements(for productID: String) async -> [EntitlementRecord]
+    func latestTransaction(for productID: String) async -> EntitlementRecord?
+}
+
+/// The production source. Wraps `StoreKit.Transaction.currentEntitlements` and
+/// `StoreKit.Transaction.latest(for:)` without changing their semantics.
+struct LiveEntitlementSource: EntitlementSource {
+
+    func currentEntitlements(for productID: String) async -> [EntitlementRecord] {
+        var records: [EntitlementRecord] = []
+        for await result in Self.entitlementSequence(for: productID) {
+            records.append(EntitlementRecord(result))
+        }
+        return records
+    }
+
+    func latestTransaction(for productID: String) async -> EntitlementRecord? {
+        guard let latest = await StoreKit.Transaction.latest(for: productID) else { return nil }
+        return EntitlementRecord(latest)
+    }
+
+    private static func entitlementSequence(
+        for productID: String
+    ) -> StoreKit.Transaction.Transactions {
+        if #available(iOS 18.4, *) {
+            return StoreKit.Transaction.currentEntitlements(for: productID)
+        }
+        return StoreKit.Transaction.currentEntitlements
+    }
+}
+
 @MainActor
 final class PurchaseManager: ObservableObject {
 
     static let productID = "com.photoduck.app.unlock"
     private static let purchaseCacheKey = "isPurchased"
+
+    /// Kept as constants so a stale verification banner can be recognised and
+    /// cleared once access is confirmed again.
+    static let unverifiedUpdateMessage =
+        "A StoreKit update could not be verified. Your current access has not changed."
+    static let unverifiedPurchaseMessage =
+        "That purchase could not be verified, so PhotoDuck was not unlocked. If you were charged, tap Restore Purchase."
+
 #if DEBUG
     private static let adminAccessKey = "photoduck.debug-admin-access"
 #endif
@@ -36,11 +109,20 @@ final class PurchaseManager: ObservableObject {
     @Published private(set) var statusMessage: String?
 
     private let defaults: UserDefaults
+    private let entitlementSource: any EntitlementSource
     private var hasStoreEntitlement: Bool
     private var transactionListenerTask: Task<Void, Never>?
+    /// Unverified updates are surfaced at most once each, so a repeated
+    /// delivery can never pin a permanent error banner to the paywall.
+    private var reportedUnverifiedTransactionIDs: Set<UInt64> = []
 
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        entitlementSource: any EntitlementSource = LiveEntitlementSource(),
+        observesTransactionUpdates: Bool = true
+    ) {
         self.defaults = defaults
+        self.entitlementSource = entitlementSource
         let cachedStoreEntitlement = defaults.bool(forKey: Self.purchaseCacheKey)
         hasStoreEntitlement = cachedStoreEntitlement
 #if DEBUG
@@ -50,7 +132,9 @@ final class PurchaseManager: ObservableObject {
 #else
         isPurchased = cachedStoreEntitlement
 #endif
-        transactionListenerTask = listenForTransactions()
+        if observesTransactionUpdates {
+            transactionListenerTask = listenForTransactions()
+        }
     }
 
     deinit {
@@ -89,9 +173,22 @@ final class PurchaseManager: ObservableObject {
             let result = try await product.purchase()
             switch result {
             case .success(let verification):
-                let transaction = try checkVerified(verification)
-                applyVerified(transaction)
-                await transaction.finish()
+                switch verification {
+                case .verified(let transaction):
+                    applyVerified(transaction)
+                    await transaction.finish()
+                case .unverified(let transaction, _):
+                    // A failed signature check must never grant the entitlement,
+                    // but the transaction still has to be finished. Leaving it in
+                    // the queue makes StoreKit re-deliver it on every launch,
+                    // which used to re-raise this banner forever.
+                    await transaction.finish()
+                    noteUnverifiedTransaction(
+                        id: transaction.id,
+                        message: Self.unverifiedPurchaseMessage
+                    )
+                    preserveCachedEntitlement()
+                }
             case .pending:
                 statusMessage = "Purchase pending approval. PhotoDuck will unlock automatically when it is approved."
             case .userCancelled:
@@ -136,31 +233,34 @@ final class PurchaseManager: ObservableObject {
     /// cached purchase. StoreKit can be temporarily inconclusive while offline or
     /// signed out, so only a verified revocation or a successful explicit restore
     /// may downgrade an existing purchaser.
-    private func refreshEntitlement(allowDefinitiveMissing: Bool) async -> Bool {
+    ///
+    /// Internal rather than private only so those rules can be asserted
+    /// directly against an injected `EntitlementSource`.
+    @discardableResult
+    func refreshEntitlement(allowDefinitiveMissing: Bool) async -> Bool {
         entitlementStatus = .checking
 
-        for await result in currentEntitlements() {
-            switch result {
-            case .verified(let transaction):
-                guard transaction.productID == Self.productID else { continue }
-                if transaction.revocationDate == nil {
-                    applyVerified(transaction, postSuccessNotification: false)
+        for record in await entitlementSource.currentEntitlements(for: Self.productID) {
+            guard record.productID == Self.productID else { continue }
+            switch record {
+            case .verified(_, let revocationDate):
+                if revocationDate == nil {
+                    applyEntitlement(revocationDate: nil, postSuccessNotification: false)
                     return true
                 }
                 setPurchased(false, status: .notPurchased)
                 return false
-            case .unverified(let transaction, _):
-                guard transaction.productID == Self.productID else { continue }
+            case .unverified:
                 preserveCachedEntitlement()
                 return false
             }
         }
 
-        if let latest = await StoreKit.Transaction.latest(for: Self.productID) {
+        if let latest = await entitlementSource.latestTransaction(for: Self.productID) {
             switch latest {
-            case .verified(let transaction):
-                if transaction.revocationDate == nil {
-                    applyVerified(transaction, postSuccessNotification: false)
+            case .verified(_, let revocationDate):
+                if revocationDate == nil {
+                    applyEntitlement(revocationDate: nil, postSuccessNotification: false)
                     return true
                 }
                 setPurchased(false, status: .notPurchased)
@@ -199,8 +299,14 @@ final class PurchaseManager: ObservableObject {
                     }
                     await transaction.finish()
                 case .unverified(let transaction, _):
+                    // Finish first: an unverified transaction that is never
+                    // finished is re-delivered on every launch forever.
+                    await transaction.finish()
                     if transaction.productID == Self.productID {
-                        self.errorMessage = "A StoreKit update could not be verified. Your current access has not changed."
+                        self.noteUnverifiedTransaction(
+                            id: transaction.id,
+                            message: Self.unverifiedUpdateMessage
+                        )
                         self.preserveCachedEntitlement()
                     }
                 }
@@ -208,11 +314,21 @@ final class PurchaseManager: ObservableObject {
         }
     }
 
-    private func currentEntitlements() -> StoreKit.Transaction.Transactions {
-        if #available(iOS 18.4, *) {
-            return StoreKit.Transaction.currentEntitlements(for: Self.productID)
+    /// Surfaces a verification failure at most once per transaction so a
+    /// repeated delivery cannot leave a permanent banner on the paywall.
+    private func noteUnverifiedTransaction(id: UInt64, message: String) {
+        guard reportedUnverifiedTransactionIDs.insert(id).inserted else { return }
+        errorMessage = message
+    }
+
+    /// Drops a verification warning once access has been confirmed again.
+    /// Only the two verification strings are cleared, so a genuine load or
+    /// restore failure stays visible.
+    private func clearStaleVerificationWarning() {
+        if errorMessage == Self.unverifiedUpdateMessage
+            || errorMessage == Self.unverifiedPurchaseMessage {
+            errorMessage = nil
         }
-        return StoreKit.Transaction.currentEntitlements
     }
 
     private func applyVerified(
@@ -220,14 +336,25 @@ final class PurchaseManager: ObservableObject {
         postSuccessNotification: Bool = true
     ) {
         guard transaction.productID == Self.productID else { return }
+        applyEntitlement(
+            revocationDate: transaction.revocationDate,
+            postSuccessNotification: postSuccessNotification
+        )
+    }
+
+    private func applyEntitlement(
+        revocationDate: Date?,
+        postSuccessNotification: Bool
+    ) {
         statusMessage = nil
 
-        if transaction.revocationDate != nil {
+        if revocationDate != nil {
             setPurchased(false, status: .notPurchased)
             return
         }
 
         setPurchased(true, status: .entitled)
+        clearStaleVerificationWarning()
         if postSuccessNotification {
             DuckHaptics.success()
             NotificationCenter.default.post(name: .purchaseDidSucceed, object: nil)
@@ -279,16 +406,5 @@ final class PurchaseManager: ObservableObject {
 #else
         isPurchased = hasStoreEntitlement
 #endif
-    }
-
-    // MARK: - Verification helper
-
-    private func checkVerified<T>(_ result: VerificationResult<T>) throws -> T {
-        switch result {
-        case .unverified(_, let error):
-            throw error
-        case .verified(let value):
-            return value
-        }
     }
 }

@@ -262,6 +262,8 @@ struct FileResultsView: View {
     @State private var selectedExportLiveActivity =
         ExportLiveActivityController()
     @State private var exportError: String?
+    @State private var exportAlbumConfirmation: String?
+    @State private var exportAlbumConfirmationTask: Task<Void, Never>?
     @State private var completedExportTitle = "Export Complete"
     @State private var completedExportMessage: String?
 
@@ -326,16 +328,30 @@ struct FileResultsView: View {
         refreshableContent
             .navigationTitle("Large Videos")
             .navigationBarTitleDisplayMode(.inline)
-            .navigationBarBackButtonHidden(isExportingSelection)
+            .navigationBarBackButtonHidden(
+                isExportingSelection || isSelectingForExport
+            )
             .toolbar {
                 if isSelectingForExport, !visibleFiles.isEmpty {
+                    // The back chevron is hidden while selecting, so Cancel
+                    // owns the leading slot and Done confirms without
+                    // discarding the selection.
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") {
                             cancelExportSelection()
                         }
                         .disabled(isExportingSelection)
                         .accessibilityHint(
-                            "Clears the current video selection"
+                            "Leaves selection mode and clears the current video selection"
+                        )
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            finishExportSelection()
+                        }
+                        .disabled(isExportingSelection)
+                        .accessibilityHint(
+                            "Leaves selection mode and keeps the current video selection"
                         )
                     }
                 } else if !visibleFiles.isEmpty {
@@ -355,10 +371,11 @@ struct FileResultsView: View {
                             if scanState == .scanning {
                                 ProgressView()
                             } else {
-                                Label("Scan Videos", systemImage: "arrow.clockwise")
+                                Image(systemName: "arrow.clockwise")
                             }
                         }
                         .disabled(scanState == .scanning)
+                        .accessibilityLabel("Scan videos again")
                         .accessibilityHint("Checks the Photos library again for videos over 100 megabytes")
                     }
                 }
@@ -405,6 +422,17 @@ struct FileResultsView: View {
                         )
                     }
                 }
+            }
+            .alert(
+                "Couldn’t Delete Video",
+                isPresented: Binding(
+                    get: { deletionError != nil },
+                    set: { if !$0 { deletionError = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { deletionError = nil }
+            } message: {
+                Text(deletionError ?? "")
             }
             .alert(
                 "Export Couldn’t Finish",
@@ -561,12 +589,6 @@ struct FileResultsView: View {
         } else {
             ScrollView {
                 LazyVStack(spacing: 12) {
-                    if let error = deletionError {
-                        Text(error)
-                            .font(.duckCaption)
-                            .foregroundStyle(Color.danger)
-                            .padding(.horizontal)
-                    }
                     if scanState == .scanning {
                         scanningBanner
                     } else if scanProgress.isComplete,
@@ -574,7 +596,12 @@ struct FileResultsView: View {
                         completedScanBanner
                     }
                     reviewControls
-                    exportGuidanceCard
+                    // One entry point into selection: the toolbar Select
+                    // button. While selecting, the bottom bar owns the count,
+                    // Select All, and the export actions.
+                    if !isSelectingForExport {
+                        exportGuidanceCard
+                    }
                     ForEach(reviewSections) { section in
                         reviewSection(section)
                     }
@@ -633,13 +660,19 @@ struct FileResultsView: View {
                 .foregroundStyle(
                     reviewLayout == layout ? Color.white : Color.textSecondary
                 )
-                .frame(width: 34, height: 30)
+                .frame(width: 38, height: 32)
                 .background(
                     reviewLayout == layout
                         ? Color.accentPrimary
                         : Color.surfaceElevated,
-                    in: RoundedRectangle(cornerRadius: 8)
+                    in: RoundedRectangle(
+                        cornerRadius: DuckRadius.s,
+                        style: .continuous
+                    )
                 )
+                // Keep the chip compact but give it a full 44pt hit area.
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
@@ -788,64 +821,21 @@ struct FileResultsView: View {
         DuckCard {
             VStack(alignment: .leading, spacing: 10) {
                 Label(
-                    isSelectingForExport
-                        ? "Choose videos to export"
-                        : "Move selected videos somewhere safe",
-                    systemImage: isSelectingForExport
-                        ? "checkmark.circle"
-                        : "externaldrive.fill.badge.plus"
+                    "Move big videos somewhere safe",
+                    systemImage: "externaldrive.fill.badge.plus"
                 )
                 .font(.duckBody.weight(.semibold))
                 .foregroundStyle(Color.textPrimary)
 
                 Text(
-                    isSelectingForExport
-                        ? "Tap Select on each video. You can export the selection directly or save it to Export Album."
-                        : "Choose only the videos you want. PhotoDuck copies and verifies their original files without deleting anything."
+                    "Tap Select at the top to choose videos, then copy them to a drive or Files folder. PhotoDuck copies and verifies the original files without deleting anything."
                 )
                     .font(.duckCaption)
                     .foregroundStyle(Color.textSecondary)
-
-                Button {
-                    if isSelectingForExport {
-                        toggleSelectAllVisibleVideos()
-                    } else {
-                        beginExportSelection()
-                    }
-                } label: {
-                    Label(
-                        isSelectingForExport
-                            ? (
-                                allVisibleVideosAreSelected
-                                    ? "Deselect All"
-                                    : "Select All \(visibleFiles.count)"
-                            )
-                            : "Select Videos to Export",
-                        systemImage: isSelectingForExport
-                            ? (
-                                allVisibleVideosAreSelected
-                                    ? "circle"
-                                    : "checkmark.circle.fill"
-                            )
-                            : "checkmark.circle"
-                        )
-                        .font(.duckCaption.weight(.semibold))
-                        .foregroundStyle(Color.accentPrimary)
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .background(
-                            Color.accentPrimary.opacity(0.1),
-                            in: RoundedRectangle(cornerRadius: DuckRadius.s)
-                        )
-                }
-                .buttonStyle(.plain)
-                .accessibilityHint(
-                    isSelectingForExport
-                        ? "Changes the selection without exporting"
-                        : "Enters multi-select mode"
-                )
             }
             .padding(14)
         }
+        .accessibilityElement(children: .combine)
     }
 
     private var selectedExportActionBar: some View {
@@ -860,72 +850,117 @@ struct FileResultsView: View {
                         "Cancel stops the current item; verified videos remain on the drive. Choose the same destination again to resume an interruption."
                 )
             } else {
+                if let exportAlbumConfirmation {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(Color.success)
+                        Text(exportAlbumConfirmation)
+                            .font(.duckMicro)
+                            .foregroundStyle(Color.textSecondary)
+                        Spacer(minLength: 0)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+
                 HStack {
                     VStack(alignment: .leading, spacing: 1) {
+                        Text(selectedVideoCountLabel)
+                            .font(.duckCaption.weight(.semibold))
+                            .foregroundStyle(Color.textPrimary)
                         Text(
-                            "\(selectedVideoFiles.count) "
-                                + (
-                                    selectedVideoFiles.count == 1
-                                        ? "video selected"
-                                        : "videos selected"
-                                )
+                            selectedVideoFiles.isEmpty
+                                ? "Tap a video to choose it."
+                                : selectedVideoSizeLabel
                         )
-                        .font(.duckCaption.weight(.semibold))
-                        .foregroundStyle(Color.textPrimary)
-                        Text(selectedVideoSizeLabel)
                             .font(.duckMicro)
                             .foregroundStyle(Color.textSecondary)
                     }
                     Spacer()
-                    Button(
-                        allVisibleVideosAreSelected
-                            ? "Deselect All"
-                            : "Select All"
-                    ) {
+                    if !selectedVideoFiles.isEmpty {
+                        Button(
+                            allVisibleVideosAreSelected
+                                ? "Deselect All"
+                                : "Select All"
+                        ) {
+                            toggleSelectAllVisibleVideos()
+                        }
+                        .font(.duckCaption.weight(.semibold))
+                    }
+                }
+
+                // With nothing selected the bar offers a real, enabled action
+                // instead of a disabled button telling the user to select.
+                if selectedVideoFiles.isEmpty {
+                    Button {
                         toggleSelectAllVisibleVideos()
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                            Text("Select All \(visibleFiles.count)")
+                        }
+                        .font(.duckButton)
+                        .foregroundStyle(Color.white)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .background(
+                            LinearGradient.duckPrimaryCTA,
+                            in: RoundedRectangle(
+                                cornerRadius: DuckRadius.m,
+                                style: .continuous
+                            )
+                        )
+                        .duckPrimaryGlow()
                     }
-                    .font(.duckCaption.weight(.semibold))
-                }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(
+                        "Selects every video in the current list"
+                    )
+                } else {
+                    Button {
+                        beginExternalExport()
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "externaldrive.badge.plus")
+                            Text(exportSelectedTitle)
+                        }
+                        .font(.duckButton)
+                        .foregroundStyle(Color.white)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .background(
+                            LinearGradient.duckPrimaryCTA,
+                            in: RoundedRectangle(
+                                cornerRadius: DuckRadius.m,
+                                style: .continuous
+                            )
+                        )
+                        .duckPrimaryGlow()
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(
+                        "Choose an external drive or Files folder for only the selected videos"
+                    )
 
-                Button {
-                    beginExternalExport()
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "externaldrive.badge.plus")
-                        Text(exportSelectedTitle)
+                    Button {
+                        addSelectedVideosToExportAlbum()
+                    } label: {
+                        Label(
+                            addSelectedToAlbumTitle,
+                            systemImage: "tray.and.arrow.down"
+                        )
+                        .font(.duckCaption.weight(.semibold))
+                        .foregroundStyle(
+                            selectedUnqueuedAssets.isEmpty
+                                ? Color.textSecondary.opacity(0.6)
+                                : Color.accentPrimary
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .contentShape(Rectangle())
                     }
-                    .font(.duckButton)
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity, minHeight: 48)
-                    .background(
-                        selectedVideoFiles.isEmpty
-                            ? Color.textSecondary
-                            : Color.accentPrimary,
-                        in: RoundedRectangle(cornerRadius: DuckRadius.m)
+                    .buttonStyle(.plain)
+                    .disabled(selectedUnqueuedAssets.isEmpty)
+                    .accessibilityHint(
+                        "Saves only the selected videos in Export Album for later"
                     )
                 }
-                .buttonStyle(.plain)
-                .disabled(selectedVideoFiles.isEmpty)
-                .accessibilityHint(
-                    "Choose an external drive or Files folder for only the selected videos"
-                )
-
-                Button {
-                    addSelectedVideosToExportAlbum()
-                } label: {
-                    Label(
-                        addSelectedToAlbumTitle,
-                        systemImage: "tray.and.arrow.down"
-                    )
-                    .font(.duckCaption.weight(.semibold))
-                    .foregroundStyle(Color.accentPrimary)
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                }
-                .buttonStyle(.plain)
-                .disabled(selectedUnqueuedAssets.isEmpty)
-                .accessibilityHint(
-                    "Saves only the selected videos in Export Album for later"
-                )
             }
         }
         .padding(.horizontal, 16)
@@ -949,13 +984,17 @@ struct FileResultsView: View {
                 Spacer()
                 Image(systemName: "chevron.right")
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(Color.white)
             .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, minHeight: 54)
             .background(
-                Color.accentPrimary,
-                in: RoundedRectangle(cornerRadius: DuckRadius.m)
+                LinearGradient.duckPrimaryCTA,
+                in: RoundedRectangle(
+                    cornerRadius: DuckRadius.m,
+                    style: .continuous
+                )
             )
+            .duckPrimaryGlow()
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 16)
@@ -969,17 +1008,22 @@ struct FileResultsView: View {
         DuckHaptics.selection()
     }
 
+    private var selectedVideoCountLabel: String {
+        let count = selectedVideoFiles.count
+        guard count > 0 else { return "No videos selected" }
+        return "\(count) \(count == 1 ? "video" : "videos") selected"
+    }
+
     private var selectedVideoSizeLabel: String {
-        let formatted = ByteCountFormatter.string(
-            fromByteCount: selectedVideoBytes,
-            countStyle: .file
-        )
+        // `formattedBytesStat` renders an empty selection as "0 MB" instead of
+        // ByteCountFormatter's "Zero KB".
+        let formatted = selectedVideoBytes.formattedBytesStat
         return selectedVideoSizeIsEstimated ? "About \(formatted)" : formatted
     }
 
     private var exportSelectedTitle: String {
         guard !selectedVideoFiles.isEmpty else {
-            return "Select Videos to Export"
+            return "Export Selected…"
         }
         return "Export \(selectedVideoFiles.count) Selected…"
     }
@@ -996,6 +1040,7 @@ struct FileResultsView: View {
 
     private func beginExportSelection() {
         guard !visibleFiles.isEmpty else { return }
+        clearExportAlbumConfirmation()
         isSelectingForExport = true
         selectedVideoAssetIDs = LargeVideoExportSelection.reconciledAssetIDs(
             selectedVideoAssetIDs,
@@ -1008,6 +1053,20 @@ struct FileResultsView: View {
         isSelectingForExport = false
         selectedVideoAssetIDs.removeAll()
         pendingExternalExportFiles.removeAll()
+        clearExportAlbumConfirmation()
+    }
+
+    /// Leaves selection mode without discarding the selection, so re-entering
+    /// with Select restores exactly what the user had picked.
+    private func finishExportSelection() {
+        isSelectingForExport = false
+        clearExportAlbumConfirmation()
+    }
+
+    private func clearExportAlbumConfirmation() {
+        exportAlbumConfirmationTask?.cancel()
+        exportAlbumConfirmationTask = nil
+        exportAlbumConfirmation = nil
     }
 
     private func toggleExportSelection(for file: LargeFile) {
@@ -1048,13 +1107,24 @@ struct FileResultsView: View {
         guard !explicitAssets.isEmpty else { return }
         exportAlbum.add(explicitAssets)
         DuckHaptics.success()
-        cancelExportSelection()
-        showExportAlbum = true
+        // Saving for later must not discard the selection or navigate away.
+        // Confirm in place and let the user keep reviewing.
+        let count = explicitAssets.count
+        exportAlbumConfirmationTask?.cancel()
+        exportAlbumConfirmation =
+            "Saved \(count) \(count == 1 ? "video" : "videos") to Export Album. Nothing was moved or deleted."
+        exportAlbumConfirmationTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            exportAlbumConfirmation = nil
+            exportAlbumConfirmationTask = nil
+        }
     }
 
     private func beginExternalExport() {
         let explicitFiles = selectedVideoFiles
         guard !explicitFiles.isEmpty, !isExportingSelection else { return }
+        clearExportAlbumConfirmation()
         pendingExternalExportFiles = explicitFiles
         showExternalFolderPicker = true
     }
@@ -1095,9 +1165,11 @@ struct FileResultsView: View {
                 backgroundTaskID = .invalid
             }
         }
+        // See HomeView: the service's total is resource-based, so seed zero
+        // and let the first progress update supply the real figure.
         selectedExportLiveActivity.start(
             destinationName: directoryURL.lastPathComponent,
-            totalFileCount: explicitAssets.count
+            totalFileCount: 0
         )
         defer {
             ExternalPhotoExportSessionGate.shared.release(
@@ -1143,7 +1215,11 @@ struct FileResultsView: View {
                 + (
                     remainingAssetIDs.isEmpty
                         ? "The originals remain in Photos."
-                        : "\(remainingAssetIDs.count) unfinished video(s) remain selected so you can retry them."
+                        : (
+                            remainingAssetIDs.count == 1
+                                ? "1 unfinished video remains selected so you can retry it."
+                                : "\(remainingAssetIDs.count) unfinished videos remain selected so you can retry them."
+                        )
                 )
             let activityPhase:
                 PhotoDuckExportActivityAttributes.ContentState.Phase =
@@ -1286,7 +1362,11 @@ private struct FileRow: View {
                 LargeVideoThumbnail(
                     asset: file.photoAsset,
                     layout: .list,
-                    onPlay: onPlay
+                    displayName: file.displayName,
+                    isSelectingForExport: isSelectingForExport,
+                    isSelectedForExport: isSelectedForExport,
+                    onPlay: onPlay,
+                    onToggleExportSelection: onToggleExportSelection
                 )
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -1329,7 +1409,10 @@ private struct FileRow: View {
                         isSelectedForExport
                             ? Color.accentPrimary
                             : Color.accentPrimary.opacity(0.1),
-                        in: RoundedRectangle(cornerRadius: 10)
+                        in: RoundedRectangle(
+                            cornerRadius: DuckRadius.s,
+                            style: .continuous
+                        )
                     )
                 }
                 .buttonStyle(.plain)
@@ -1340,18 +1423,17 @@ private struct FileRow: View {
                 HStack(spacing: 8) {
                     Button(action: onAddToExport) {
                         Label(
-                            isQueuedForExport ? "Added" : "Export",
+                            isQueuedForExport ? "Added" : "Add to Album",
                             systemImage: isQueuedForExport
                                 ? "checkmark.circle.fill"
                                 : "externaldrive.badge.plus"
                         )
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, minHeight: 44)
                         .font(.duckLabel.weight(.semibold))
                         .foregroundStyle(
-                            isQueuedForExport ? Color.success : .white
+                            isQueuedForExport ? Color.success : Color.white
                         )
                         .padding(.horizontal, 8)
-                        .padding(.vertical, 8)
                         .background(
                             isQueuedForExport
                                 ? Color.success.opacity(0.12)
@@ -1360,6 +1442,11 @@ private struct FileRow: View {
                         )
                     }
                     .disabled(isQueuedForExport || isDeleting)
+                    .accessibilityLabel(
+                        isQueuedForExport
+                            ? "Added to Export Album"
+                            : "Add to Export Album"
+                    )
                     .accessibilityHint(
                         isQueuedForExport
                             ? "This video is already in Export Album"
@@ -1374,11 +1461,10 @@ private struct FileRow: View {
                                     Image(systemName: "lock.fill")
                                 }
                             }
-                            .frame(maxWidth: .infinity)
+                            .frame(maxWidth: .infinity, minHeight: 44)
                             .font(.duckLabel.weight(.semibold))
                             .foregroundStyle(Color.accentPrimary)
                             .padding(.horizontal, 8)
-                            .padding(.vertical, 8)
                             .background(
                                 Color.accentPrimary.opacity(0.1),
                                 in: Capsule()
@@ -1391,19 +1477,23 @@ private struct FileRow: View {
                         Group {
                             if isDeleting {
                                 ProgressView()
-                                    .tint(Color.textSecondary)
+                                    .tint(Color.danger)
                             } else {
                                 Text("Delete")
                             }
                         }
-                            .frame(maxWidth: .infinity)
+                            .frame(maxWidth: .infinity, minHeight: 44)
                             .font(.duckLabel.weight(.semibold))
                             .foregroundStyle(Color.danger)
                             .padding(.horizontal, 8)
-                            .padding(.vertical, 8)
                             .background(Color.danger.opacity(0.10), in: Capsule())
                     }
                     .disabled(isDeleting)
+                    .accessibilityLabel(
+                        isDeleting
+                            ? "Waiting for Photos deletion confirmation"
+                            : "Delete video"
+                    )
                 }
             }
         }
@@ -1463,7 +1553,11 @@ private struct LargeVideoGridCard: View {
                 LargeVideoThumbnail(
                     asset: file.photoAsset,
                     layout: .thumbnails,
-                    onPlay: onPlay
+                    displayName: file.displayName,
+                    isSelectingForExport: isSelectingForExport,
+                    isSelectedForExport: isSelectedForExport,
+                    onPlay: onPlay,
+                    onToggleExportSelection: onToggleExportSelection
                 )
 
                 Text(file.displayName)
@@ -1503,7 +1597,10 @@ private struct LargeVideoGridCard: View {
                             isSelectedForExport
                                 ? Color.accentPrimary
                                 : Color.accentPrimary.opacity(0.1),
-                            in: RoundedRectangle(cornerRadius: 8)
+                            in: RoundedRectangle(
+                                cornerRadius: DuckRadius.s,
+                                style: .continuous
+                            )
                         )
                     }
                     .buttonStyle(.plain)
@@ -1543,13 +1640,14 @@ private struct LargeVideoGridCard: View {
                             action: onCompress
                         )
                         compactAction(
-                            systemImage:
-                                isDeleting ? "hourglass" : "trash",
+                            systemImage: "trash",
                             color: .danger,
                             accessibilityLabel: isDeleting
                                 ? "Waiting for Photos deletion confirmation"
                                 : "Delete video",
                             isDisabled: isDeleting,
+                            // Same in-flight treatment as the list row.
+                            isInProgress: isDeleting,
                             action: onDelete
                         )
                     }
@@ -1558,7 +1656,9 @@ private struct LargeVideoGridCard: View {
             .padding(10)
         }
         .overlay {
-            RoundedRectangle(cornerRadius: DuckRadius.m)
+            // Match DuckCard's own corner radius so the ring cannot clip the
+            // card corners.
+            RoundedRectangle(cornerRadius: DuckRadius.l, style: .continuous)
                 .stroke(
                     isSelectingForExport && isSelectedForExport
                         ? Color.accentPrimary
@@ -1573,14 +1673,28 @@ private struct LargeVideoGridCard: View {
         color: Color,
         accessibilityLabel: String,
         isDisabled: Bool,
+        isInProgress: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.duckCaption.weight(.semibold))
-                .foregroundStyle(color)
-                .frame(maxWidth: .infinity, minHeight: 36)
-                .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+            Group {
+                if isInProgress {
+                    ProgressView()
+                        .tint(color)
+                } else {
+                    Image(systemName: systemImage)
+                        .font(.duckCaption.weight(.semibold))
+                        .foregroundStyle(color)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(
+                color.opacity(0.1),
+                in: RoundedRectangle(
+                    cornerRadius: DuckRadius.s,
+                    style: .continuous
+                )
+            )
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
@@ -1591,14 +1705,20 @@ private struct LargeVideoGridCard: View {
 private struct LargeVideoThumbnail: View {
     let asset: PHAsset
     let layout: LargeVideoReviewLayout
+    let displayName: String
+    let isSelectingForExport: Bool
+    let isSelectedForExport: Bool
     let onPlay: () -> Void
+    let onToggleExportSelection: () -> Void
 
     @Environment(\.displayScale) private var displayScale
     @State private var image: UIImage?
     @State private var localThumbnailUnavailable = false
 
     var body: some View {
-        Button(action: onPlay) {
+        // In selection mode the biggest target on the row must toggle
+        // selection; playback stays reachable outside selection mode.
+        Button(action: isSelectingForExport ? onToggleExportSelection : onPlay) {
             ZStack {
                 Color.warning.opacity(0.14)
 
@@ -1622,11 +1742,30 @@ private struct LargeVideoThumbnail: View {
                     .foregroundStyle(Color.warning)
                 }
 
-                Image(systemName: "play.circle.fill")
-                    .font(layout == .list ? .title : .largeTitle)
+                if isSelectingForExport {
+                    Color.berryBlack.opacity(isSelectedForExport ? 0.28 : 0.12)
+
+                    Image(
+                        systemName: isSelectedForExport
+                            ? "checkmark.circle.fill"
+                            : "circle"
+                    )
+                    .font(layout == .list ? .duckTitle : .duckDisplay)
                     .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, Color.black.opacity(0.48))
+                    .foregroundStyle(
+                        Color.white,
+                        isSelectedForExport
+                            ? Color.accentPrimary
+                            : Color.black.opacity(0.48)
+                    )
                     .shadow(radius: 3)
+                } else {
+                    Image(systemName: "play.circle.fill")
+                        .font(layout == .list ? .duckTitle : .duckDisplay)
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(Color.white, Color.black.opacity(0.48))
+                        .shadow(radius: 3)
+                }
 
                 VStack {
                     Spacer()
@@ -1649,14 +1788,39 @@ private struct LargeVideoThumbnail: View {
             .frame(maxWidth: layout == .thumbnails ? .infinity : nil)
             .aspectRatio(layout == .thumbnails ? 1 : nil, contentMode: .fit)
             .clipped()
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: DuckRadius.s,
+                    style: .continuous
+                )
+            )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Play video, \(durationLabel)")
+        .accessibilityLabel(
+            isSelectingForExport
+                ? (
+                    isSelectedForExport
+                        ? "Deselect \(displayName)"
+                        : "Select \(displayName)"
+                )
+                : "Play video, \(durationLabel)"
+        )
+        .accessibilityValue(
+            isSelectingForExport
+                ? (isSelectedForExport ? "Selected" : "Not selected")
+                : ""
+        )
+        .accessibilityAddTraits(
+            isSelectingForExport && isSelectedForExport ? .isSelected : []
+        )
         .accessibilityHint(
-            localThumbnailUnavailable
-                ? "Downloads the video from iCloud if needed"
-                : "Opens the video player"
+            isSelectingForExport
+                ? "Adds or removes this video from the export selection"
+                : (
+                    localThumbnailUnavailable
+                        ? "Downloads the video from iCloud if needed"
+                        : "Opens the video player"
+                )
         )
         .task(id: thumbnailTaskID) {
             image = await PhotoImageRepository.shared.image(

@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 import Photos
 
-enum AssetMediaKind: Sendable {
+enum AssetMediaKind: String, Codable, Sendable {
     case image
     case video
     case other
@@ -275,6 +275,10 @@ struct AssetFileSizeRecord: Codable, Equatable, Sendable {
     let bytes: Int64
     let provenance: AssetFileSizeProvenance
     let savedAt: Date
+    /// Which media type produced this record. Optional so stores written
+    /// before this field decode unchanged; a nil value is treated as
+    /// out-of-scope by `retain` and therefore preserved.
+    var mediaKind: AssetMediaKind?
 
     var isEstimated: Bool {
         provenance == .estimated
@@ -398,11 +402,29 @@ actor AssetFileSizeRepository {
         }
     }
 
-    func retain(localIdentifiers: Set<String>) async {
+    /// Drops records outside `localIdentifiers`, but only within the media
+    /// types the caller actually enumerated. The video scan passes video IDs
+    /// only, so an unscoped filter evicted every photo size measured by the
+    /// export path — after which those photos silently fell back to estimates
+    /// in deletion totals and reclaimable-space figures.
+    func retain(
+        localIdentifiers: Set<String>,
+        limitedTo mediaKinds: Set<AssetMediaKind>? = nil
+    ) async {
         await loadIfNeeded()
         let previousCount = entries.count
-        entries = entries.filter {
-            localIdentifiers.contains($0.key.localIdentifier)
+        entries = entries.filter { element in
+            if let mediaKinds {
+                guard let recordKind = element.value.record.mediaKind else {
+                    // Unknown provenance — never evict on someone else's scan.
+                    return true
+                }
+                guard mediaKinds.contains(recordKind) else {
+                    // Out of scope for this caller — keep it.
+                    return true
+                }
+            }
+            return localIdentifiers.contains(element.key.localIdentifier)
         }
         if entries.count != previousCount {
             scheduleWrite()
@@ -619,7 +641,8 @@ extension PHAsset {
         let record = AssetFileSizeRecord(
             bytes: resolution.bytes,
             provenance: resolution.isEstimated ? .estimated : .measuredCurrentVersion,
-            savedAt: Date()
+            savedAt: Date(),
+            mediaKind: mediaKind
         )
         await AssetFileSizeRepository.shared.store(record, for: cacheKey)
 
