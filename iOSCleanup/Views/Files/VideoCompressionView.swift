@@ -85,10 +85,10 @@ struct VideoCompressionView: View {
         case .compressing(let progress):
             progressSection(
                 progress: progress,
-                message: "\(Int(progress * 100))% - Compressing..."
+                message: "\(Int(progress * 100))% - Compressing…"
             )
         case .saving:
-            progressSection(progress: nil, message: "Saving to Photos...")
+            progressSection(progress: nil, message: "Saving to Photos…")
         case .success(let outcome):
             successBanner(outcome)
         case .failed(let message, let canRetry):
@@ -101,26 +101,26 @@ struct VideoCompressionView: View {
     private var fileHeader: some View {
         HStack(spacing: 12) {
             Image(systemName: "video.fill")
-                .font(.title)
-                .foregroundStyle(.purple)
+                .font(.duckTitle)
+                .foregroundStyle(Color.accentPrimary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(file.displayName)
-                    .font(.headline)
+                    .font(.duckHeading)
                     .lineLimit(1)
                 Text(file.formattedSize)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.duckCaption)
+                    .foregroundStyle(Color.textSecondary)
             }
             Spacer()
         }
         .padding()
-        .background(.purple.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .background(Color.accentPrimary.opacity(0.08), in: RoundedRectangle(cornerRadius: DuckRadius.s, style: .continuous))
     }
 
     private var presetPicker: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Quality Preset")
-                .font(.headline)
+                .font(.duckHeading)
             ForEach(VideoCompressionEngine.Preset.allCases, id: \.self) { preset in
                 Button {
                     selectedPreset = preset
@@ -128,19 +128,19 @@ struct VideoCompressionView: View {
                 } label: {
                     HStack {
                         Image(systemName: selectedPreset == preset ? "largecircle.fill.circle" : "circle")
-                            .foregroundStyle(.purple)
+                            .foregroundStyle(Color.accentPrimary)
                         Text(preset.rawValue)
-                            .font(.body)
-                            .foregroundStyle(.primary)
+                            .font(.duckBody)
+                            .foregroundStyle(Color.textPrimary)
                         Spacer()
                         Text(estimatedLabel(for: preset))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.duckLabel)
+                            .foregroundStyle(Color.textSecondary)
                     }
                     .padding()
                     .background(
-                        selectedPreset == preset ? Color.purple.opacity(0.08) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 10)
+                        selectedPreset == preset ? Color.accentPrimary.opacity(0.08) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: DuckRadius.s, style: .continuous)
                     )
                 }
                 .buttonStyle(.plain)
@@ -152,20 +152,20 @@ struct VideoCompressionView: View {
     private var estimatedSizes: some View {
         HStack {
             Label("Estimated output", systemImage: "doc.fill")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.duckCaption)
+                .foregroundStyle(Color.textSecondary)
             Spacer()
             if let estimatedOutputBytes {
                 Text(ByteCountFormatter.string(
                     fromByteCount: estimatedOutputBytes,
                     countStyle: .file
                 ))
-                .font(.subheadline.bold())
-                .foregroundStyle(.purple)
+                .font(.duckCaption.weight(.bold))
+                .foregroundStyle(Color.accentPrimary)
             } else {
                 Text("Calculated before export")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.duckLabel)
+                    .foregroundStyle(Color.textSecondary)
             }
         }
         .padding(.horizontal, 4)
@@ -174,12 +174,12 @@ struct VideoCompressionView: View {
     private var compressButton: some View {
         Button(action: startCompression) {
             Label("Compress & Replace", systemImage: "arrow.triangle.2.circlepath")
-                .font(.headline)
+                .font(.duckButton)
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(.purple)
+                .background(LinearGradient.duckPrimaryCTA)
                 .foregroundStyle(Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .clipShape(Capsule(style: .continuous))
         }
         .disabled(compressionTask != nil || hasSavedCopy)
     }
@@ -188,15 +188,15 @@ struct VideoCompressionView: View {
         VStack(spacing: 12) {
             if let progress {
                 ProgressView(value: progress)
-                    .tint(.purple)
+                    .tint(Color.accentPrimary)
                     .scaleEffect(x: 1, y: 2)
             } else {
                 ProgressView()
-                    .tint(.purple)
+                    .tint(Color.accentPrimary)
             }
             Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.duckCaption)
+                .foregroundStyle(Color.textSecondary)
         }
         .padding()
     }
@@ -210,38 +210,36 @@ struct VideoCompressionView: View {
                 .font(.duckDisplay(56))
                 .foregroundStyle(Color.success)
             Text(content.title)
-                .font(.title2.bold())
+                .font(.duckTitle)
             Text(content.message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.duckCaption)
+                .foregroundStyle(Color.textSecondary)
                 .multilineTextAlignment(.center)
-            Button("Done") { dismiss() }
-                .buttonStyle(.borderedProminent)
-                .tint(.purple)
+            DuckPrimaryButton(title: "Done") { dismiss() }
+                .padding(.horizontal, 24)
         }
         .padding()
         .frame(maxWidth: .infinity)
-        .background(.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+        .background(Color.success.opacity(0.08), in: RoundedRectangle(cornerRadius: DuckRadius.m, style: .continuous))
     }
 
     private func errorSection(_ message: String, canRetry: Bool) -> some View {
         VStack(spacing: 12) {
             Text("Compression stopped")
-                .font(.headline)
+                .font(.duckHeading)
                 .foregroundStyle(Color.danger)
             Text(message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.duckLabel)
+                .foregroundStyle(Color.textSecondary)
                 .multilineTextAlignment(.center)
             if canRetry && !hasSavedCopy {
-                Button("Retry", action: startCompression)
-                    .buttonStyle(.borderedProminent)
-                    .tint(.purple)
+                DuckPrimaryButton(title: "Retry", action: startCompression)
+                    .padding(.horizontal, 24)
             }
         }
         .padding()
         .frame(maxWidth: .infinity)
-        .background(.red.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+        .background(Color.danger.opacity(0.06), in: RoundedRectangle(cornerRadius: DuckRadius.s, style: .continuous))
     }
 
     // MARK: - Compression
@@ -253,7 +251,7 @@ struct VideoCompressionView: View {
         let asset = file.photoAsset
 
         // Change state synchronously so a second tap cannot enqueue another export.
-        compressionState = .preparing(progress: nil, message: "Checking free space...")
+        compressionState = .preparing(progress: nil, message: "Checking free space…")
         estimatedOutputBytes = nil
         compressionTask = Task {
             await runCompression(for: asset)
@@ -272,7 +270,7 @@ struct VideoCompressionView: View {
             )
             try Task.checkCancellation()
 
-            compressionState = .preparing(progress: nil, message: "Loading video...")
+            compressionState = .preparing(progress: nil, message: "Loading video…")
             let avAsset = try await loadAVAsset(for: asset) { progress in
                 guard case .preparing = compressionState else { return }
                 compressionState = .preparing(
@@ -299,6 +297,13 @@ struct VideoCompressionView: View {
                     pendingOutput = output
                     output.claimTemporaryFile()
                 case .cancelled:
+                    if !Task.isCancelled {
+                        compressionState = .failed(
+                            message:
+                                "Compression was cancelled before anything was saved.",
+                            canRetry: true
+                        )
+                    }
                     return
                 case .failed(let error):
                     compressionState = .failed(

@@ -264,6 +264,112 @@ final class PhotoMLStoreTests: XCTestCase {
         XCTAssertNil(loaded)
     }
 
+    func testAssetAnalysisCacheRequiresExactVersionedMetadataContract() async throws {
+        let modificationDate = Date(timeIntervalSinceReferenceDate: 123)
+        let keeperSignals = KeeperSignals(
+            sharpness: 0.8,
+            blurPenalty: 0.1,
+            motionBlurPenalty: 0.05,
+            eyesOpenScore: nil,
+            expressionScore: nil,
+            exposureScore: 0.9,
+            favoriteBonus: 0,
+            editedBonusOrPenalty: 0,
+            framingScore: 0.8,
+            resolutionTiebreaker: 0.1
+        )
+        let record = PhotoAssetAnalysisCacheRecord(
+            assetID: "analysis-cache-asset",
+            modificationDate: modificationDate,
+            pixelWidth: 4_032,
+            pixelHeight: 3_024,
+            mediaSubtypesRawValue: 17,
+            analyzerVersion: 3,
+            embeddingVersion: PhotoEmbeddingContract.embeddingVersion,
+            embedding: validEmbedding(),
+            perceptualHash: 0xCAFE,
+            keeperSignalsJSON: try JSONEncoder().encode(keeperSignals)
+        )
+        try await store.upsertAssetAnalyses([record])
+
+        let matchingLookup = PhotoAssetAnalysisCacheLookup(
+            assetID: record.assetID,
+            modificationDate: modificationDate,
+            pixelWidth: record.pixelWidth,
+            pixelHeight: record.pixelHeight,
+            mediaSubtypesRawValue: record.mediaSubtypesRawValue,
+            analyzerVersion: record.analyzerVersion,
+            embeddingVersion: record.embeddingVersion
+        )
+        let matching = try await store.loadValidAssetAnalyses(
+            for: [matchingLookup]
+        )
+        XCTAssertEqual(matching[record.assetID]?.embedding, record.embedding)
+        XCTAssertEqual(matching[record.assetID]?.perceptualHash, 0xCAFE)
+
+        let changedDateLookup = PhotoAssetAnalysisCacheLookup(
+            assetID: record.assetID,
+            modificationDate: modificationDate.addingTimeInterval(1),
+            pixelWidth: record.pixelWidth,
+            pixelHeight: record.pixelHeight,
+            mediaSubtypesRawValue: record.mediaSubtypesRawValue,
+            analyzerVersion: record.analyzerVersion,
+            embeddingVersion: record.embeddingVersion
+        )
+        let changedAnalyzerLookup = PhotoAssetAnalysisCacheLookup(
+            assetID: record.assetID,
+            modificationDate: modificationDate,
+            pixelWidth: record.pixelWidth,
+            pixelHeight: record.pixelHeight,
+            mediaSubtypesRawValue: record.mediaSubtypesRawValue,
+            analyzerVersion: record.analyzerVersion + 1,
+            embeddingVersion: record.embeddingVersion
+        )
+        let changedDimensionsLookup = PhotoAssetAnalysisCacheLookup(
+            assetID: record.assetID,
+            modificationDate: modificationDate,
+            pixelWidth: record.pixelWidth + 1,
+            pixelHeight: record.pixelHeight,
+            mediaSubtypesRawValue: record.mediaSubtypesRawValue,
+            analyzerVersion: record.analyzerVersion,
+            embeddingVersion: record.embeddingVersion
+        )
+        let changedSubtypeLookup = PhotoAssetAnalysisCacheLookup(
+            assetID: record.assetID,
+            modificationDate: modificationDate,
+            pixelWidth: record.pixelWidth,
+            pixelHeight: record.pixelHeight,
+            mediaSubtypesRawValue: record.mediaSubtypesRawValue + 1,
+            analyzerVersion: record.analyzerVersion,
+            embeddingVersion: record.embeddingVersion
+        )
+        let changedEmbeddingVersionLookup = PhotoAssetAnalysisCacheLookup(
+            assetID: record.assetID,
+            modificationDate: modificationDate,
+            pixelWidth: record.pixelWidth,
+            pixelHeight: record.pixelHeight,
+            mediaSubtypesRawValue: record.mediaSubtypesRawValue,
+            analyzerVersion: record.analyzerVersion,
+            embeddingVersion: PhotoEmbeddingContract.legacyEmbeddingVersion
+        )
+        let changedDateResult = try await store.loadValidAssetAnalyses(
+            for: [changedDateLookup]
+        )
+        let changedAnalyzerResult = try await store.loadValidAssetAnalyses(
+            for: [changedAnalyzerLookup]
+        )
+        let otherContractMismatches = try await store.loadValidAssetAnalyses(
+            for: [
+                changedDimensionsLookup,
+                changedSubtypeLookup,
+                changedEmbeddingVersionLookup
+            ]
+        )
+        XCTAssertTrue(changedDateResult.isEmpty)
+        XCTAssertTrue(changedAnalyzerResult.isEmpty)
+        XCTAssertTrue(otherContractMismatches.isEmpty)
+    }
+
     func testRejectsInvalidEmbeddingByteCount() async throws {
         let feature = PhotoFeatureRecord(
             assetID: "invalid-embedding",

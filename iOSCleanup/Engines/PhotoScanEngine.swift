@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import OSLog
 @preconcurrency import Photos
 @preconcurrency import Vision
 
@@ -46,6 +47,7 @@ struct PhotoScanUpdate: Sendable {
     var committedProcessedPhotoCount: Int?
     var committedAnalyzedPhotoCount: Int?
     var committedUnanalyzedPhotoCount: Int?
+    var statusMessage: String? = nil
 
     var hasUnanalyzedPhotos: Bool {
         unanalyzedPhotoCount > 0
@@ -96,6 +98,213 @@ typealias PhotoScanAssetAnalyzer = @Sendable (
     _ allowNetworkAccess: Bool
 ) async -> PhotoScanAssetAnalysis
 
+private final class PhotoScanAnalysisRequestState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation:
+        CheckedContinuation<PhotoScanAssetAnalysis, Never>?
+    private var result: PhotoScanAssetAnalysis?
+
+    func value() async -> PhotoScanAssetAnalysis {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if let result {
+                lock.unlock()
+                continuation.resume(returning: result)
+                return
+            }
+            self.continuation = continuation
+            lock.unlock()
+        }
+    }
+
+    func resolve(_ result: PhotoScanAssetAnalysis) {
+        lock.lock()
+        guard self.result == nil else {
+            lock.unlock()
+            return
+        }
+        self.result = result
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(returning: result)
+    }
+
+    func isPending() -> Bool {
+        lock.lock()
+        let pending = result == nil
+        lock.unlock()
+        return pending
+    }
+}
+
+/// Guarantees a concurrency slot is handed back exactly once, whether the
+/// operation completed, timed out, or the scan was cancelled.
+private final class PhotoScanSlotReleaseBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var hasReleased = false
+
+    /// Returns true only for the first caller.
+    func markReleased() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !hasReleased else { return false }
+        hasReleased = true
+        return true
+    }
+}
+
+private final class PhotoScanOperationTaskBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<Void, Never>?
+    private var cancellationRequested = false
+
+    func install(_ task: Task<Void, Never>) {
+        lock.lock()
+        self.task = task
+        let shouldCancel = cancellationRequested
+        lock.unlock()
+        if shouldCancel {
+            task.cancel()
+        }
+    }
+
+    func cancel() {
+        lock.lock()
+        cancellationRequested = true
+        let task = task
+        lock.unlock()
+        task?.cancel()
+    }
+}
+
+private final class PhotoScanSynchronousAnalysisExecutor:
+    @unchecked Sendable {
+    static let shared = PhotoScanSynchronousAnalysisExecutor()
+
+    private let queue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.photoduck.vision-analysis"
+        queue.qualityOfService = .utility
+        queue.maxConcurrentOperationCount = 4
+        return queue
+    }()
+    private let lock = NSLock()
+    private var scheduledCount = 0
+    private let maximumScheduledCount = 8
+
+    func run(
+        _ operation: @Sendable @escaping () -> PhotoScanAssetAnalysis
+    ) async -> PhotoScanAssetAnalysis {
+        let state = PhotoScanAnalysisRequestState()
+        let wasScheduled = submit {
+            guard state.isPending() else { return }
+            state.resolve(operation())
+        }
+        guard wasScheduled else { return .unavailable }
+
+        return await withTaskCancellationHandler {
+            await state.value()
+        } onCancel: {
+            state.resolve(.unavailable)
+        }
+    }
+
+    private func submit(
+        _ operation: @Sendable @escaping () -> Void
+    ) -> Bool {
+        lock.lock()
+        guard scheduledCount < maximumScheduledCount else {
+            lock.unlock()
+            return false
+        }
+        scheduledCount += 1
+        lock.unlock()
+
+        queue.addOperation { [self] in
+            defer {
+                lock.lock()
+                scheduledCount -= 1
+                lock.unlock()
+            }
+            operation()
+        }
+        return true
+    }
+}
+
+/// A broken PhotoKit/Vision request must not hold an entire scan at its first
+/// eight assets forever. Timed-out operations keep occupying their bounded
+/// slots until they really return, so the watchdog cannot create an unbounded
+/// pile of detached work.
+actor PhotoScanAnalysisCoordinator {
+    private let maximumConcurrentOperationCount: Int
+    private let timeoutNanoseconds: UInt64
+    private var activeOperationCount = 0
+
+    init(
+        maximumConcurrentOperationCount: Int,
+        timeoutNanoseconds: UInt64 = 15_000_000_000
+    ) {
+        self.maximumConcurrentOperationCount = max(
+            maximumConcurrentOperationCount,
+            1
+        )
+        self.timeoutNanoseconds = timeoutNanoseconds
+    }
+
+    func analyze(
+        operation: @Sendable @escaping () async -> PhotoScanAssetAnalysis
+    ) async -> PhotoScanAssetAnalysis {
+        guard activeOperationCount < maximumConcurrentOperationCount else {
+            return .unavailable
+        }
+        activeOperationCount += 1
+        let state = PhotoScanAnalysisRequestState()
+        let operationTaskBox = PhotoScanOperationTaskBox()
+        // A slot must be released exactly once, by whichever of the three
+        // outcomes happens first. Timing out previously resolved the caller
+        // but kept the slot forever, so one slow batch permanently starved the
+        // coordinator and every later asset returned `.unavailable`
+        // instantly — which silently defeated the whole iCloud retry pass.
+        let slot = PhotoScanSlotReleaseBox()
+        let timeoutNanoseconds = self.timeoutNanoseconds
+        let timeoutTask = Task.detached(priority: .utility) { [self] in
+            do {
+                try await Task.sleep(
+                    nanoseconds: timeoutNanoseconds
+                )
+                operationTaskBox.cancel()
+                await releaseSlot(slot)
+                state.resolve(.unavailable)
+            } catch {
+                // The real operation completed or the scan was cancelled.
+            }
+        }
+        let operationTask = Task.detached(priority: .utility) { [self] in
+            let result = await operation()
+            timeoutTask.cancel()
+            await releaseSlot(slot)
+            state.resolve(result)
+        }
+        operationTaskBox.install(operationTask)
+
+        return await withTaskCancellationHandler {
+            await state.value()
+        } onCancel: {
+            timeoutTask.cancel()
+            operationTaskBox.cancel()
+            Task { [self] in await releaseSlot(slot) }
+            state.resolve(.unavailable)
+        }
+    }
+
+    private func releaseSlot(_ slot: PhotoScanSlotReleaseBox) {
+        guard slot.markReleased() else { return }
+        activeOperationCount = max(activeOperationCount - 1, 0)
+    }
+}
+
 actor LazyOptionalMLKeeperRankingService: KeeperRankingService {
     typealias OptionalRankerFactory = @Sendable (
         any KeeperRankingService
@@ -133,20 +342,26 @@ actor LazyOptionalMLKeeperRankingService: KeeperRankingService {
 }
 
 actor PhotoScanEngine {
+    private static let diagnosticsLogger = Logger(
+        subsystem: "com.photoduck.iOSCleanup",
+        category: "PhotoScanPerformance"
+    )
     private let pairClassifier = ConservativePairSimilarityClassifier()
     private let candidateGraph = SimilarityCandidateGraph()
     private let similarityPolicyEngine: ConservativeSimilarityPolicyEngine
     private let preferenceAdjustmentService = PreferenceAdjustedRecommendationService()
-    private let mlBridge = PhotoMLBridge.shared
+    private let mlBridge: PhotoMLBridge
     private let assetProvider: any PhotoScanAssetProviding
     private let assetAnalyzer: PhotoScanAssetAnalyzer
     private var isPaused = false
 
     init(
         assetProvider: any PhotoScanAssetProviding = SystemPhotoScanAssetProvider(),
-        assetAnalyzer: PhotoScanAssetAnalyzer? = nil
+        assetAnalyzer: PhotoScanAssetAnalyzer? = nil,
+        mlBridge: PhotoMLBridge = .shared
     ) {
         self.assetProvider = assetProvider
+        self.mlBridge = mlBridge
         self.assetAnalyzer = assetAnalyzer ?? { asset, allowNetworkAccess in
             await PhotoScanEngine.analyzeAsset(
                 asset,
@@ -161,8 +376,9 @@ actor PhotoScanEngine {
         )
     }
 
-    func pause() {
+    func pause() async {
         isPaused = true
+        await mlBridge.flushBufferedWrites()
     }
 
     func resume() {
@@ -172,7 +388,8 @@ actor PhotoScanEngine {
     nonisolated func scan(
         mode: CleanupMode,
         allowNetworkAccess: Bool = PhotoScanDefaults.allowNetworkAccess,
-        requiredAssetIDs: Set<String>? = nil
+        requiredAssetIDs: Set<String>? = nil,
+        expectedLibraryPhotoCount: Int? = nil
     ) -> AsyncThrowingStream<PhotoScanUpdate, Error> {
         AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let scanTask = Task(priority: .utility) {
@@ -180,6 +397,7 @@ actor PhotoScanEngine {
                     mode: mode,
                     allowNetworkAccess: allowNetworkAccess,
                     requiredAssetIDs: requiredAssetIDs,
+                    expectedLibraryPhotoCount: expectedLibraryPhotoCount,
                     continuation: continuation
                 )
             }
@@ -193,19 +411,84 @@ actor PhotoScanEngine {
         mode: CleanupMode,
         allowNetworkAccess: Bool,
         requiredAssetIDs: Set<String>?,
+        expectedLibraryPhotoCount: Int?,
         continuation: AsyncThrowingStream<PhotoScanUpdate, Error>.Continuation
     ) async {
         do {
             isPaused = false
-            let allAssets = try await assetProvider.fetchImageAssets()
-            let targetAssets: [PHAsset]
+            var allAssets = try await assetProvider.fetchImageAssets()
+            if let expectedLibraryPhotoCount,
+               allAssets.count < expectedLibraryPhotoCount
+                    || (expectedLibraryPhotoCount == 0 && allAssets.isEmpty) {
+                // PhotoKit can transiently return an empty or truncated fetch
+                // even though the immediately preceding metadata pass saw more
+                // images. Retry once, then fail honestly instead of publishing
+                // a false completion and moving on to Large Videos. A genuinely
+                // empty library is also checked twice before 0/0 is accepted.
+                try await Task.sleep(nanoseconds: 300_000_000)
+                allAssets = try await assetProvider.fetchImageAssets()
+                guard allAssets.count >= expectedLibraryPhotoCount else {
+                    throw ScanError.photoLibraryTemporarilyUnavailable(
+                        expectedCount: expectedLibraryPhotoCount,
+                        receivedCount: allAssets.count
+                    )
+                }
+            }
             if let requiredAssetIDs {
-                targetAssets = incrementalAssets(
+                let fetchedAssetIDs = Set(
+                    allAssets.lazy.map(\.localIdentifier)
+                )
+                let missingRequiredCount = requiredAssetIDs
+                    .subtracting(fetchedAssetIDs)
+                    .count
+                guard missingRequiredCount == 0 else {
+                    throw ScanError.photoLibraryTemporarilyUnavailable(
+                        expectedCount: requiredAssetIDs.count,
+                        receivedCount:
+                            requiredAssetIDs.count - missingRequiredCount
+                    )
+                }
+            }
+            let targetAssets: [PHAsset]
+            let cachedContextAssets: [
+                (asset: PHAsset, analysis: PhotoScanAssetAnalysis)
+            ]
+            let requiredCount: Int
+            let contextCount: Int
+            let contextCacheMissCount: Int
+            if let requiredAssetIDs {
+                let incrementalPlan = incrementalAssets(
                     from: allAssets,
                     requiredAssetIDs: requiredAssetIDs
                 )
+                let requiredAssets = incrementalPlan.filter {
+                    requiredAssetIDs.contains($0.localIdentifier)
+                }
+                let contextAssets = incrementalPlan.filter {
+                    !requiredAssetIDs.contains($0.localIdentifier)
+                }
+                let cachedContextByID = await mlBridge.cachedAssetAnalyses(
+                    for: contextAssets
+                )
+                cachedContextAssets = contextAssets.compactMap { asset in
+                    cachedContextByID[asset.localIdentifier].map {
+                        (asset, $0)
+                    }
+                }
+                let uncachedContextAssets = contextAssets.filter {
+                    cachedContextByID[$0.localIdentifier] == nil
+                }
+                targetAssets = (requiredAssets + uncachedContextAssets)
+                    .sortedByCreationDate()
+                requiredCount = requiredAssets.count
+                contextCount = contextAssets.count
+                contextCacheMissCount = uncachedContextAssets.count
             } else {
                 targetAssets = prioritizedAssets(from: allAssets, mode: mode)
+                cachedContextAssets = []
+                requiredCount = targetAssets.count
+                contextCount = 0
+                contextCacheMissCount = 0
             }
             let preferenceProfile = await PhotoPreferenceProfileStore.shared.snapshot()
             let totalCount = allAssets.count
@@ -213,6 +496,15 @@ actor PhotoScanEngine {
             let targetAssetIDs = Set(targetAssets.map(\.localIdentifier))
             var evaluatedAssetIDs = Set<String>()
             var unanalyzedAssetIDs = Set<String>()
+            var pairCacheHitCount = 0
+            var pairCacheMissCount = 0
+            var didLogFirstResumedProgress = false
+            let scanStartedAt = Date()
+            #if DEBUG
+            Self.diagnosticsLogger.debug(
+                "target required=\(requiredCount) context=\(contextCount) context_cache_hits=\(cachedContextAssets.count) context_cache_misses=\(contextCacheMissCount)"
+            )
+            #endif
 
             guard !targetAssets.isEmpty else {
                 continuation.yield(
@@ -252,6 +544,7 @@ actor PhotoScanEngine {
             var assetsByID: [String: PHAsset] = [:]
             var descriptorsByID: [String: SimilarityAssetDescriptor] = [:]
             var featurePrintsByID: [String: VNFeaturePrintObservation] = [:]
+            var embeddingsByID: [String: Data] = [:]
             var keeperSignalsByID: [String: KeeperSignals] = [:]
             var pairSignals: [SimilarityPairKey: SimilaritySignals] = [:]
             var pairResults: [SimilarityPairKey: PairEligibilityResult] = [:]
@@ -261,6 +554,30 @@ actor PhotoScanEngine {
             var screenshotFeatureRetentionQueue: [String] = []
             var screenshotFeatureRetentionCursor = 0
             var cachedGroups: [PhotoScanGroupCacheKey: CachedPhotoScanGroup] = [:]
+
+            for cachedContext in cachedContextAssets {
+                let asset = cachedContext.asset
+                let analysis = cachedContext.analysis
+                let descriptor = SimilaritySignalBuilder.descriptor(for: asset)
+                assetsByID[descriptor.id] = asset
+                descriptorsByID[descriptor.id] = descriptor
+                if let embedding = analysis.embedding {
+                    embeddingsByID[descriptor.id] = embedding
+                }
+                if let keeperSignals = analysis.keeperSignals {
+                    keeperSignalsByID[descriptor.id] = keeperSignals
+                }
+                if descriptor.isScreenshot,
+                   let hash = analysis.perceptualHash {
+                    screenshotIDsByHash[hash, default: []].append(descriptor.id)
+                }
+                if let burstIdentifier = descriptor.burstIdentifier {
+                    burstIDsByIdentifier[burstIdentifier, default: []].append(
+                        descriptor.id
+                    )
+                }
+                orderedProcessedIDs.append(descriptor.id)
+            }
 
             var processedCount = 0
             var analyzedPhotoCount = 0
@@ -276,6 +593,16 @@ actor PhotoScanEngine {
             // large-library throughput while remaining bounded so foreground
             // review thumbnails can still use the shared image manager.
             let batchSize = PhotoScanDefaults.analysisBatchSize
+            let analysisCoordinator = PhotoScanAnalysisCoordinator(
+                maximumConcurrentOperationCount: batchSize,
+                // With iCloud downloads allowed a single asset can legitimately
+                // need a 15 s fetch plus a blur-confirmation pass. A 15 s
+                // watchdog would time out work that was about to succeed and
+                // report the photo as unanalyzable.
+                timeoutNanoseconds: allowNetworkAccess
+                    ? 45_000_000_000
+                    : 15_000_000_000
+            )
             let refreshStride = max(batchSize * 2, 8)
             var nextGroupRefreshCount = min(refreshStride, targetCount)
             let assetAnalyzer = self.assetAnalyzer
@@ -301,7 +628,10 @@ actor PhotoScanEngine {
                     targetAssetIDs: targetAssetIDs,
                     committedProcessedPhotoCount: 0,
                     committedAnalyzedPhotoCount: 0,
-                    committedUnanalyzedPhotoCount: 0
+                    committedUnanalyzedPhotoCount: 0,
+                    statusMessage: requiredAssetIDs == nil
+                        ? "Preparing the first photo batch…"
+                        : "Restored saved results. Waiting for the next local or iCloud photo…"
                 )
             )
 
@@ -318,10 +648,13 @@ actor PhotoScanEngine {
                 await withTaskGroup(of: AnalyzedAsset.self) { group in
                     for workItem in workItems {
                         group.addTask {
-                            let featureValue = await assetAnalyzer(
-                                workItem.asset,
-                                allowNetworkAccess
-                            )
+                            let featureValue =
+                                await analysisCoordinator.analyze {
+                                    await assetAnalyzer(
+                                        workItem.asset,
+                                        allowNetworkAccess
+                                    )
+                                }
                             return AnalyzedAsset(
                                 assetID: workItem.asset.localIdentifier,
                                 featureValue: featureValue
@@ -331,43 +664,12 @@ actor PhotoScanEngine {
 
                     for await analysis in group {
                         analyses.append(analysis)
-                        if analysis.featureValue.observation == nil {
+                        if analysis.featureValue.embedding == nil {
                             batchUnanalyzedPhotoCount += 1
                             unanalyzedAssetIDs.insert(analysis.assetID)
                         } else {
                             batchAnalyzedPhotoCount += 1
                         }
-                        let attemptedCount = processedCount + analyses.count
-                        let reviewableCount = PhotoReviewCategoryClassifier.reviewableCount(
-                            groups: latestGroups,
-                            screenshotAssets: screenshotAssets,
-                            blurryAssets: blurryAssets
-                        )
-                        continuation.yield(
-                            PhotoScanUpdate(
-                                mode: mode,
-                                libraryTotalCount: totalCount,
-                                scanTargetCount: targetCount,
-                                processedPhotoCount: attemptedCount,
-                                analyzedPhotoCount: analyzedPhotoCount + batchAnalyzedPhotoCount,
-                                unanalyzedPhotoCount: unanalyzedPhotoCount + batchUnanalyzedPhotoCount,
-                                progressFraction: Double(attemptedCount) / Double(targetCount),
-                                groups: latestGroups,
-                                screenshotAssets: screenshotAssets,
-                                blurryAssets: blurryAssets,
-                                groupsFoundCount: latestGroups.count,
-                                reviewablePhotosCount: reviewableCount,
-                                reclaimableBytesFoundSoFar: latestGroups.totalReclaimableBytes,
-                                hasPartialResults: !latestGroups.isEmpty,
-                                isComplete: false,
-                                evaluatedAssetIDs: evaluatedAssetIDs,
-                                targetAssetIDs: targetAssetIDs,
-                                unanalyzedAssetIDs: unanalyzedAssetIDs,
-                                committedProcessedPhotoCount: processedCount,
-                                committedAnalyzedPhotoCount: analyzedPhotoCount,
-                                committedUnanalyzedPhotoCount: unanalyzedPhotoCount
-                            )
-                        )
                     }
                 }
 
@@ -395,6 +697,9 @@ actor PhotoScanEngine {
                     descriptorsByID[analysis.assetID] = descriptor
                     if let observation = analysis.featureValue.observation {
                         featurePrintsByID[analysis.assetID] = observation
+                    }
+                    if let embedding = analysis.featureValue.embedding {
+                        embeddingsByID[analysis.assetID] = embedding
                     }
                     if let keeperSignals = analysis.featureValue.keeperSignals {
                         keeperSignalsByID[analysis.assetID] = keeperSignals
@@ -445,11 +750,19 @@ actor PhotoScanEngine {
                                 distance: featureDistance(
                                     lhs: featurePrintsByID[analysis.assetID],
                                     rhs: featurePrintsByID[candidateID]
+                                ) ?? PhotoEmbeddingValueDistance.normalizedDistance(
+                                    lhs: embeddingsByID[analysis.assetID],
+                                    rhs: embeddingsByID[candidateID]
                                 ),
                                 wasCacheHit: false
                             )
                         }
                         let distance = distanceResolution.distance
+                        if distanceResolution.wasCacheHit {
+                            pairCacheHitCount += 1
+                        } else {
+                            pairCacheMissCount += 1
+                        }
                         let signals = SimilaritySignals.make(
                             lhs: descriptor,
                             rhs: candidateDescriptor,
@@ -512,7 +825,7 @@ actor PhotoScanEngine {
 
                     if descriptor.isScreenshot {
                         if let hash = analysis.featureValue.perceptualHash,
-                           analysis.featureValue.observation != nil {
+                           analysis.featureValue.embedding != nil {
                             var hashBucket = screenshotIDsByHash[hash, default: []]
                             hashBucket.append(descriptor.id)
                             if hashBucket.count > SimilarityThresholds.maxFeatureComparisonsPerAsset {
@@ -539,6 +852,12 @@ actor PhotoScanEngine {
                         let expiredID = orderedProcessedIDs[expiredIndex]
                         if descriptorsByID[expiredID]?.isScreenshot == false {
                             featurePrintsByID.removeValue(forKey: expiredID)
+                            // Raw embeddings are 8 KB each and are only ever
+                            // consulted for candidates inside this same bounded
+                            // comparison window. Without this eviction a 50k
+                            // library accumulates ~400 MB and gets jetsammed
+                            // mid-scan, losing everything since the checkpoint.
+                            embeddingsByID.removeValue(forKey: expiredID)
                         }
                     }
 
@@ -548,6 +867,7 @@ actor PhotoScanEngine {
                         let expiredID = screenshotFeatureRetentionQueue[screenshotFeatureRetentionCursor]
                         screenshotFeatureRetentionCursor += 1
                         featurePrintsByID.removeValue(forKey: expiredID)
+                        embeddingsByID.removeValue(forKey: expiredID)
                     }
                     if screenshotFeatureRetentionCursor >= 1_000,
                        screenshotFeatureRetentionCursor * 2 >= screenshotFeatureRetentionQueue.count {
@@ -567,8 +887,17 @@ actor PhotoScanEngine {
                     for: batch,
                     embeddings: embeddings
                 )
-                await mlBridge.persistFeatureRecords(featureRecords)
-                await mlBridge.persistPairSimilarities(newPairRecords)
+                let assetAnalysisRecords = analyses.compactMap { analysis in
+                    targetAssetsByID[analysis.assetID].map {
+                        mlBridge.makeAssetAnalysisRecord(
+                            asset: $0,
+                            analysis: analysis.featureValue
+                        )
+                    }
+                }
+                await mlBridge.bufferFeatureRecords(featureRecords)
+                await mlBridge.bufferPairSimilarities(newPairRecords)
+                await mlBridge.bufferAssetAnalyses(assetAnalysisRecords)
 
                 if processedCount == targetCount || processedCount >= nextGroupRefreshCount {
                     latestGroups = await makeGroups(
@@ -595,6 +924,14 @@ actor PhotoScanEngine {
                 )
                 let reclaimableBytes = latestGroups.totalReclaimableBytes
                 let isComplete = processedCount >= targetCount
+                #if DEBUG
+                if requiredAssetIDs != nil && !didLogFirstResumedProgress {
+                    didLogFirstResumedProgress = true
+                    Self.diagnosticsLogger.debug(
+                        "first resumed committed progress latency_ms=\(Date().timeIntervalSince(scanStartedAt) * 1_000)"
+                    )
+                }
+                #endif
                 continuation.yield(
                     PhotoScanUpdate(
                         mode: mode,
@@ -617,7 +954,10 @@ actor PhotoScanEngine {
                         unanalyzedAssetIDs: unanalyzedAssetIDs,
                         committedProcessedPhotoCount: processedCount,
                         committedAnalyzedPhotoCount: analyzedPhotoCount,
-                        committedUnanalyzedPhotoCount: unanalyzedPhotoCount
+                        committedUnanalyzedPhotoCount: unanalyzedPhotoCount,
+                        statusMessage: isComplete
+                            ? nil
+                            : "Analyzing the next bounded photo batch…"
                     )
                 )
                 await Task.yield()
@@ -626,10 +966,18 @@ actor PhotoScanEngine {
             await performMLRetentionAfterSuccessfulScan(
                 activeAssetIDs: Set(allAssets.map(\.localIdentifier))
             )
+            await mlBridge.flushBufferedWrites()
+            #if DEBUG
+            Self.diagnosticsLogger.debug(
+                "scan completed cache_hits=\(pairCacheHitCount) cache_misses=\(pairCacheMissCount) reanalyzed=\(processedCount)"
+            )
+            #endif
             continuation.finish()
         } catch is CancellationError {
+            await mlBridge.flushBufferedWrites()
             continuation.finish(throwing: CancellationError())
         } catch {
+            await mlBridge.flushBufferedWrites()
             continuation.finish(throwing: error)
         }
     }
@@ -658,28 +1006,24 @@ actor PhotoScanEngine {
         _ asset: PHAsset,
         allowNetworkAccess: Bool
     ) async -> PhotoScanAssetAnalysis {
-        var loadedImage = await asset.loadImage(
+        var loadedImage = await PhotoImageRepository.shared.image(
+            for: asset,
             targetSize: CGSize(width: 224, height: 224),
-            deliveryMode: .fastFormat,
-            allowNetwork: allowNetworkAccess,
             contentMode: .aspectFill,
-            // Degraded PhotoKit thumbnails can be soft because the original is
-            // still in iCloud. They are not valid evidence of camera blur.
-            acceptsDegradedResult: false,
-            timeout: 4
+            qualityIntent: .analysisFast,
+            allowNetworkAccess: allowNetworkAccess
         )
         if loadedImage == nil {
             // fastFormat serves pre-generated derivatives; assets without one
             // (fresh imports, some local originals) fail with "no resource
             // found" even though the original is on device. Decoding the
             // original is slower but keeps such photos analyzable.
-            loadedImage = await asset.loadImage(
+            loadedImage = await PhotoImageRepository.shared.image(
+                for: asset,
                 targetSize: CGSize(width: 224, height: 224),
-                deliveryMode: .highQualityFormat,
-                allowNetwork: allowNetworkAccess,
                 contentMode: .aspectFill,
-                acceptsDegradedResult: false,
-                timeout: allowNetworkAccess ? 15 : 6
+                qualityIntent: .analysis,
+                allowNetworkAccess: allowNetworkAccess
             )
         }
         guard let image = loadedImage, let cgImage = image.cgImage else {
@@ -692,43 +1036,52 @@ actor PhotoScanEngine {
             // Confirm a low-resolution blur signal against a larger,
             // non-degraded representation. If it is unavailable locally, leave
             // the asset unanalyzed for blur instead of blaming an iCloud cache.
-            let confirmationImage = await asset.loadImage(
+            let confirmationImage = await PhotoImageRepository.shared.image(
+                for: asset,
                 targetSize: CGSize(width: 1_024, height: 1_024),
-                deliveryMode: .highQualityFormat,
-                allowNetwork: allowNetworkAccess,
                 contentMode: .aspectFit,
-                acceptsDegradedResult: false,
-                timeout: allowNetworkAccess ? 15 : 4
+                qualityIntent: .analysis,
+                allowNetworkAccess: allowNetworkAccess
             )
             keeperSignals = confirmationImage?.cgImage.flatMap {
                 makeKeeperSignals(from: $0, asset: asset)
             }
         }
 
-        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-        let request = PhotoMLBridge.makePinnedFeaturePrintRequest()
-        do {
-            try handler.perform([request])
-            let rawObservation = request.results?.first as? VNFeaturePrintObservation
-            let observation = rawObservation.flatMap {
-                PhotoEmbeddingContract.isCompatibleObservation(
-                    elementCount: $0.elementCount,
-                    byteCount: $0.data.count
-                ) ? $0 : nil
+        let finalizedKeeperSignals = keeperSignals
+        return await PhotoScanSynchronousAnalysisExecutor.shared.run {
+            let handler = VNImageRequestHandler(
+                cgImage: cgImage,
+                options: [:]
+            )
+            let request = PhotoMLBridge.makePinnedFeaturePrintRequest()
+            do {
+                try handler.perform([request])
+                let rawObservation =
+                    request.results?.first
+                    as? VNFeaturePrintObservation
+                let observation = rawObservation.flatMap {
+                    PhotoEmbeddingContract.isCompatibleObservation(
+                        elementCount: $0.elementCount,
+                        byteCount: $0.data.count
+                    ) ? $0 : nil
+                }
+                return PhotoScanAssetAnalysis(
+                    observation: observation,
+                    embedding: observation?.data,
+                    perceptualHash:
+                        makePerceptualHash(from: cgImage),
+                    keeperSignals: finalizedKeeperSignals
+                )
+            } catch {
+                return PhotoScanAssetAnalysis(
+                    observation: nil,
+                    embedding: nil,
+                    perceptualHash:
+                        makePerceptualHash(from: cgImage),
+                    keeperSignals: finalizedKeeperSignals
+                )
             }
-            return PhotoScanAssetAnalysis(
-                observation: observation,
-                embedding: observation?.data,
-                perceptualHash: makePerceptualHash(from: cgImage),
-                keeperSignals: keeperSignals
-            )
-        } catch {
-            return PhotoScanAssetAnalysis(
-                observation: nil,
-                embedding: nil,
-                perceptualHash: makePerceptualHash(from: cgImage),
-                keeperSignals: keeperSignals
-            )
         }
     }
 
@@ -1309,8 +1662,24 @@ actor PhotoScanEngine {
     }
 }
 
-enum ScanError: Error {
+enum ScanError: LocalizedError {
     case permissionDenied
+    case photoLibraryTemporarilyUnavailable(
+        expectedCount: Int,
+        receivedCount: Int
+    )
+
+    var errorDescription: String? {
+        switch self {
+        case .permissionDenied:
+            return "Allow Photos access to start cleanup."
+        case .photoLibraryTemporarilyUnavailable(
+            let expectedCount,
+            let receivedCount
+        ):
+            return "Photos temporarily returned \(receivedCount.formatted()) of \(expectedCount.formatted()) expected images. Try Continue again."
+        }
+    }
 }
 
 enum PhotoScanDefaults {
@@ -1320,6 +1689,50 @@ enum PhotoScanDefaults {
     // This category is review-only. Keep the initial cutoff conservative until
     // device telemetry can separate intentional softness from accidental blur.
     static let blurryPhotoSharpnessCeiling = 0.22
+}
+
+enum PhotoEmbeddingValueDistance {
+    static func normalizedDistance(
+        lhs: Data?,
+        rhs: Data?,
+        embeddingVersion: Int = PhotoEmbeddingContract.embeddingVersion
+    ) -> Double? {
+        guard let lhs,
+              let rhs,
+              let expectedByteCount = PhotoEmbeddingContract.expectedByteCount(
+                  for: embeddingVersion
+              ),
+              lhs.count == expectedByteCount,
+              rhs.count == expectedByteCount else {
+            return nil
+        }
+
+        var squaredDistance = 0.0
+        let stride = MemoryLayout<Float>.stride
+        lhs.withUnsafeBytes { lhsBytes in
+            rhs.withUnsafeBytes { rhsBytes in
+                for offset in Swift.stride(
+                    from: 0,
+                    to: expectedByteCount,
+                    by: stride
+                ) {
+                    let lhsValue = lhsBytes.loadUnaligned(
+                        fromByteOffset: offset,
+                        as: Float.self
+                    )
+                    let rhsValue = rhsBytes.loadUnaligned(
+                        fromByteOffset: offset,
+                        as: Float.self
+                    )
+                    let delta = Double(lhsValue - rhsValue)
+                    squaredDistance += delta * delta
+                }
+            }
+        }
+        guard squaredDistance.isFinite else { return nil }
+        let elementCount = expectedByteCount / stride
+        return sqrt(squaredDistance / Double(elementCount))
+    }
 }
 
 enum PhotoReviewCategory: Equatable, Sendable {

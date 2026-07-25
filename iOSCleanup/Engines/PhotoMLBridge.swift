@@ -16,6 +16,7 @@ struct MLPersistenceHealth: Sendable, Equatable {
 actor PhotoMLBridge {
     static let shared = PhotoMLBridge()
     static let pinnedFeaturePrintRevision = VNGenerateImageFeaturePrintRequestRevision1
+    static let analyzerVersion = 1
 
     private static let logger = Logger(
         subsystem: "com.photoduck.iOSCleanup",
@@ -25,6 +26,16 @@ actor PhotoMLBridge {
     private var persistenceHealthy = true
     private var lastPersistenceError: String?
     private var hasUnconsumedFailureNotice = false
+    private var bufferedFeatureRecords: [PhotoFeatureRecord] = []
+    private var bufferedPairRecords: [PairSimilarityRecord] = []
+    private var bufferedAssetAnalysisRecords: [PhotoAssetAnalysisCacheRecord] = []
+    private var bufferFlushTask: Task<Void, Never>?
+
+    private enum WriteBufferTuning {
+        static let featureFlushCount = 96
+        static let pairFlushCount = 384
+        static let maximumFlushLatencyNanoseconds: UInt64 = 1_500_000_000
+    }
 
     init(store: PhotoMLStore = .shared) {
         self.store = store
@@ -81,6 +92,136 @@ actor PhotoMLBridge {
             recordPersistenceSuccess()
         } catch {
             recordPersistenceFailure(error, operation: "persist pair similarities")
+        }
+    }
+
+    func bufferFeatureRecords(_ records: [PhotoFeatureRecord]) async {
+        guard !records.isEmpty else { return }
+        bufferedFeatureRecords.append(contentsOf: records)
+        if bufferedFeatureRecords.count >= WriteBufferTuning.featureFlushCount {
+            await flushBufferedWrites()
+        } else {
+            scheduleBufferedFlushIfNeeded()
+        }
+    }
+
+    func bufferPairSimilarities(_ records: [PairSimilarityRecord]) async {
+        guard !records.isEmpty else { return }
+        bufferedPairRecords.append(contentsOf: records)
+        if bufferedPairRecords.count >= WriteBufferTuning.pairFlushCount {
+            await flushBufferedWrites()
+        } else {
+            scheduleBufferedFlushIfNeeded()
+        }
+    }
+
+    func bufferAssetAnalyses(
+        _ records: [PhotoAssetAnalysisCacheRecord]
+    ) async {
+        guard !records.isEmpty else { return }
+        bufferedAssetAnalysisRecords.append(contentsOf: records)
+        if bufferedAssetAnalysisRecords.count
+            >= WriteBufferTuning.featureFlushCount {
+            await flushBufferedWrites()
+        } else {
+            scheduleBufferedFlushIfNeeded()
+        }
+    }
+
+    func flushBufferedWrites() async {
+        bufferFlushTask?.cancel()
+        bufferFlushTask = nil
+        let features = bufferedFeatureRecords
+        let pairs = bufferedPairRecords
+        let assetAnalyses = bufferedAssetAnalysisRecords
+        bufferedFeatureRecords.removeAll(keepingCapacity: true)
+        bufferedPairRecords.removeAll(keepingCapacity: true)
+        bufferedAssetAnalysisRecords.removeAll(keepingCapacity: true)
+        await persistFeatureRecords(features)
+        await persistPairSimilarities(pairs)
+        await persistAssetAnalyses(assetAnalyses)
+    }
+
+    func cachedAssetAnalyses(
+        for assets: [PHAsset]
+    ) async -> [String: PhotoScanAssetAnalysis] {
+        guard !assets.isEmpty else { return [:] }
+        let lookups = assets.map {
+            PhotoAssetAnalysisCacheLookup(
+                assetID: $0.localIdentifier,
+                modificationDate: $0.modificationDate,
+                pixelWidth: $0.pixelWidth,
+                pixelHeight: $0.pixelHeight,
+                mediaSubtypesRawValue: UInt64($0.mediaSubtypes.rawValue),
+                analyzerVersion: Self.analyzerVersion,
+                embeddingVersion: PhotoEmbeddingContract.embeddingVersion
+            )
+        }
+        do {
+            try await store.open()
+            let records = try await store.loadValidAssetAnalyses(for: lookups)
+            var result: [String: PhotoScanAssetAnalysis] = [:]
+            result.reserveCapacity(records.count)
+            for (id, record) in records {
+                let keeperSignals = record.keeperSignalsJSON.flatMap {
+                    try? JSONDecoder().decode(KeeperSignals.self, from: $0)
+                }
+                result[id] = PhotoScanAssetAnalysis(
+                    observation: nil,
+                    embedding: record.embedding,
+                    perceptualHash: record.perceptualHash,
+                    keeperSignals: keeperSignals
+                )
+            }
+            recordPersistenceSuccess()
+            return result
+        } catch {
+            recordPersistenceFailure(error, operation: "read asset analysis cache")
+            return [:]
+        }
+    }
+
+    nonisolated func makeAssetAnalysisRecord(
+        asset: PHAsset,
+        analysis: PhotoScanAssetAnalysis
+    ) -> PhotoAssetAnalysisCacheRecord {
+        PhotoAssetAnalysisCacheRecord(
+            assetID: asset.localIdentifier,
+            modificationDate: asset.modificationDate,
+            pixelWidth: asset.pixelWidth,
+            pixelHeight: asset.pixelHeight,
+            mediaSubtypesRawValue: UInt64(asset.mediaSubtypes.rawValue),
+            analyzerVersion: Self.analyzerVersion,
+            embeddingVersion: PhotoEmbeddingContract.embeddingVersion,
+            embedding: analysis.embedding,
+            perceptualHash: analysis.perceptualHash,
+            keeperSignalsJSON: analysis.keeperSignals.flatMap {
+                try? JSONEncoder().encode($0)
+            }
+        )
+    }
+
+    private func persistAssetAnalyses(
+        _ records: [PhotoAssetAnalysisCacheRecord]
+    ) async {
+        guard !records.isEmpty else { return }
+        do {
+            try await store.open()
+            try await store.upsertAssetAnalyses(records)
+            recordPersistenceSuccess()
+        } catch {
+            recordPersistenceFailure(error, operation: "persist asset analyses")
+        }
+    }
+
+    private func scheduleBufferedFlushIfNeeded() {
+        guard bufferFlushTask == nil else { return }
+        bufferFlushTask = Task { [weak self] in
+            try? await Task.sleep(
+                nanoseconds: WriteBufferTuning.maximumFlushLatencyNanoseconds
+            )
+            guard !Task.isCancelled else { return }
+            await self?.flushBufferedWrites()
         }
     }
 

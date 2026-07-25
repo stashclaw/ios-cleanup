@@ -1,6 +1,5 @@
 import SwiftUI
 import Photos
-import Contacts
 
 struct OnboardingView: View {
     @AppStorage("hasOnboarded") private var hasOnboarded = false
@@ -10,19 +9,25 @@ struct OnboardingView: View {
         TabView(selection: $page) {
             WelcomeStep(onNext: { page = 1 })
                 .tag(0)
-            PhotoPermissionStep(onNext: { page = 2 })
+            PhotoPermissionStep(onNext: { hasOnboarded = true })
                 .tag(1)
-            ContactPermissionStep(onDone: { hasOnboarded = true })
-                .tag(2)
         }
-        .tabViewStyle(.page)
-        .indexViewStyle(.page(backgroundDisplayMode: .always))
-        .background(Color.duckBlush.ignoresSafeArea())
-        .onAppear {
-            UIPageControl.appearance().currentPageIndicatorTintColor = UIColor(
-                red: 0.973, green: 0.373, blue: 0.639, alpha: 1) // DuckPink
-            UIPageControl.appearance().pageIndicatorTintColor = UIColor(
-                red: 0.973, green: 0.373, blue: 0.639, alpha: 0.3)
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .background(Color.backgroundBlush.ignoresSafeArea())
+        // Local page dots instead of a global UIPageControl.appearance()
+        // override: every screen owns its own chrome, and the dots use the
+        // accent token rather than hard-coded RGB.
+        .overlay(alignment: .bottom) {
+            HStack(spacing: 8) {
+                ForEach(0..<2, id: \.self) { index in
+                    Circle()
+                        .fill(Color.accentPrimary.opacity(index == page ? 1 : 0.3))
+                        .frame(width: 8, height: 8)
+                }
+            }
+            .padding(.bottom, 16)
+            .animation(.duckSpring, value: page)
+            .accessibilityHidden(true)
         }
     }
 }
@@ -37,18 +42,18 @@ private struct WelcomeStep: View {
             Spacer()
             VStack(spacing: 18) {
                 PhotoDuckIconMark(size: 180)
-                    .shadow(color: Color.duckPink.opacity(0.24), radius: 22, x: 0, y: 12)
+                    .shadow(color: Color.accentPrimary.opacity(0.24), radius: 22, x: 0, y: 12)
                 PhotoDuckBrandLockup(wordmarkHeight: 38, showsIcon: false)
             }
 
             VStack(spacing: 10) {
                 Text("Keep the best. Duck the rest.")
                     .font(.duckDisplay)
-                    .foregroundStyle(Color.duckBerry)
+                    .foregroundStyle(Color.textPrimary)
                     .multilineTextAlignment(.center)
-                Text("Time to tidy up your camera roll!")
+                Text("Time to tidy up your camera roll.")
                     .font(.duckCaption)
-                    .foregroundStyle(Color.duckRose)
+                    .foregroundStyle(Color.textSecondary)
                     .multilineTextAlignment(.center)
             }
 
@@ -71,16 +76,16 @@ private struct PhotoPermissionStep: View {
         VStack(spacing: 28) {
             Spacer()
             PhotoDuckMascotArt(size: 180)
-                .shadow(color: Color.duckPink.opacity(0.18), radius: 20, x: 0, y: 12)
+                .shadow(color: Color.accentPrimary.opacity(0.18), radius: 20, x: 0, y: 12)
 
             VStack(spacing: 10) {
                 Text("Find Photos to Review")
                     .font(.duckDisplay)
-                    .foregroundStyle(Color.duckBerry)
+                    .foregroundStyle(Color.textPrimary)
                     .multilineTextAlignment(.center)
                 Text("Allow access so PhotoDuck can compare photos and prepare review groups on your device.")
                     .font(.duckCaption)
-                    .foregroundStyle(Color.duckRose)
+                    .foregroundStyle(Color.textSecondary)
                     .multilineTextAlignment(.center)
             }
 
@@ -103,7 +108,7 @@ private struct PhotoPermissionStep: View {
                 }
                 Button("Skip for now", action: onNext)
                     .font(.duckCaption)
-                    .foregroundStyle(Color.duckRose)
+                    .foregroundStyle(Color.textSecondary)
                     .frame(minHeight: 44)
             }
             .padding(.horizontal, 32)
@@ -112,56 +117,3 @@ private struct PhotoPermissionStep: View {
     }
 }
 
-// MARK: - Step 3: Contact Permission
-
-private struct ContactPermissionStep: View {
-    let onDone: () -> Void
-    @State private var status = CNContactStore.authorizationStatus(for: .contacts)
-    @Environment(\.openURL) private var openURL
-
-    var body: some View {
-        VStack(spacing: 28) {
-            Spacer()
-            PhotoDuckMascotArt(size: 180)
-                .shadow(color: Color.duckYellow.opacity(0.24), radius: 20, x: 0, y: 12)
-
-            VStack(spacing: 10) {
-                Text("Clean Up Contacts Too")
-                    .font(.duckDisplay)
-                    .foregroundStyle(Color.duckBerry)
-                    .multilineTextAlignment(.center)
-                Text("Contact access lets PhotoDuck find possible duplicates. You can skip this step.")
-                    .font(.duckCaption)
-                    .foregroundStyle(Color.duckRose)
-                    .multilineTextAlignment(.center)
-            }
-
-            Spacer()
-
-            VStack(spacing: 12) {
-                if status == .denied || status == .restricted {
-                    DuckPrimaryButton(title: "Open Settings") {
-                        if let url = URL(string: "app-settings:") { openURL(url) }
-                    }
-                } else if status == .notDetermined {
-                    DuckPrimaryButton(title: "Allow Contacts Access") {
-                        Task {
-                            let store = CNContactStore()
-                            _ = try? await store.requestAccess(for: .contacts)
-                            status = CNContactStore.authorizationStatus(for: .contacts)
-                            onDone()
-                        }
-                    }
-                } else {
-                    DuckPrimaryButton(title: "Let's Go", action: onDone)
-                }
-                Button("Skip for now", action: onDone)
-                    .font(.duckCaption)
-                    .foregroundStyle(Color.duckRose)
-                    .frame(minHeight: 44)
-            }
-            .padding(.horizontal, 32)
-            .padding(.bottom, 60)
-        }
-    }
-}

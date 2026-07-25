@@ -1,5 +1,6 @@
 import Foundation
 import Photos
+import UIKit
 import SwiftUI
 
 enum DeletionManagerError: Error, LocalizedError {
@@ -84,6 +85,7 @@ final class DeletionManager: ObservableObject {
     /// A later request that coalesces into the same batch must not delete them.
     private var pendingProtectedKeeperIDs: Set<String> = []
     private var commitTask: Task<Void, Never>?
+    private var undoWindowBackgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private let undoWindowSeconds: TimeInterval = 10
     private let cleanupStatsStore: CleanupStatsStore
 
@@ -110,7 +112,9 @@ final class DeletionManager: ObservableObject {
 
     func keepBest(from groups: [PhotoGroup]) async throws {
         try PhotoDeletionGuardrails.validate(groups: groups)
-        let assets = uniqueAssets(from: groups.flatMap(\.deleteCandidateAssets))
+        let assets = PhotoAssetIdentity.unique(
+            groups.flatMap(\.deleteCandidateAssets)
+        )
         try await scheduleDelete(
             assets: assets,
             protectedKeeperIDs: Set(groups.compactMap(\.keeperAssetID))
@@ -119,6 +123,25 @@ final class DeletionManager: ObservableObject {
 
     func delete(assets: [PHAsset]) async throws {
         try await scheduleDelete(assets: assets)
+    }
+
+    /// Single-item review surfaces can opt into Photos' system confirmation
+    /// immediately instead of waiting behind PhotoDuck's deferred undo window.
+    func deleteImmediately(assets: [PHAsset]) async throws {
+        let uniqueAssets = PhotoAssetIdentity.unique(assets)
+        guard !uniqueAssets.isEmpty else {
+            throw PhotoDeletionGuardrailError.emptyDeleteCandidateList
+        }
+
+        let freedBytes = estimatedBytes(for: uniqueAssets)
+        try await performDelete(assets: uniqueAssets)
+        totalBytesFreed += freedBytes
+        totalItemsFreed += uniqueAssets.count
+        recordConfirmedDeletion(
+            bytes: freedBytes,
+            itemCount: uniqueAssets.count
+        )
+        DuckHaptics.success()
     }
 
     func undoLast() {
@@ -141,6 +164,82 @@ final class DeletionManager: ObservableObject {
         lastDeletionError = nil
     }
 
+    /// Declining Photos' system "Delete Photos?" confirmation surfaces as
+    /// `PHPhotosError.userCancelled` (3072). That is a deliberate answer, not a
+    /// failure, and must never be reported to the user as an error.
+    static func isUserCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        let nsError = error as NSError
+        return nsError.domain == PHPhotosErrorDomain
+            && nsError.code == PHPhotosError.Code.userCancelled.rawValue
+    }
+
+    /// The undo window is a 10-second sleep. Without a background assertion,
+    /// leaving the app cancels it and the deletion the user was already told
+    /// was happening silently never occurs. The lease keeps the commit alive;
+    /// if iOS reclaims it first, the commit runs immediately instead.
+    func beginUndoWindowLease() {
+        guard undoWindowBackgroundTaskID == .invalid else { return }
+        undoWindowBackgroundTaskID = UIApplication.shared.beginBackgroundTask(
+            withName: "PhotoDuck Undo Window"
+        ) { [weak self] in
+            Task { @MainActor [weak self] in
+                await self?.commitPendingDeletionImmediately()
+            }
+        }
+    }
+
+    func endUndoWindowLease() {
+        guard undoWindowBackgroundTaskID != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(undoWindowBackgroundTaskID)
+        undoWindowBackgroundTaskID = .invalid
+    }
+
+    /// Commits without waiting out the rest of the undo window. Used when iOS
+    /// is about to suspend the app: honouring the already-reported deletion
+    /// beats losing it.
+    func commitPendingDeletionImmediately() async {
+        guard !pendingCommitStarted, !pendingAssets.isEmpty else {
+            endUndoWindowLease()
+            return
+        }
+        commitTask?.cancel()
+        commitTask = nil
+        pendingCommitStarted = true
+
+        let scheduledToastID = toastID
+        let scheduledAssets = pendingAssets
+        let scheduledBytes = pendingFreedBytes
+        do {
+            try await performDelete(assets: scheduledAssets)
+            lastCommittedToastID = scheduledToastID
+            totalBytesFreed += scheduledBytes
+            totalItemsFreed += scheduledAssets.count
+            recordConfirmedDeletion(
+                bytes: scheduledBytes,
+                itemCount: scheduledAssets.count
+            )
+        } catch {
+            let affectedIDs = Set(scheduledAssets.map(\.localIdentifier))
+            if Self.isUserCancellation(error) {
+                restoreAfterDeclinedDeletion(affectedIDs)
+            } else {
+                lastFailedAssetIDs = affectedIDs
+                lastDeletionError = error.localizedDescription
+            }
+        }
+        clearPendingDeletion(for: scheduledToastID)
+        endUndoWindowLease()
+    }
+
+    /// Nothing was removed, so every surface that optimistically hid these
+    /// assets must restore them — the same reconciliation an undo performs.
+    private func restoreAfterDeclinedDeletion(_ assetIDs: Set<String>) {
+        guard !assetIDs.isEmpty else { return }
+        lastUndoneAssetIDs = assetIDs
+        undoEventID = UUID()
+    }
+
     // MARK: - Private
 
     private func scheduleDelete(
@@ -150,13 +249,11 @@ final class DeletionManager: ObservableObject {
         if pendingCommitStarted, let commitTask {
             await commitTask.value
         }
-        guard !assets.isEmpty else {
+        let uniqueRequestedAssets = PhotoAssetIdentity.unique(assets)
+        guard !uniqueRequestedAssets.isEmpty else {
             throw PhotoDeletionGuardrailError.emptyDeleteCandidateList
         }
-        let identifiers = assets.map(\.localIdentifier)
-        guard Set(identifiers).count == identifiers.count else {
-            throw PhotoDeletionGuardrailError.duplicateDeleteCandidateIDs
-        }
+        let identifiers = uniqueRequestedAssets.map(\.localIdentifier)
 
         // Coalescing merges this request into any batch still inside the undo
         // window, so the keeper/delete conflict check must span the merged
@@ -169,7 +266,9 @@ final class DeletionManager: ObservableObject {
             throw PhotoDeletionGuardrailError.crossGroupKeeperConflict
         }
 
-        pendingAssets = uniqueAssets(from: pendingAssets + assets)
+        pendingAssets = PhotoAssetIdentity.unique(
+            pendingAssets + uniqueRequestedAssets
+        )
         pendingProtectedKeeperIDs = mergedKeeperIDs
         pendingFreedBytes = estimatedBytes(for: pendingAssets)
         pendingCommitStarted = false
@@ -184,6 +283,7 @@ final class DeletionManager: ObservableObject {
         toastVisible = true
 
         let scheduledToastID = toastID
+        beginUndoWindowLease()
         commitTask?.cancel()
         commitTask = Task { [weak self, undoWindowSeconds] in
             do {
@@ -211,8 +311,16 @@ final class DeletionManager: ObservableObject {
                 return
             } catch {
                 guard let self, self.toastID == scheduledToastID else { return }
-                self.lastFailedAssetIDs = Set(self.pendingAssets.map(\.localIdentifier))
-                self.lastDeletionError = error.localizedDescription
+                let affectedIDs = Set(self.pendingAssets.map(\.localIdentifier))
+                if Self.isUserCancellation(error) {
+                    // The user declined Photos' confirmation. Restore the
+                    // optimistic UI silently instead of alarming them with
+                    // "Couldn't remove photos" for a deliberate "no".
+                    self.restoreAfterDeclinedDeletion(affectedIDs)
+                } else {
+                    self.lastFailedAssetIDs = affectedIDs
+                    self.lastDeletionError = error.localizedDescription
+                }
                 self.clearPendingDeletion(for: scheduledToastID)
             }
         }
@@ -246,11 +354,7 @@ final class DeletionManager: ObservableObject {
         pendingProtectedKeeperIDs = []
         toastFreedCount = 0
         toastVisible = false
-    }
-
-    private func uniqueAssets(from assets: [PHAsset]) -> [PHAsset] {
-        var seen = Set<String>()
-        return assets.filter { seen.insert($0.localIdentifier).inserted }
+        endUndoWindowLease()
     }
 
     private func estimatedBytes(for assets: [PHAsset]) -> Int64 {

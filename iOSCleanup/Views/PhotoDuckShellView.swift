@@ -2,6 +2,27 @@ import SwiftUI
 import Photos
 import UIKit
 
+enum SimilarPhotosPrimaryAction: Equatable {
+    case pause
+    case resume
+    case freshScan
+    case review
+
+    static func resolve(
+        scanState: HomeViewModel.ScanState,
+        hasResults: Bool
+    ) -> Self {
+        switch scanState {
+        case .scanning:
+            return .pause
+        case .paused:
+            return .resume
+        default:
+            return hasResults ? .review : .freshScan
+        }
+    }
+}
+
 struct PhotoDuckShellView: View {
     @ObservedObject var dashboardModel: HomeViewModel
     @EnvironmentObject private var purchaseManager: PurchaseManager
@@ -10,7 +31,7 @@ struct PhotoDuckShellView: View {
     @State private var selectedTab: Tab = .home
 
     enum Tab: Hashable {
-        case home, similar, contacts, files
+        case home, similar, files
     }
 
     var body: some View {
@@ -33,22 +54,20 @@ struct PhotoDuckShellView: View {
             .tabItem { Label("Similar", systemImage: "photo.stack.fill") }
             .tag(Tab.similar)
 
-            NavigationStack {
-                ContactResultsView(
-                    matches: dashboardModel.contactMatches,
-                    scanState: dashboardModel.contactScanState,
-                    onRefresh: { await dashboardModel.scanContacts(force: true) }
-                )
-                    .environmentObject(purchaseManager)
-            }
-            .tabItem { Label("Contacts", systemImage: "person.2.fill") }
-            .tag(Tab.contacts)
 
             NavigationStack {
                 FileResultsView(
                     files: dashboardModel.largeFiles,
                     scanState: dashboardModel.fileScanState,
-                    onRefresh: { await dashboardModel.scanFiles(force: true) }
+                    scanProgress: dashboardModel.fileScanProgress,
+                    onRefresh: {
+                        await dashboardModel.scanFiles(force: true)
+                    },
+                    onAssetDeleted: {
+                        dashboardModel.removeLargeFileFromResults(
+                            assetID: $0
+                        )
+                    }
                 )
                     .environmentObject(purchaseManager)
             }
@@ -60,8 +79,6 @@ struct PhotoDuckShellView: View {
         .toolbarBackground(.visible, for: .tabBar)
         .onChange(of: selectedTab) { tab in
             switch tab {
-            case .contacts:
-                Task { await dashboardModel.scanContacts() }
             case .files:
                 Task { await dashboardModel.scanFiles() }
             case .home, .similar:
@@ -91,12 +108,10 @@ struct SimilarPhotosDashboardView: View {
     private var similarGroups: [PhotoGroup] { viewModel.photoGroups }
     private var featuredGroups: [PhotoGroup] { Array(similarGroups.prefix(4)) }
     private var totalPhotoCount: Int {
-        Set(similarGroups.flatMap(\.assets).map(\.localIdentifier)).count
+        viewModel.dashboardSummary.groupedPhotoCount
     }
     private var totalReclaimableBytes: Int64 {
-        similarGroups.reduce(into: Int64(0)) { acc, group in
-            acc += group.reclaimableBytes
-        }
+        viewModel.dashboardSummary.reclaimablePhotoBytes
     }
     private var remainingGroups: Int { similarGroups.count }
     private var scanProgress: Double {
@@ -141,7 +156,8 @@ struct SimilarPhotosDashboardView: View {
 
     private var dashboardSubtitle: String {
         if viewModel.scanState == .scanning {
-            return "\(viewModel.scanProgressLabel) · \(viewModel.scanRateLabel)"
+            return viewModel.scanActivityMessage
+                ?? "\(viewModel.scanProgressLabel) · \(viewModel.scanRateLabel)"
         }
         if viewModel.scanState == .paused {
             return "\(viewModel.processedPhotoCount.formatted()) photos scanned so far · continue when ready"
@@ -154,6 +170,37 @@ struct SimilarPhotosDashboardView: View {
 
     private var showsScanDetails: Bool {
         viewModel.scanState == .scanning || viewModel.scanState == .paused
+    }
+
+    private var primaryAction: SimilarPhotosPrimaryAction {
+        SimilarPhotosPrimaryAction.resolve(
+            scanState: viewModel.scanState,
+            hasResults: !similarGroups.isEmpty
+        )
+    }
+
+    private var primaryActionTitle: String {
+        switch primaryAction {
+        case .pause:
+            return "Pause"
+        case .resume:
+            return "Continue"
+        case .freshScan, .review:
+            return "Smart Cleanup"
+        }
+    }
+
+    private func performPrimaryAction() {
+        switch primaryAction {
+        case .pause:
+            viewModel.pauseDeepClean()
+        case .resume:
+            viewModel.resumeDeepClean()
+        case .freshScan:
+            viewModel.restartPhotoScan()
+        case .review:
+            showSwipeMode = true
+        }
     }
 
     var body: some View {
@@ -191,14 +238,19 @@ struct SimilarPhotosDashboardView: View {
                         Button("Pause Deep Clean") { viewModel.pauseDeepClean() }
                     }
                     Button("Smart Cleanup") {
-                        if similarGroups.isEmpty {
-                            Task { await viewModel.scanPhotos() }
-                        } else {
-                            showSwipeMode = true
-                        }
+                        performPrimaryAction()
                     }
+                    .disabled(
+                        viewModel.scanState == .scanning
+                            || viewModel.isCompletingActiveScan
+                    )
                     Button("Review Results") { showReviewResults = true }
-                    Button("Scan Again") { Task { await viewModel.scanPhotos() } }
+                    Button("Scan Again") { viewModel.restartPhotoScan() }
+                        .disabled(
+                            viewModel.scanState == .scanning
+                                || viewModel.scanState == .paused
+                                || viewModel.isCompletingActiveScan
+                        )
 #if DEBUG
                     Divider()
                     Button(isExportingMLData ? "Exporting ML Data..." : "Export ML Training Data") {
@@ -380,11 +432,13 @@ struct SimilarPhotosDashboardView: View {
                 }
             }
 
-            ForEach(Array(featuredGroups.enumerated()), id: \.element.id) { index, group in
+            ForEach(featuredGroups) { group in
                 NavigationLink {
                     PhotoGroupDetailView(
                         group: group,
-                        groupIndex: index,
+                        groupIndex: similarGroups.firstIndex(where: {
+                            $0.id == group.id
+                        }) ?? 0,
                         totalGroups: similarGroups.count
                     )
                     .environmentObject(purchaseManager)
@@ -409,25 +463,21 @@ struct SimilarPhotosDashboardView: View {
                     .font(.duckButton)
                     .foregroundStyle(Color.textSecondary)
                     .frame(maxWidth: .infinity, minHeight: 48)
-                    .background(Color.surface, in: RoundedRectangle(cornerRadius: 16))
+                    .background(Color.surface, in: RoundedRectangle(cornerRadius: DuckRadius.m))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 16)
+                        RoundedRectangle(cornerRadius: DuckRadius.m)
                             .stroke(Color.textSecondary.opacity(0.24), lineWidth: 1)
                     )
             }
 
             Button {
-                if viewModel.scanState == .paused {
-                    viewModel.resumeDeepClean()
-                } else if similarGroups.isEmpty {
-                    Task { await viewModel.scanPhotos() }
-                } else {
-                    showSwipeMode = true
-                }
+                performPrimaryAction()
             } label: {
                 Label(
-                    viewModel.scanState == .paused ? "Continue" : "Smart Cleanup",
-                    systemImage: "sparkles"
+                    primaryActionTitle,
+                    systemImage: primaryAction == .pause
+                        ? "pause.fill"
+                        : "sparkles"
                 )
                 .font(.duckButton)
                 .foregroundStyle(Color.white)
@@ -435,6 +485,7 @@ struct SimilarPhotosDashboardView: View {
                 .background(LinearGradient.duckPrimaryCTA, in: RoundedRectangle(cornerRadius: DuckRadius.m, style: .continuous))
                 .duckPrimaryGlow()
             }
+            .disabled(viewModel.isCompletingActiveScan)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -456,9 +507,17 @@ struct SimilarPhotosDashboardView: View {
                         .multilineTextAlignment(.center)
                 }
 
-                DuckPrimaryButton(title: "Scan for Similar Photos") {
-                    Task { await viewModel.scanPhotos() }
+                DuckPrimaryButton(
+                    title: primaryAction == .resume
+                        ? "Continue Scanning"
+                        : "Scan for Similar Photos"
+                ) {
+                    performPrimaryAction()
                 }
+                .disabled(
+                    viewModel.scanState == .scanning
+                        || viewModel.isCompletingActiveScan
+                )
             }
             .padding(18)
         }
@@ -588,10 +647,11 @@ private struct SimilarGroupPreviewCard: View {
     private func loadThumbnails() async {
         for asset in leadAssets {
             let size = CGSize(width: 360, height: 360)
-            let image = await asset.loadImage(
+            let image = await PhotoImageRepository.shared.image(
+                for: asset,
                 targetSize: size,
-                deliveryMode: .opportunistic,
-                allowNetwork: true
+                qualityIntent: .thumbnail,
+                allowNetworkAccess: false
             )
             if let image {
                 images[asset.localIdentifier] = image
@@ -621,9 +681,9 @@ private struct SimilarGroupPreviewCard: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: DuckRadius.s, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: DuckRadius.s, style: .continuous)
                 .stroke(Color.decorPink.opacity(0.55), lineWidth: 1)
         )
         .overlay(alignment: .topLeading) {
@@ -637,6 +697,6 @@ private struct SimilarGroupPreviewCard: View {
                     .accessibilityHidden(true)
             }
         }
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: DuckRadius.s, style: .continuous))
     }
 }

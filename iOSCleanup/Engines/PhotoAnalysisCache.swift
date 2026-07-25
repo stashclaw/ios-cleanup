@@ -16,6 +16,9 @@ struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
     static let schemaVersion = 7
 
     let schemaVersion: Int
+    /// Monotonic persistence ordering. Version-7 snapshots written by older
+    /// builds decode as generation zero.
+    let persistenceGeneration: UInt64
     let savedAt: Date
     let libraryTotalCount: Int
     let scanTargetCount: Int
@@ -43,9 +46,36 @@ struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
 
     var hasConsistentCompletionState: Bool {
         guard isComplete else { return true }
-        guard scanTargetCount > 0 else { return true }
-        return processedPhotoCount >= scanTargetCount
-            && progressFraction >= 0.999
+        let knownLibraryIDs = Set(libraryAssetIdentifiers).union(
+            libraryAssets.map(\.localIdentifier)
+        )
+        let evaluatedIDs = Set(evaluatedAssetIdentifiers)
+
+        if libraryTotalCount == 0, knownLibraryIDs.isEmpty {
+            return evaluatedIDs.isEmpty
+                && scanTargetCount == 0
+                && processedPhotoCount == 0
+                && progressFraction >= 0.999
+        }
+        guard libraryTotalCount > 0,
+              !knownLibraryIDs.isEmpty,
+              scanTargetCount > 0,
+              processedPhotoCount >= scanTargetCount,
+              progressFraction >= 0.999 else {
+            return false
+        }
+        let knownLibraryCount = max(libraryTotalCount, knownLibraryIDs.count)
+        guard evaluatedIDs.count >= min(scanTargetCount, knownLibraryCount) else {
+            return false
+        }
+        guard cleanupMode == .deepClean else { return true }
+
+        // A completed Deep Clean must cover the complete image inventory, not
+        // merely a nonzero target. This rejects poisoned snapshots such as
+        // "1 / 1 complete" for a 50,000-photo library, which would otherwise
+        // make the incremental planner return an empty work set forever.
+        guard scanTargetCount >= knownLibraryCount else { return false }
+        return knownLibraryIDs.isSubset(of: evaluatedIDs)
     }
 
     func repairingPrematureCompletion(
@@ -89,6 +119,7 @@ struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
 
     init(
         savedAt: Date = Date(),
+        persistenceGeneration: UInt64 = 0,
         libraryTotalCount: Int,
         scanTargetCount: Int,
         processedPhotoCount: Int,
@@ -111,6 +142,7 @@ struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
         libraryAssets: [CachedPhotoAssetMetadata] = []
     ) {
         self.schemaVersion = Self.schemaVersion
+        self.persistenceGeneration = persistenceGeneration
         self.savedAt = savedAt
         self.libraryTotalCount = libraryTotalCount
         self.scanTargetCount = scanTargetCount
@@ -136,6 +168,7 @@ struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion
+        case persistenceGeneration
         case savedAt
         case libraryTotalCount
         case scanTargetCount
@@ -162,6 +195,10 @@ struct CachedPhotoAnalysisSnapshot: Codable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        persistenceGeneration = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .persistenceGeneration
+        ) ?? 0
         savedAt = try container.decode(Date.self, forKey: .savedAt)
         libraryTotalCount = try container.decode(Int.self, forKey: .libraryTotalCount)
         scanTargetCount = try container.decode(Int.self, forKey: .scanTargetCount)
@@ -223,6 +260,7 @@ enum PhotoScanResumePlanner {
         retryAssetIDs: Set<String> = []
     ) -> Set<String>? {
         guard !forceFullRescan, let snapshot else { return nil }
+        guard snapshot.hasConsistentCompletionState else { return nil }
 
         let cachedMetadata = Dictionary(
             uniqueKeysWithValues: snapshot.libraryAssets.map {
@@ -239,10 +277,22 @@ enum PhotoScanResumePlanner {
         if !snapshot.isComplete {
             let evaluatedIDs = Set(snapshot.evaluatedAssetIdentifiers)
             let plannedIDs = Set(snapshot.scanTargetAssetIdentifiers)
+            // A pause/background checkpoint can be written before the scan
+            // engine publishes its first target plan. Treat that checkpoint as
+            // uninitialized work, not as an empty completed target. Returning
+            // nil rebuilds the selected Speed/Deep plan safely.
+            if plannedIDs.isEmpty, !currentAssetIDs.isEmpty {
+                return nil
+            }
             let validPlannedIDs = plannedIDs.intersection(currentAssetIDs)
+            let newIDs = currentAssetIDs.subtracting(
+                snapshot.libraryAssetIdentifiers
+            )
             return validPlannedIDs
                 .subtracting(evaluatedIDs)
-                .union(modifiedIDs.intersection(evaluatedIDs))
+                .union(modifiedIDs)
+                .union(newIDs)
+                .union(retryAssetIDs.intersection(currentAssetIDs))
         }
 
         guard !snapshot.libraryAssetIdentifiers.isEmpty,
@@ -415,9 +465,27 @@ actor PhotoAnalysisCache {
     static let shared = PhotoAnalysisCache()
 
     private static let logger = Logger(subsystem: "com.photoduck.app", category: "PhotoAnalysisCache")
+    private static let maximumCacheBytes = 64 * 1024 * 1024
     private let fileURL: URL
+    private let backupFileURL: URL
     private(set) var persistenceHealthy = true
     private var latestSavedAt: Date = .distantPast
+    private var latestGeneration: UInt64 = 0
+    private var hasHydratedDiskOrdering = false
+    private var pendingSnapshot: CachedPhotoAnalysisSnapshot?
+    private var isWriting = false
+    private var activeWriteGeneration: UInt64 = 0
+    private var flushWaiters: [
+        (generation: UInt64, continuation: CheckedContinuation<Bool, Never>)
+    ] = []
+
+    #if DEBUG
+    private(set) var activeEncodeCount = 0
+    private(set) var maximumObservedActiveEncodeCount = 0
+    private(set) var completedWriteCount = 0
+    private(set) var lastEncodeWriteDuration: TimeInterval = 0
+    private(set) var lastEncodedByteCount = 0
+    #endif
 
     init() {
         let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -430,21 +498,66 @@ actor PhotoAnalysisCache {
             Self.logger.error("Could not create cache directory: \(error.localizedDescription, privacy: .public)")
         }
         fileURL = directory.appendingPathComponent("photo-analysis-cache.json")
+        backupFileURL = directory.appendingPathComponent("photo-analysis-cache.backup.json")
     }
 
     func loadSnapshot() -> CachedPhotoAnalysisSnapshot? {
+        let snapshots = snapshotsOnDisk()
+        hasHydratedDiskOrdering = true
+        guard let newest = newestSnapshot(in: snapshots) else { return nil }
+        recordPersistenceOrdering(from: newest)
+        return newest
+    }
+
+    private func hydrateDiskOrderingIfNeeded() {
+        guard !hasHydratedDiskOrdering else { return }
+        hasHydratedDiskOrdering = true
+        guard let newest = newestSnapshot(in: snapshotsOnDisk()) else {
+            return
+        }
+        recordPersistenceOrdering(from: newest)
+    }
+
+    private func snapshotsOnDisk() -> [CachedPhotoAnalysisSnapshot] {
+        [fileURL, backupFileURL].compactMap { loadSnapshot(from: $0) }
+    }
+
+    private func newestSnapshot(
+        in snapshots: [CachedPhotoAnalysisSnapshot]
+    ) -> CachedPhotoAnalysisSnapshot? {
+        snapshots.max { lhs, rhs in
+            if lhs.persistenceGeneration != rhs.persistenceGeneration {
+                return lhs.persistenceGeneration < rhs.persistenceGeneration
+            }
+            return lhs.savedAt < rhs.savedAt
+        }
+    }
+
+    private func recordPersistenceOrdering(
+        from snapshot: CachedPhotoAnalysisSnapshot
+    ) {
+        latestSavedAt = max(latestSavedAt, snapshot.savedAt)
+        latestGeneration = max(
+            latestGeneration,
+            snapshot.persistenceGeneration
+        )
+    }
+
+    private func loadSnapshot(
+        from candidateURL: URL
+    ) -> CachedPhotoAnalysisSnapshot? {
         let data: Data
         do {
-            data = try Data(contentsOf: fileURL)
-        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-            return nil
-        } catch {
-            persistenceHealthy = false
-            Self.logger.error("Could not read cache: \(error.localizedDescription, privacy: .public)")
-            return nil
-        }
-
-        do {
+            let attributes = try FileManager.default.attributesOfItem(
+                atPath: candidateURL.path
+            )
+            if let byteCount = attributes[.size] as? NSNumber,
+               byteCount.intValue > Self.maximumCacheBytes {
+                persistenceHealthy = false
+                Self.logger.error("Ignoring oversized photo analysis cache")
+                return nil
+            }
+            data = try Data(contentsOf: candidateURL, options: [.mappedIfSafe])
             let snapshot = try JSONDecoder().decode(CachedPhotoAnalysisSnapshot.self, from: data)
             guard snapshot.schemaVersion == CachedPhotoAnalysisSnapshot.schemaVersion else {
                 Self.logger.info("Ignoring cache from schema \(snapshot.schemaVersion)")
@@ -456,8 +569,9 @@ actor PhotoAnalysisCache {
                     "Loaded a cache marked complete before its scan target was processed"
                 )
             }
-            latestSavedAt = max(latestSavedAt, snapshot.savedAt)
             return snapshot
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return nil
         } catch {
             persistenceHealthy = false
             Self.logger.error("Could not decode cache: \(error.localizedDescription, privacy: .public)")
@@ -465,19 +579,167 @@ actor PhotoAnalysisCache {
         }
     }
 
-    func saveSnapshot(_ snapshot: CachedPhotoAnalysisSnapshot) {
-        // Snapshot writes are launched off the main actor. Ignore an older task
-        // that arrives after a newer checkpoint or completed result.
-        guard snapshot.savedAt >= latestSavedAt else { return }
-        do {
-            let data = try JSONEncoder().encode(snapshot)
-            try data.write(to: fileURL, options: [.atomic])
-            latestSavedAt = snapshot.savedAt
-            persistenceHealthy = true
-        } catch {
-            persistenceHealthy = false
-            Self.logger.error("Could not save cache: \(error.localizedDescription, privacy: .public)")
+    /// Enqueues the newest checkpoint and returns immediately. At most one
+    /// encode/write is active and a superseded pending checkpoint is discarded.
+    func scheduleSnapshot(_ snapshot: CachedPhotoAnalysisSnapshot) {
+        enqueue(snapshot)
+    }
+
+    /// Durability boundary used for pause, cancellation, backgrounding, and
+    /// completion. It waits for this generation (or a newer one) to commit.
+    func saveSnapshot(_ snapshot: CachedPhotoAnalysisSnapshot) async {
+        let generation = enqueue(snapshot)
+        guard latestGeneration < generation else { return }
+        _ = await withCheckedContinuation { continuation in
+            flushWaiters.append((generation, continuation))
         }
+    }
+
+    @discardableResult
+    private func enqueue(
+        _ snapshot: CachedPhotoAnalysisSnapshot
+    ) -> UInt64 {
+        // A lifecycle checkpoint can arrive before startup restoration. Read
+        // the on-disk generation first so a targetless scalar-only checkpoint
+        // can never overwrite a newer durable resume snapshot as generation 1.
+        hydrateDiskOrderingIfNeeded()
+        let highestPendingGeneration = pendingSnapshot?.persistenceGeneration ?? 0
+        let highestKnownGeneration = max(
+            latestGeneration,
+            max(highestPendingGeneration, activeWriteGeneration)
+        )
+        let generation: UInt64
+        if snapshot.persistenceGeneration > 0 {
+            guard snapshot.persistenceGeneration > highestKnownGeneration else {
+                return highestKnownGeneration
+            }
+            generation = snapshot.persistenceGeneration
+        } else {
+            generation = highestKnownGeneration + 1
+        }
+        let orderedSnapshot = snapshot.withPersistenceGeneration(generation)
+        if pendingSnapshot == nil
+            || generation >= (pendingSnapshot?.persistenceGeneration ?? 0) {
+            pendingSnapshot = orderedSnapshot
+        }
+        startWriterIfNeeded()
+        return generation
+    }
+
+    private func startWriterIfNeeded() {
+        guard !isWriting, pendingSnapshot != nil else { return }
+        isWriting = true
+        Task { await drainPendingSnapshots() }
+    }
+
+    private func drainPendingSnapshots() async {
+        while let snapshot = pendingSnapshot {
+            pendingSnapshot = nil
+            activeWriteGeneration = snapshot.persistenceGeneration
+            #if DEBUG
+            activeEncodeCount += 1
+            maximumObservedActiveEncodeCount = max(
+                maximumObservedActiveEncodeCount,
+                activeEncodeCount
+            )
+            #endif
+            let fileURL = self.fileURL
+            let backupFileURL = self.backupFileURL
+            let maximumCacheBytes = Self.maximumCacheBytes
+            let outcome: PhotoAnalysisSnapshotWriteOutcome = await Task.detached(
+                priority: .utility
+            ) {
+                let startedAt = Date().timeIntervalSinceReferenceDate
+                do {
+                    let data = try JSONEncoder().encode(snapshot)
+                    guard data.count <= maximumCacheBytes else {
+                        throw PhotoAnalysisCacheError.snapshotTooLarge(data.count)
+                    }
+                    let primaryCandidate = photoAnalysisCacheCandidate(
+                        at: fileURL,
+                        maximumCacheBytes: maximumCacheBytes
+                    )
+                    let backupCandidate = photoAnalysisCacheCandidate(
+                        at: backupFileURL,
+                        maximumCacheBytes: maximumCacheBytes
+                    )
+                    // The backup can legitimately be newer than the primary
+                    // after recovery. Never replace that recovery point with a
+                    // stale primary before the new primary is durable.
+                    if let primaryCandidate {
+                        let backupIsNewer = photoAnalysisCacheSnapshot(
+                            backupCandidate?.snapshot,
+                            isNewerThan: primaryCandidate.snapshot
+                        )
+                        if !backupIsNewer {
+                            try primaryCandidate.data.write(
+                                to: backupFileURL,
+                                options: [.atomic]
+                            )
+                        }
+                    }
+                    try data.write(to: fileURL, options: [.atomic])
+                    return PhotoAnalysisSnapshotWriteOutcome(
+                        byteCount: data.count,
+                        duration: Date().timeIntervalSinceReferenceDate - startedAt,
+                        errorDescription: nil
+                    )
+                } catch {
+                    return PhotoAnalysisSnapshotWriteOutcome(
+                        byteCount: 0,
+                        duration: Date().timeIntervalSinceReferenceDate - startedAt,
+                        errorDescription: error.localizedDescription
+                    )
+                }
+            }.value
+            #if DEBUG
+            activeEncodeCount -= 1
+            #endif
+
+            if outcome.errorDescription == nil {
+                latestGeneration = max(
+                    latestGeneration,
+                    snapshot.persistenceGeneration
+                )
+                latestSavedAt = max(latestSavedAt, snapshot.savedAt)
+                persistenceHealthy = true
+                #if DEBUG
+                completedWriteCount += 1
+                lastEncodeWriteDuration = outcome.duration
+                lastEncodedByteCount = outcome.byteCount
+                Self.logger.debug(
+                    "Committed checkpoint generation \(snapshot.persistenceGeneration) bytes=\(outcome.byteCount) duration_ms=\(outcome.duration * 1_000)"
+                )
+                #endif
+            } else {
+                persistenceHealthy = false
+                Self.logger.error(
+                    "Could not save cache: \(outcome.errorDescription ?? "unknown error", privacy: .public)"
+                )
+            }
+            activeWriteGeneration = 0
+            resumeEligibleWaiters(writeSucceeded: outcome.errorDescription == nil)
+        }
+        isWriting = false
+        // An enqueue can interleave after the loop condition but before the
+        // writer flag is cleared.
+        startWriterIfNeeded()
+    }
+
+    private func resumeEligibleWaiters(writeSucceeded: Bool) {
+        var remaining: [
+            (generation: UInt64, continuation: CheckedContinuation<Bool, Never>)
+        ] = []
+        for waiter in flushWaiters {
+            if latestGeneration >= waiter.generation {
+                waiter.continuation.resume(returning: true)
+            } else if !writeSucceeded && pendingSnapshot == nil {
+                waiter.continuation.resume(returning: false)
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        flushWaiters = remaining
     }
 
     func rehydrateGroups(from snapshot: CachedPhotoAnalysisSnapshot) -> [PhotoGroup] {
@@ -494,12 +756,105 @@ actor PhotoAnalysisCache {
     }
 
     func rehydrateAssets(with identifiers: [String]) -> [PHAsset] {
-        guard !identifiers.isEmpty else { return [] }
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
+        let uniqueIdentifiers = PhotoAssetIdentity.uniqueIdentifiers(
+            identifiers
+        )
+        guard !uniqueIdentifiers.isEmpty else { return [] }
+        let result = PHAsset.fetchAssets(
+            withLocalIdentifiers: uniqueIdentifiers,
+            options: nil
+        )
         var assetsByID: [String: PHAsset] = [:]
         result.enumerateObjects { asset, _, _ in
             assetsByID[asset.localIdentifier] = asset
         }
-        return identifiers.compactMap { assetsByID[$0] }
+        return uniqueIdentifiers.compactMap { assetsByID[$0] }
+    }
+}
+
+private enum PhotoAnalysisCacheError: LocalizedError {
+    case snapshotTooLarge(Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .snapshotTooLarge(let byteCount):
+            return "Photo analysis cache is too large to persist safely (\(byteCount) bytes)."
+        }
+    }
+}
+
+private struct PhotoAnalysisSnapshotWriteOutcome: Sendable {
+    let byteCount: Int
+    let duration: TimeInterval
+    let errorDescription: String?
+}
+
+private struct PhotoAnalysisCacheDiskCandidate: Sendable {
+    let data: Data
+    let snapshot: CachedPhotoAnalysisSnapshot
+}
+
+private func photoAnalysisCacheCandidate(
+    at url: URL,
+    maximumCacheBytes: Int
+) -> PhotoAnalysisCacheDiskCandidate? {
+    guard let attributes = try? FileManager.default.attributesOfItem(
+        atPath: url.path
+    ),
+    let byteCount = attributes[.size] as? NSNumber,
+    byteCount.intValue <= maximumCacheBytes,
+    let data = try? Data(contentsOf: url, options: [.mappedIfSafe]),
+    let snapshot = try? JSONDecoder().decode(
+        CachedPhotoAnalysisSnapshot.self,
+        from: data
+    ),
+    snapshot.schemaVersion == CachedPhotoAnalysisSnapshot.schemaVersion else {
+        return nil
+    }
+    return PhotoAnalysisCacheDiskCandidate(
+        data: data,
+        snapshot: snapshot
+    )
+}
+
+private func photoAnalysisCacheSnapshot(
+    _ candidate: CachedPhotoAnalysisSnapshot?,
+    isNewerThan reference: CachedPhotoAnalysisSnapshot
+) -> Bool {
+    guard let candidate else { return false }
+    if candidate.persistenceGeneration != reference.persistenceGeneration {
+        return candidate.persistenceGeneration > reference.persistenceGeneration
+    }
+    return candidate.savedAt > reference.savedAt
+}
+
+extension CachedPhotoAnalysisSnapshot {
+    func withPersistenceGeneration(
+        _ generation: UInt64
+    ) -> CachedPhotoAnalysisSnapshot {
+        CachedPhotoAnalysisSnapshot(
+            savedAt: savedAt,
+            persistenceGeneration: generation,
+            libraryTotalCount: libraryTotalCount,
+            scanTargetCount: scanTargetCount,
+            processedPhotoCount: processedPhotoCount,
+            analyzedPhotoCount: analyzedPhotoCount,
+            unanalyzedPhotoCount: unanalyzedPhotoCount,
+            progressFraction: progressFraction,
+            groupsFoundCount: groupsFoundCount,
+            reviewablePhotosCount: reviewablePhotosCount,
+            reclaimableBytesFoundSoFar: reclaimableBytesFoundSoFar,
+            cleanupMode: cleanupMode,
+            resultsFreshnessState: resultsFreshnessState,
+            isComplete: isComplete,
+            evaluatedAssetIdentifiers: evaluatedAssetIdentifiers,
+            scanTargetAssetIdentifiers: scanTargetAssetIdentifiers,
+            unanalyzedAssetIdentifiers: unanalyzedAssetIdentifiers,
+            groups: groups,
+            screenshotAssetIdentifiers: screenshotAssetIdentifiers,
+            blurryAssetIdentifiers: blurryAssetIdentifiers,
+            libraryAssetIdentifiers: libraryAssetIdentifiers,
+            libraryAssets: libraryAssets
+        )
     }
 }

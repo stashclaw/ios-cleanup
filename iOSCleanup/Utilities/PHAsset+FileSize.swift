@@ -258,30 +258,270 @@ struct PHAssetRepresentativeFile: Sendable, Equatable {
     let displayName: String
     let byteSize: Int64
     let byteSizeIsEstimated: Bool
+    let wasCached: Bool
 }
 
-private struct AssetFileSizeCacheKey: Hashable {
+struct AssetFileSizeCacheKey: Codable, Hashable, Sendable {
     let localIdentifier: String
     let modificationDate: Date?
 }
 
+enum AssetFileSizeProvenance: String, Codable, Sendable {
+    case measuredCurrentVersion
+    case estimated
+}
+
+struct AssetFileSizeRecord: Codable, Equatable, Sendable {
+    let bytes: Int64
+    let provenance: AssetFileSizeProvenance
+    let savedAt: Date
+
+    var isEstimated: Bool {
+        provenance == .estimated
+    }
+}
+
 private final class AssetFileSizeCache: @unchecked Sendable {
     static let shared = AssetFileSizeCache()
-
-    private let lock = NSLock()
-    private var values: [AssetFileSizeCacheKey: Int64] = [:]
-
-    func value(for key: AssetFileSizeCacheKey) -> Int64? {
-        lock.lock()
-        defer { lock.unlock() }
-        return values[key]
+    private struct Entry {
+        let value: AssetFileSizeRecord
+        var accessOrdinal: UInt64
     }
 
-    func store(_ value: Int64, for key: AssetFileSizeCacheKey) {
-        guard value > 0 else { return }
+    private let lock = NSLock()
+    private let maximumEntryCount = 2_048
+    private var values: [AssetFileSizeCacheKey: Entry] = [:]
+    private var accessOrdinal: UInt64 = 0
+
+    func value(for key: AssetFileSizeCacheKey) -> AssetFileSizeRecord? {
         lock.lock()
-        values[key] = value
+        defer { lock.unlock() }
+        guard var entry = values[key] else { return nil }
+        accessOrdinal &+= 1
+        entry.accessOrdinal = accessOrdinal
+        values[key] = entry
+        return entry.value
+    }
+
+    func store(_ value: AssetFileSizeRecord, for key: AssetFileSizeCacheKey) {
+        guard value.bytes > 0 else { return }
+        lock.lock()
+        accessOrdinal &+= 1
+        values[key] = Entry(value: value, accessOrdinal: accessOrdinal)
+        if values.count > maximumEntryCount,
+           let leastRecentlyUsedKey = values.min(by: {
+               $0.value.accessOrdinal < $1.value.accessOrdinal
+           })?.key {
+            values.removeValue(forKey: leastRecentlyUsedKey)
+        }
         lock.unlock()
+    }
+}
+
+actor AssetFileSizeRepository {
+    static let shared = AssetFileSizeRepository()
+    static let schemaVersion = 1
+    private static let maximumFileBytes = 8 * 1_024 * 1_024
+
+    private struct PersistentEntry: Codable, Sendable {
+        let key: AssetFileSizeCacheKey
+        let record: AssetFileSizeRecord
+        let accessOrdinal: UInt64
+    }
+
+    private struct Snapshot: Codable, Sendable {
+        let schemaVersion: Int
+        let entries: [PersistentEntry]
+    }
+
+    private struct StoredEntry: Sendable {
+        let record: AssetFileSizeRecord
+        var accessOrdinal: UInt64
+    }
+
+    private let fileURL: URL
+    private let maximumEntryCount: Int
+    private var entries: [AssetFileSizeCacheKey: StoredEntry] = [:]
+    private var accessOrdinal: UInt64 = 0
+    private var isLoaded = false
+    private var loadTask: Task<Snapshot?, Never>?
+    private var writeTask: Task<Void, Never>?
+    private var needsWrite = false
+
+    init(fileURL: URL? = nil, maximumEntryCount: Int = 10_000) {
+        if let fileURL {
+            self.fileURL = fileURL
+        } else {
+            let baseURL = FileManager.default.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            ).first ?? FileManager.default.temporaryDirectory
+            self.fileURL = baseURL
+                .appendingPathComponent("PhotoDuck", isDirectory: true)
+                .appendingPathComponent("asset-file-sizes-v1.json")
+        }
+        self.maximumEntryCount = max(maximumEntryCount, 1)
+    }
+
+    func value(for key: AssetFileSizeCacheKey) async -> AssetFileSizeRecord? {
+        await loadIfNeeded()
+        guard var entry = entries[key] else { return nil }
+        accessOrdinal &+= 1
+        entry.accessOrdinal = accessOrdinal
+        entries[key] = entry
+        AssetFileSizeCache.shared.store(entry.record, for: key)
+        return entry.record
+    }
+
+    func store(
+        _ record: AssetFileSizeRecord,
+        for key: AssetFileSizeCacheKey
+    ) async {
+        guard record.bytes > 0 else { return }
+        await loadIfNeeded()
+        accessOrdinal &+= 1
+        entries[key] = StoredEntry(
+            record: record,
+            accessOrdinal: accessOrdinal
+        )
+        evictIfNeeded()
+        AssetFileSizeCache.shared.store(record, for: key)
+        scheduleWrite()
+    }
+
+    /// Loads durable values into the bounded synchronous front cache used by
+    /// model aggregation and deletion summaries.
+    func warmMemoryCache() async {
+        await loadIfNeeded()
+        for (key, entry) in entries {
+            AssetFileSizeCache.shared.store(entry.record, for: key)
+        }
+    }
+
+    func retain(localIdentifiers: Set<String>) async {
+        await loadIfNeeded()
+        let previousCount = entries.count
+        entries = entries.filter {
+            localIdentifiers.contains($0.key.localIdentifier)
+        }
+        if entries.count != previousCount {
+            scheduleWrite()
+        }
+    }
+
+    func flush() async {
+        await loadIfNeeded()
+        needsWrite = true
+        if writeTask == nil {
+            beginWrite()
+        }
+        while let task = writeTask {
+            await task.value
+        }
+    }
+
+    #if DEBUG
+    func debugEntryCount() async -> Int {
+        await loadIfNeeded()
+        return entries.count
+    }
+    #endif
+
+    private func loadIfNeeded() async {
+        guard !isLoaded else { return }
+        let task: Task<Snapshot?, Never>
+        if let loadTask {
+            task = loadTask
+        } else {
+            let fileURL = fileURL
+            task = Task.detached(priority: .utility) {
+                guard let attributes = try? FileManager.default.attributesOfItem(
+                    atPath: fileURL.path
+                ),
+                let fileBytes = attributes[.size] as? NSNumber,
+                fileBytes.intValue <= Self.maximumFileBytes,
+                let data = try? Data(contentsOf: fileURL, options: [.mappedIfSafe]),
+                let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data),
+                snapshot.schemaVersion == Self.schemaVersion else {
+                    return nil
+                }
+                return snapshot
+            }
+            loadTask = task
+        }
+
+        let snapshot = await task.value
+        guard !isLoaded else { return }
+        if let snapshot {
+            entries.reserveCapacity(min(snapshot.entries.count, maximumEntryCount))
+            for item in snapshot.entries
+                .sorted(by: { $0.accessOrdinal > $1.accessOrdinal })
+                .prefix(maximumEntryCount) {
+                entries[item.key] = StoredEntry(
+                    record: item.record,
+                    accessOrdinal: item.accessOrdinal
+                )
+                accessOrdinal = max(accessOrdinal, item.accessOrdinal)
+            }
+        }
+        isLoaded = true
+        loadTask = nil
+    }
+
+    private func evictIfNeeded() {
+        while entries.count > maximumEntryCount,
+              let leastRecentlyUsed = entries.min(by: {
+                  $0.value.accessOrdinal < $1.value.accessOrdinal
+              }) {
+            entries.removeValue(forKey: leastRecentlyUsed.key)
+        }
+    }
+
+    private func scheduleWrite() {
+        needsWrite = true
+        guard writeTask == nil else { return }
+        beginWrite()
+    }
+
+    private func beginWrite() {
+        guard needsWrite else { return }
+        needsWrite = false
+        let snapshot = Snapshot(
+            schemaVersion: Self.schemaVersion,
+            entries: entries.map {
+                PersistentEntry(
+                    key: $0.key,
+                    record: $0.value.record,
+                    accessOrdinal: $0.value.accessOrdinal
+                )
+            }
+        )
+        let fileURL = fileURL
+        writeTask = Task.detached(priority: .utility) { [weak self] in
+            do {
+                let data = try JSONEncoder().encode(snapshot)
+                guard data.count <= Self.maximumFileBytes else {
+                    await self?.writeDidFinish()
+                    return
+                }
+                try FileManager.default.createDirectory(
+                    at: fileURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try data.write(to: fileURL, options: [.atomic])
+            } catch {
+                // Size metadata is an optimization. A future measurement can
+                // recreate the cache if persistence is unavailable.
+            }
+            await self?.writeDidFinish()
+        }
+    }
+
+    private func writeDidFinish() {
+        writeTask = nil
+        if needsWrite {
+            beginWrite()
+        }
     }
 }
 
@@ -350,6 +590,18 @@ extension PHAsset {
         let mediaKind = AssetMediaKind(mediaType)
         let candidates = PHAssetResource.assetResources(for: self)
             .map(AssetResourceSizeCandidate.init(resource:))
+        let cacheKey = fileSizeCacheKey
+        if let cached = await AssetFileSizeRepository.shared.value(for: cacheKey) {
+            return PHAssetRepresentativeFile(
+                displayName: AssetResourceSizePolicy.displayFilename(
+                    from: candidates,
+                    mediaKind: mediaKind
+                ),
+                byteSize: cached.bytes,
+                byteSizeIsEstimated: cached.isEstimated,
+                wasCached: true
+            )
+        }
         let measuredBytes: Int64?
         if mediaKind == .video {
             measuredBytes = await currentVideoURLByteSize(allowNetworkAccess: allowNetworkAccess)
@@ -364,7 +616,12 @@ extension PHAsset {
             pixelHeight: pixelHeight,
             duration: duration
         )
-        AssetFileSizeCache.shared.store(resolution.bytes, for: fileSizeCacheKey)
+        let record = AssetFileSizeRecord(
+            bytes: resolution.bytes,
+            provenance: resolution.isEstimated ? .estimated : .measuredCurrentVersion,
+            savedAt: Date()
+        )
+        await AssetFileSizeRepository.shared.store(record, for: cacheKey)
 
         return PHAssetRepresentativeFile(
             displayName: AssetResourceSizePolicy.displayFilename(
@@ -372,7 +629,8 @@ extension PHAsset {
                 mediaKind: mediaKind
             ),
             byteSize: resolution.bytes,
-            byteSizeIsEstimated: resolution.isEstimated
+            byteSizeIsEstimated: resolution.isEstimated,
+            wasCached: false
         )
     }
 
@@ -383,7 +641,7 @@ extension PHAsset {
     /// policy without synchronous PHAssetResource metadata work.
     var estimatedFileSize: Int64 {
         if let cached = AssetFileSizeCache.shared.value(for: fileSizeCacheKey) {
-            return cached
+            return cached.bytes
         }
         return AssetResourceSizePolicy.estimatedByteCount(
             mediaKind: AssetMediaKind(mediaType),

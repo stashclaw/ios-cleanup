@@ -354,7 +354,7 @@ private struct PhotoGroupAssetCell: View {
                             .resizable()
                             .scaledToFit()
                     } else {
-                        Color.gray.opacity(0.25)
+                        Color.decorPink.opacity(0.25)
                             .overlay(ProgressView().tint(.white))
                     }
                 }
@@ -390,13 +390,12 @@ private struct PhotoGroupAssetCell: View {
                 .padding(.bottom, 8)
             }
             .task(id: "\(Int(targetSize.width))x\(Int(targetSize.height))") {
-                image = await asset.loadImage(
+                image = await PhotoImageRepository.shared.image(
+                    for: asset,
                     targetSize: targetSize,
-                    deliveryMode: .highQualityFormat,
-                    allowNetwork: true,
                     contentMode: .aspectFit,
-                    acceptsDegradedResult: false,
-                    timeout: 20
+                    qualityIntent: .review,
+                    allowNetworkAccess: true
                 )
             }
         }
@@ -590,12 +589,12 @@ private struct ZoomablePhotoCanvas: View {
             .clipped()
         }
         .task {
-            image = await asset.loadImage(
+            image = await PhotoImageRepository.shared.image(
+                for: asset,
                 targetSize: PHImageManagerMaximumSize,
-                deliveryMode: .highQualityFormat,
-                allowNetwork: true,
                 contentMode: .aspectFit,
-                acceptsDegradedResult: false
+                qualityIntent: .fullscreen,
+                allowNetworkAccess: true
             )
         }
         .accessibilityLabel("Fullscreen photo comparison")
@@ -617,7 +616,7 @@ private struct CompareThumbnail: View {
                     .resizable()
                     .scaledToFill()
             } else {
-                Color.gray.opacity(0.35)
+                Color.decorPink.opacity(0.3)
                     .overlay(ProgressView().tint(.white))
             }
         }
@@ -638,12 +637,12 @@ private struct CompareThumbnail: View {
             }
         }
         .task {
-            image = await asset.loadImage(
+            image = await PhotoImageRepository.shared.image(
+                for: asset,
                 targetSize: CGSize(width: 144, height: 144),
-                deliveryMode: .opportunistic,
-                allowNetwork: true,
                 contentMode: .aspectFill,
-                acceptsDegradedResult: true
+                qualityIntent: .thumbnail,
+                allowNetworkAccess: false
             )
         }
     }

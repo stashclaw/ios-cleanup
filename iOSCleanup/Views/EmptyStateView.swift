@@ -21,17 +21,17 @@ struct EmptyStateView: View {
         DuckCard {
             VStack(spacing: 16) {
                 if style == .celebration {
-                    StatusBadge(title: "Clean outcome", accent: .duckBerry)
+                    StatusBadge(title: "Clean outcome", accent: .textPrimary)
                         .accessibilityHidden(true)
                 }
 
                 PhotoDuckMascotArt(size: 120)
-                    .shadow(color: .duckPink.opacity(0.18), radius: 16, x: 0, y: 10)
+                    .shadow(color: .accentPrimary.opacity(0.18), radius: 16, x: 0, y: 10)
 
                 VStack(spacing: 8) {
                     Text(title)
                         .font(.duckTitle)
-                        .foregroundStyle(Color.duckBerry)
+                        .foregroundStyle(Color.textPrimary)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityAddTraits(.isHeader)
@@ -39,7 +39,7 @@ struct EmptyStateView: View {
                     if !message.isEmpty {
                         Text(message)
                             .font(.duckBody)
-                            .foregroundStyle(Color.duckBerry)
+                            .foregroundStyle(Color.textPrimary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 24)
                             .fixedSize(horizontal: false, vertical: true)
@@ -49,10 +49,10 @@ struct EmptyStateView: View {
                 if style == .celebration {
                     Label("Ready", systemImage: icon)
                         .font(.duckCaption.weight(.semibold))
-                        .foregroundStyle(Color.duckBerry)
+                        .foregroundStyle(Color.textPrimary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .background(Color.duckBlush, in: Capsule())
+                        .background(Color.backgroundBlush, in: Capsule())
                         .accessibilityLabel("Status: ready")
                 }
 
@@ -65,6 +65,6 @@ struct EmptyStateView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.duckBlush)
+        .background(Color.backgroundBlush)
     }
 }

@@ -97,9 +97,9 @@ struct SwipeModeView: View {
                         estimatedFileSize: viewModel.fileSize(for: asset.localIdentifier),
                         monthHeader: currentMonthHeader
                     )
-                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: DuckRadius.l, style: .continuous))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        RoundedRectangle(cornerRadius: DuckRadius.l, style: .continuous)
                             .stroke(Color.white.opacity(0.14), lineWidth: 1)
                     }
                     .shadow(color: .black.opacity(0.35), radius: 14, x: 0, y: 8)
@@ -126,7 +126,7 @@ struct SwipeModeView: View {
                         swipeCue(
                             title: "Delete",
                             icon: "trash.fill",
-                            color: .duckDanger,
+                            color: .danger,
                             intensity: deleteCueIntensity
                         )
                         .padding(34)
@@ -135,7 +135,7 @@ struct SwipeModeView: View {
                         swipeCue(
                             title: "Keep",
                             icon: "heart.fill",
-                            color: .duckSuccess,
+                            color: .success,
                             intensity: keepCueIntensity
                         )
                         .padding(34)
@@ -154,13 +154,13 @@ struct SwipeModeView: View {
             HStack {
                 StatusBadge(
                     title: "\(viewModel.reviewedCount) / \(viewModel.totalReviewableCount) reviewed",
-                    accent: .duckPink
+                    accent: .accentPrimary
                 )
                 Spacer()
-                StatusBadge(title: "\(viewModel.remainingCount) left", accent: .duckRose)
+                StatusBadge(title: "\(viewModel.remainingCount) left", accent: .textSecondary)
             }
 
-            DuckProgressBar(progress: viewModel.progress, color: .duckPink)
+            DuckProgressBar(progress: viewModel.progress, color: .accentPrimary)
                 .frame(height: 4)
         }
         .padding(.horizontal, 16)
@@ -175,7 +175,7 @@ struct SwipeModeView: View {
                     .font(.duckButton)
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity, minHeight: 52)
-                    .background(Color.duckDanger, in: RoundedRectangle(cornerRadius: 16))
+                    .background(Color.danger, in: RoundedRectangle(cornerRadius: DuckRadius.m))
             }
             .accessibilityLabel("Delete photo")
             .disabled(viewModel.isTransitioning)
@@ -185,7 +185,7 @@ struct SwipeModeView: View {
                     .font(.duckButton)
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity, minHeight: 52)
-                    .background(Color.duckSuccess, in: RoundedRectangle(cornerRadius: 16))
+                    .background(Color.success, in: RoundedRectangle(cornerRadius: DuckRadius.m))
             }
             .accessibilityLabel("Keep photo")
             .disabled(viewModel.isTransitioning)
@@ -278,13 +278,13 @@ private struct DuckModeCompletion: View {
 
                 Text(completionTitle)
                     .font(.duckTitle)
-                    .foregroundStyle(Color.duckBerry)
+                    .foregroundStyle(Color.textPrimary)
                     .multilineTextAlignment(.center)
 
                 if isEmptyReview {
                     Text("There are no high-confidence cleanup suggestions in this review. Similar photos that need judgment stay review-only.")
                         .font(.duckBody)
-                        .foregroundStyle(Color.duckRose)
+                        .foregroundStyle(Color.textSecondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 28)
                 }
@@ -292,14 +292,14 @@ private struct DuckModeCompletion: View {
                 if viewModel.pendingDeleteBytes > 0 {
                     Text("Potential space: \(pendingGB)")
                         .font(.duckDisplay)
-                        .foregroundStyle(Color.duckPink)
+                        .foregroundStyle(Color.accentPrimary)
                 }
 
                 if viewModel.hasPendingDeletes {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Selected for Recently Deleted")
                             .font(.duckBody.weight(.semibold))
-                            .foregroundStyle(Color.duckBerry)
+                            .foregroundStyle(Color.textPrimary)
 
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(spacing: 8) {
@@ -330,13 +330,13 @@ private struct DuckModeCompletion: View {
 
                         Text("Potential space is reclaimed after Recently Deleted is emptied.")
                             .font(.duckCaption)
-                            .foregroundStyle(Color.duckRose)
+                            .foregroundStyle(Color.textSecondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 32)
                     }
 
                     if !isEmptyReview {
-                        DuckOutlineButton(title: "Review again", color: .duckRose) {
+                        DuckOutlineButton(title: "Review again", color: .textSecondary) {
                             viewModel.resetQueue()
                         }
                         .padding(.horizontal, 20)
@@ -345,12 +345,12 @@ private struct DuckModeCompletion: View {
 
                 Spacer(minLength: 32)
 
-                DuckOutlineButton(title: "✓ Back to Library", color: .duckPink) { onDismiss() }
+                DuckOutlineButton(title: "Back to Library", color: .accentPrimary) { onDismiss() }
                     .padding(.horizontal, 20)
                     .padding(.bottom, 40)
             }
         }
-        .background(Color.duckBlush.ignoresSafeArea())
+        .background(Color.backgroundBlush.ignoresSafeArea())
     }
 
     private var completionTitle: String {
@@ -375,28 +375,28 @@ private struct PendingDeleteThumbnail: View {
                     .resizable()
                     .scaledToFill()
             } else {
-                Color.duckSoftPink.opacity(0.4)
+                Color.decorPink.opacity(0.4)
                     .overlay(ProgressView().tint(.white))
             }
         }
         .frame(width: 88, height: 88)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: DuckRadius.s, style: .continuous))
         .overlay(alignment: .topTrailing) {
             Image(systemName: "trash.fill")
                 .font(.duckMicro.weight(.bold))
                 .foregroundStyle(.white)
                 .padding(6)
-                .background(Color.duckDanger, in: Circle())
+                .background(Color.danger, in: Circle())
                 .padding(5)
         }
         .accessibilityLabel("Selected for Recently Deleted")
         .task {
-            image = await asset.loadImage(
+            image = await PhotoImageRepository.shared.image(
+                for: asset,
                 targetSize: CGSize(width: 176, height: 176),
-                deliveryMode: .opportunistic,
-                allowNetwork: true,
                 contentMode: .aspectFill,
-                acceptsDegradedResult: true
+                qualityIntent: .thumbnail,
+                allowNetworkAccess: false
             )
         }
     }
@@ -433,7 +433,7 @@ private struct DuckAssetCard: View {
                             .resizable()
                             .scaledToFill()
                     } else {
-                        Color.gray.opacity(0.3)
+                        Color.decorPink.opacity(0.25)
                             .overlay(ProgressView().tint(.white))
                     }
                 }
@@ -471,13 +471,12 @@ private struct DuckAssetCard: View {
                 .padding(.bottom, 20)
             }
             .task(id: "\(Int(targetSize.width.rounded()))x\(Int(targetSize.height.rounded()))") {
-                image = await asset.loadImage(
+                image = await PhotoImageRepository.shared.image(
+                    for: asset,
                     targetSize: targetSize,
-                    deliveryMode: .highQualityFormat,
-                    allowNetwork: true,
                     contentMode: .aspectFill,
-                    acceptsDegradedResult: false,
-                    timeout: 20
+                    qualityIntent: .review,
+                    allowNetworkAccess: true
                 )
             }
         }

@@ -61,7 +61,7 @@ private final class SQLiteConnection: @unchecked Sendable {
 actor PhotoMLStore {
     static let shared = PhotoMLStore()
 
-    static let schemaVersion = 3
+    static let schemaVersion = 4
     static let embeddingDimension = PhotoEmbeddingContract.elementCount
     static let keeperTrainingCSVHeaders = KeeperFeatureSchema.exportHeaders
     static let groupOutcomeCSVHeaders = GroupActionFeatureSchema.exportHeaders
@@ -138,6 +138,25 @@ actor PhotoMLStore {
                 burst_identifier TEXT,
                 aspect_ratio REAL NOT NULL DEFAULT 1.0,
                 file_size_bytes INT NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL
+            )
+        """)
+
+        // Versioned scan evidence used only to avoid re-decoding unchanged
+        // bounded context assets during incremental/resumed scans.
+        try execOrThrow("""
+            CREATE TABLE IF NOT EXISTS photo_asset_analysis (
+                asset_id TEXT PRIMARY KEY,
+                modification_date REAL,
+                modification_date_is_null INT NOT NULL DEFAULT 0,
+                pixel_width INT NOT NULL,
+                pixel_height INT NOT NULL,
+                media_subtypes_raw INT NOT NULL,
+                analyzer_version INT NOT NULL,
+                embedding_version INT NOT NULL,
+                embedding BLOB,
+                perceptual_hash_hex TEXT,
+                keeper_signals_json BLOB,
                 updated_at REAL NOT NULL
             )
         """)
@@ -265,13 +284,20 @@ actor PhotoMLStore {
         try execOrThrow("CREATE INDEX IF NOT EXISTS idx_pairwise_bucket ON pairwise_similarity(bucket)")
         try execOrThrow("CREATE INDEX IF NOT EXISTS idx_pairwise_computed ON pairwise_similarity(computed_at)")
         try execOrThrow("CREATE INDEX IF NOT EXISTS idx_features_screenshot ON photo_features(is_screenshot)")
+        try execOrThrow(
+            "CREATE INDEX IF NOT EXISTS idx_asset_analysis_updated ON photo_asset_analysis(updated_at)"
+        )
     }
 
     // MARK: - Photo Features
 
     func upsertFeature(_ feature: PhotoFeatureRecord) throws {
+        try upsertFeatures([feature])
+    }
+
+    func upsertFeatures(_ features: [PhotoFeatureRecord]) throws {
         try ensureOpen()
-        try validateEmbedding(feature.embedding, version: feature.embeddingVersion)
+        guard !features.isEmpty else { return }
         let sql = """
             INSERT INTO photo_features
                 (asset_id, embedding, embedding_version, pixel_width, pixel_height,
@@ -302,44 +328,49 @@ actor PhotoMLStore {
             throw sqlError()
         }
         defer { sqlite3_finalize(stmt) }
-
-        sqlite3_bind_text(stmt, 1, feature.assetID, -1, SQLITE_TRANSIENT_PTR)
-        if let embedding = feature.embedding {
-            _ = embedding.withUnsafeBytes { ptr in
-                sqlite3_bind_blob(stmt, 2, ptr.baseAddress, Int32(ptr.count), SQLITE_TRANSIENT_PTR)
-            }
-        } else {
-            sqlite3_bind_null(stmt, 2)
-        }
-        sqlite3_bind_int(stmt, 3, Int32(feature.embeddingVersion))
-        sqlite3_bind_int(stmt, 4, Int32(feature.pixelWidth))
-        sqlite3_bind_int(stmt, 5, Int32(feature.pixelHeight))
-        if let date = feature.creationDate {
-            sqlite3_bind_double(stmt, 6, date.timeIntervalSince1970)
-        } else {
-            sqlite3_bind_null(stmt, 6)
-        }
-        sqlite3_bind_int(stmt, 7, feature.isFavorite ? 1 : 0)
-        sqlite3_bind_int(stmt, 8, feature.isEdited ? 1 : 0)
-        sqlite3_bind_int(stmt, 9, feature.isScreenshot ? 1 : 0)
-        sqlite3_bind_int(stmt, 10, feature.isLivePhoto ? 1 : 0)
-        sqlite3_bind_int(stmt, 11, feature.isHDR ? 1 : 0)
-        bindOptionalText(stmt, 12, feature.burstIdentifier)
-        sqlite3_bind_double(stmt, 13, feature.aspectRatio)
-        sqlite3_bind_int64(stmt, 14, feature.fileSizeBytes)
-        sqlite3_bind_double(stmt, 15, Date().timeIntervalSince1970)
-
-        guard sqlite3_step(stmt) == SQLITE_DONE else {
-            throw sqlError()
-        }
-    }
-
-    func upsertFeatures(_ features: [PhotoFeatureRecord]) throws {
-        try ensureOpen()
         try execOrThrow("BEGIN TRANSACTION")
         do {
             for feature in features {
-                try upsertFeature(feature)
+                try validateEmbedding(
+                    feature.embedding,
+                    version: feature.embeddingVersion
+                )
+                sqlite3_reset(stmt)
+                sqlite3_clear_bindings(stmt)
+                sqlite3_bind_text(stmt, 1, feature.assetID, -1, SQLITE_TRANSIENT_PTR)
+                if let embedding = feature.embedding {
+                    _ = embedding.withUnsafeBytes { ptr in
+                        sqlite3_bind_blob(
+                            stmt,
+                            2,
+                            ptr.baseAddress,
+                            Int32(ptr.count),
+                            SQLITE_TRANSIENT_PTR
+                        )
+                    }
+                } else {
+                    sqlite3_bind_null(stmt, 2)
+                }
+                sqlite3_bind_int(stmt, 3, Int32(feature.embeddingVersion))
+                sqlite3_bind_int(stmt, 4, Int32(feature.pixelWidth))
+                sqlite3_bind_int(stmt, 5, Int32(feature.pixelHeight))
+                bindOptionalDouble(
+                    stmt,
+                    6,
+                    feature.creationDate?.timeIntervalSince1970
+                )
+                sqlite3_bind_int(stmt, 7, feature.isFavorite ? 1 : 0)
+                sqlite3_bind_int(stmt, 8, feature.isEdited ? 1 : 0)
+                sqlite3_bind_int(stmt, 9, feature.isScreenshot ? 1 : 0)
+                sqlite3_bind_int(stmt, 10, feature.isLivePhoto ? 1 : 0)
+                sqlite3_bind_int(stmt, 11, feature.isHDR ? 1 : 0)
+                bindOptionalText(stmt, 12, feature.burstIdentifier)
+                sqlite3_bind_double(stmt, 13, feature.aspectRatio)
+                sqlite3_bind_int64(stmt, 14, feature.fileSizeBytes)
+                sqlite3_bind_double(stmt, 15, Date().timeIntervalSince1970)
+                guard sqlite3_step(stmt) == SQLITE_DONE else {
+                    throw sqlError()
+                }
             }
             try execOrThrow("COMMIT")
         } catch {
@@ -407,11 +438,222 @@ actor PhotoMLStore {
         return result
     }
 
+    // MARK: - Versioned asset analysis cache
+
+    func upsertAssetAnalyses(
+        _ records: [PhotoAssetAnalysisCacheRecord]
+    ) throws {
+        try ensureOpen()
+        guard !records.isEmpty else { return }
+        let sql = """
+            INSERT INTO photo_asset_analysis
+                (asset_id, modification_date, modification_date_is_null,
+                 pixel_width, pixel_height, media_subtypes_raw,
+                 analyzer_version, embedding_version, embedding,
+                 perceptual_hash_hex, keeper_signals_json, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(asset_id) DO UPDATE SET
+                modification_date = excluded.modification_date,
+                modification_date_is_null = excluded.modification_date_is_null,
+                pixel_width = excluded.pixel_width,
+                pixel_height = excluded.pixel_height,
+                media_subtypes_raw = excluded.media_subtypes_raw,
+                analyzer_version = excluded.analyzer_version,
+                embedding_version = excluded.embedding_version,
+                embedding = excluded.embedding,
+                perceptual_hash_hex = excluded.perceptual_hash_hex,
+                keeper_signals_json = excluded.keeper_signals_json,
+                updated_at = excluded.updated_at
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw sqlError()
+        }
+        defer { sqlite3_finalize(statement) }
+
+        try execOrThrow("BEGIN TRANSACTION")
+        do {
+            for record in records {
+                try validateEmbedding(
+                    record.embedding,
+                    version: record.embeddingVersion
+                )
+                sqlite3_reset(statement)
+                sqlite3_clear_bindings(statement)
+                sqlite3_bind_text(
+                    statement,
+                    1,
+                    record.assetID,
+                    -1,
+                    SQLITE_TRANSIENT_PTR
+                )
+                bindOptionalDouble(
+                    statement,
+                    2,
+                    record.modificationDate?.timeIntervalSince1970
+                )
+                sqlite3_bind_int(
+                    statement,
+                    3,
+                    record.modificationDate == nil ? 1 : 0
+                )
+                sqlite3_bind_int(statement, 4, Int32(record.pixelWidth))
+                sqlite3_bind_int(statement, 5, Int32(record.pixelHeight))
+                sqlite3_bind_int64(
+                    statement,
+                    6,
+                    Int64(bitPattern: record.mediaSubtypesRawValue)
+                )
+                sqlite3_bind_int(statement, 7, Int32(record.analyzerVersion))
+                sqlite3_bind_int(statement, 8, Int32(record.embeddingVersion))
+                if let embedding = record.embedding {
+                    _ = embedding.withUnsafeBytes { bytes in
+                        sqlite3_bind_blob(
+                            statement,
+                            9,
+                            bytes.baseAddress,
+                            Int32(bytes.count),
+                            SQLITE_TRANSIENT_PTR
+                        )
+                    }
+                } else {
+                    sqlite3_bind_null(statement, 9)
+                }
+                bindOptionalText(
+                    statement,
+                    10,
+                    record.perceptualHash.map {
+                        String($0, radix: 16, uppercase: false)
+                    }
+                )
+                if let keeperSignalsJSON = record.keeperSignalsJSON {
+                    _ = keeperSignalsJSON.withUnsafeBytes { bytes in
+                        sqlite3_bind_blob(
+                            statement,
+                            11,
+                            bytes.baseAddress,
+                            Int32(bytes.count),
+                            SQLITE_TRANSIENT_PTR
+                        )
+                    }
+                } else {
+                    sqlite3_bind_null(statement, 11)
+                }
+                sqlite3_bind_double(
+                    statement,
+                    12,
+                    Date().timeIntervalSince1970
+                )
+                guard sqlite3_step(statement) == SQLITE_DONE else {
+                    throw sqlError()
+                }
+            }
+            try execOrThrow("COMMIT")
+        } catch {
+            rollbackIgnoringSecondaryFailure()
+            throw error
+        }
+    }
+
+    func loadValidAssetAnalyses(
+        for lookups: [PhotoAssetAnalysisCacheLookup]
+    ) throws -> [String: PhotoAssetAnalysisCacheRecord] {
+        try ensureOpen()
+        guard !lookups.isEmpty else { return [:] }
+        let sql = """
+            SELECT modification_date, modification_date_is_null,
+                   pixel_width, pixel_height, media_subtypes_raw,
+                   analyzer_version, embedding_version, embedding,
+                   perceptual_hash_hex, keeper_signals_json
+            FROM photo_asset_analysis
+            WHERE asset_id = ?
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw sqlError()
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var result: [String: PhotoAssetAnalysisCacheRecord] = [:]
+        result.reserveCapacity(lookups.count)
+        for lookup in lookups {
+            sqlite3_reset(statement)
+            sqlite3_clear_bindings(statement)
+            sqlite3_bind_text(
+                statement,
+                1,
+                lookup.assetID,
+                -1,
+                SQLITE_TRANSIENT_PTR
+            )
+            let stepResult = sqlite3_step(statement)
+            if stepResult == SQLITE_DONE { continue }
+            guard stepResult == SQLITE_ROW else { throw sqlError() }
+
+            let storedDateIsNil = sqlite3_column_int(statement, 1) != 0
+            let storedDate = storedDateIsNil
+                ? nil
+                : Date(
+                    timeIntervalSince1970: sqlite3_column_double(statement, 0)
+                )
+            guard storedDate == lookup.modificationDate,
+                  Int(sqlite3_column_int(statement, 2)) == lookup.pixelWidth,
+                  Int(sqlite3_column_int(statement, 3)) == lookup.pixelHeight,
+                  UInt64(bitPattern: sqlite3_column_int64(statement, 4))
+                    == lookup.mediaSubtypesRawValue,
+                  Int(sqlite3_column_int(statement, 5)) == lookup.analyzerVersion,
+                  Int(sqlite3_column_int(statement, 6)) == lookup.embeddingVersion,
+                  sqlite3_column_type(statement, 7) != SQLITE_NULL,
+                  let embeddingPointer = sqlite3_column_blob(statement, 7) else {
+                continue
+            }
+            let embeddingByteCount = Int(sqlite3_column_bytes(statement, 7))
+            let embedding = Data(
+                bytes: embeddingPointer,
+                count: embeddingByteCount
+            )
+            try validateEmbedding(
+                embedding,
+                version: lookup.embeddingVersion
+            )
+
+            let hash: UInt64? = sqlite3_column_text(statement, 8)
+                .flatMap { UInt64(String(cString: $0), radix: 16) }
+            let keeperSignalsJSON: Data?
+            if sqlite3_column_type(statement, 9) != SQLITE_NULL,
+               let pointer = sqlite3_column_blob(statement, 9) {
+                keeperSignalsJSON = Data(
+                    bytes: pointer,
+                    count: Int(sqlite3_column_bytes(statement, 9))
+                )
+            } else {
+                keeperSignalsJSON = nil
+            }
+            result[lookup.assetID] = PhotoAssetAnalysisCacheRecord(
+                assetID: lookup.assetID,
+                modificationDate: storedDate,
+                pixelWidth: lookup.pixelWidth,
+                pixelHeight: lookup.pixelHeight,
+                mediaSubtypesRawValue: lookup.mediaSubtypesRawValue,
+                analyzerVersion: lookup.analyzerVersion,
+                embeddingVersion: lookup.embeddingVersion,
+                embedding: embedding,
+                perceptualHash: hash,
+                keeperSignalsJSON: keeperSignalsJSON
+            )
+        }
+        return result
+    }
+
     // MARK: - Pairwise Similarity Cache
 
     func upsertPairSimilarity(_ pair: PairSimilarityRecord) throws {
+        try upsertPairSimilarities([pair])
+    }
+
+    func upsertPairSimilarities(_ pairs: [PairSimilarityRecord]) throws {
         try ensureOpen()
-        try validatePairEmbeddingVersions(pair)
+        guard !pairs.isEmpty else { return }
         let sql = """
             INSERT INTO pairwise_similarity
                 (lhs_asset_id, rhs_asset_id, embedding_version, feature_distance, time_delta_seconds,
@@ -430,37 +672,27 @@ actor PhotoMLStore {
             throw sqlError()
         }
         defer { sqlite3_finalize(stmt) }
-
-        let (lhs, rhs) = pair.lhsAssetID <= pair.rhsAssetID
-            ? (pair.lhsAssetID, pair.rhsAssetID)
-            : (pair.rhsAssetID, pair.lhsAssetID)
-
-        sqlite3_bind_text(stmt, 1, lhs, -1, SQLITE_TRANSIENT_PTR)
-        sqlite3_bind_text(stmt, 2, rhs, -1, SQLITE_TRANSIENT_PTR)
-        sqlite3_bind_int(stmt, 3, Int32(pair.embeddingVersion))
-        sqlite3_bind_double(stmt, 4, pair.featureDistance)
-        if let delta = pair.timeDeltaSeconds {
-            sqlite3_bind_double(stmt, 5, delta)
-        } else {
-            sqlite3_bind_null(stmt, 5)
-        }
-        sqlite3_bind_int(stmt, 6, pair.isBurstPair ? 1 : 0)
-        sqlite3_bind_text(stmt, 7, pair.bucket, -1, SQLITE_TRANSIENT_PTR)
-        sqlite3_bind_double(stmt, 8, pair.similarityScore)
-        sqlite3_bind_double(stmt, 9, Date().timeIntervalSince1970)
-
-        guard sqlite3_step(stmt) == SQLITE_DONE else {
-            throw sqlError()
-        }
-    }
-
-    func upsertPairSimilarities(_ pairs: [PairSimilarityRecord]) throws {
-        try ensureOpen()
-        guard !pairs.isEmpty else { return }
         try execOrThrow("BEGIN TRANSACTION")
         do {
             for pair in pairs {
-                try upsertPairSimilarity(pair)
+                try validatePairEmbeddingVersions(pair)
+                sqlite3_reset(stmt)
+                sqlite3_clear_bindings(stmt)
+                let (lhs, rhs) = pair.lhsAssetID <= pair.rhsAssetID
+                    ? (pair.lhsAssetID, pair.rhsAssetID)
+                    : (pair.rhsAssetID, pair.lhsAssetID)
+                sqlite3_bind_text(stmt, 1, lhs, -1, SQLITE_TRANSIENT_PTR)
+                sqlite3_bind_text(stmt, 2, rhs, -1, SQLITE_TRANSIENT_PTR)
+                sqlite3_bind_int(stmt, 3, Int32(pair.embeddingVersion))
+                sqlite3_bind_double(stmt, 4, pair.featureDistance)
+                bindOptionalDouble(stmt, 5, pair.timeDeltaSeconds)
+                sqlite3_bind_int(stmt, 6, pair.isBurstPair ? 1 : 0)
+                sqlite3_bind_text(stmt, 7, pair.bucket, -1, SQLITE_TRANSIENT_PTR)
+                sqlite3_bind_double(stmt, 8, pair.similarityScore)
+                sqlite3_bind_double(stmt, 9, Date().timeIntervalSince1970)
+                guard sqlite3_step(stmt) == SQLITE_DONE else {
+                    throw sqlError()
+                }
             }
             try execOrThrow("COMMIT")
         } catch {
@@ -908,6 +1140,7 @@ actor PhotoMLStore {
             try execOrThrow("DELETE FROM feedback_assets")
             try execOrThrow("DELETE FROM feedback_events")
             try execOrThrow("DELETE FROM pairwise_similarity")
+            try execOrThrow("DELETE FROM photo_asset_analysis")
             try execOrThrow("DELETE FROM photo_features")
             try execOrThrow("COMMIT")
         } catch {
@@ -1151,6 +1384,10 @@ actor PhotoMLStore {
             """)
             let deletedPairs = Int(sqlite3_changes(db))
             try execOrThrow("""
+                DELETE FROM photo_asset_analysis
+                WHERE asset_id NOT IN (SELECT asset_id FROM active_photo_asset_ids)
+            """)
+            try execOrThrow("""
                 DELETE FROM photo_features
                 WHERE asset_id NOT IN (SELECT asset_id FROM active_photo_asset_ids)
             """)
@@ -1353,6 +1590,29 @@ struct PhotoFeatureRecord: Sendable {
     let burstIdentifier: String?
     let aspectRatio: Double
     let fileSizeBytes: Int64
+}
+
+struct PhotoAssetAnalysisCacheLookup: Sendable {
+    let assetID: String
+    let modificationDate: Date?
+    let pixelWidth: Int
+    let pixelHeight: Int
+    let mediaSubtypesRawValue: UInt64
+    let analyzerVersion: Int
+    let embeddingVersion: Int
+}
+
+struct PhotoAssetAnalysisCacheRecord: Sendable {
+    let assetID: String
+    let modificationDate: Date?
+    let pixelWidth: Int
+    let pixelHeight: Int
+    let mediaSubtypesRawValue: UInt64
+    let analyzerVersion: Int
+    let embeddingVersion: Int
+    let embedding: Data?
+    let perceptualHash: UInt64?
+    let keeperSignalsJSON: Data?
 }
 
 struct PairSimilarityRecord: Sendable {

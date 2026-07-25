@@ -10,6 +10,9 @@ final class PurchaseManager: ObservableObject {
 
     static let productID = "com.photoduck.app.unlock"
     private static let purchaseCacheKey = "isPurchased"
+#if DEBUG
+    private static let adminAccessKey = "photoduck.debug-admin-access"
+#endif
 
     enum EntitlementStatus: Equatable {
         case unknown
@@ -17,9 +20,15 @@ final class PurchaseManager: ObservableObject {
         case entitled
         case notPurchased
         case usingCachedEntitlement
+#if DEBUG
+        case adminUnlocked
+#endif
     }
 
     @Published private(set) var isPurchased: Bool
+#if DEBUG
+    @Published private(set) var isAdminAccessEnabled: Bool
+#endif
     @Published private(set) var entitlementStatus: EntitlementStatus = .unknown
     @Published private(set) var product: Product?
     @Published private(set) var isLoading: Bool = false
@@ -27,11 +36,20 @@ final class PurchaseManager: ObservableObject {
     @Published private(set) var statusMessage: String?
 
     private let defaults: UserDefaults
+    private var hasStoreEntitlement: Bool
     private var transactionListenerTask: Task<Void, Never>?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        isPurchased = defaults.bool(forKey: Self.purchaseCacheKey)
+        let cachedStoreEntitlement = defaults.bool(forKey: Self.purchaseCacheKey)
+        hasStoreEntitlement = cachedStoreEntitlement
+#if DEBUG
+        let cachedAdminAccess = defaults.bool(forKey: Self.adminAccessKey)
+        isAdminAccessEnabled = cachedAdminAccess
+        isPurchased = cachedStoreEntitlement || cachedAdminAccess
+#else
+        isPurchased = cachedStoreEntitlement
+#endif
         transactionListenerTask = listenForTransactions()
     }
 
@@ -153,9 +171,16 @@ final class PurchaseManager: ObservableObject {
             }
         }
 
-        if allowDefinitiveMissing {
+        if allowDefinitiveMissing, !isPurchased {
             setPurchased(false, status: .notPurchased)
         } else {
+            // An empty entitlement set is not proof of "never purchased".
+            // `AppStore.sync()` routinely succeeds while entitlements are
+            // still propagating (fresh Apple Account sign-in, Family Sharing
+            // re-evaluation), and this device's cached entitlement could only
+            // have been written by a previously verified transaction. Revoking
+            // a paying customer's offline access is far worse than leaving a
+            // stale flag, so only a verified revocation may downgrade.
             preserveCachedEntitlement()
         }
         return false
@@ -210,13 +235,50 @@ final class PurchaseManager: ObservableObject {
     }
 
     private func preserveCachedEntitlement() {
-        entitlementStatus = isPurchased ? .usingCachedEntitlement : .unknown
+        entitlementStatus = hasStoreEntitlement ? .usingCachedEntitlement : .unknown
+#if DEBUG
+        if isAdminAccessEnabled {
+            entitlementStatus = .adminUnlocked
+        }
+#endif
     }
 
     private func setPurchased(_ purchased: Bool, status: EntitlementStatus) {
-        isPurchased = purchased
-        entitlementStatus = status
+        hasStoreEntitlement = purchased
         defaults.set(purchased, forKey: Self.purchaseCacheKey)
+        refreshEffectiveAccess()
+#if DEBUG
+        entitlementStatus = isAdminAccessEnabled ? .adminUnlocked : status
+#else
+        entitlementStatus = status
+#endif
+    }
+
+#if DEBUG
+    // MARK: - Developer admin access
+
+    /// Enables every paid feature in development builds without mutating the
+    /// real StoreKit entitlement cache. This API and its persisted override are
+    /// compiled out of Archive/Release builds.
+    func setAdminAccessEnabled(_ enabled: Bool) {
+        isAdminAccessEnabled = enabled
+        defaults.set(enabled, forKey: Self.adminAccessKey)
+        refreshEffectiveAccess()
+        entitlementStatus = enabled
+            ? .adminUnlocked
+            : (hasStoreEntitlement ? .entitled : .notPurchased)
+        statusMessage = enabled
+            ? "Developer admin access enabled."
+            : "Developer admin access disabled."
+    }
+#endif
+
+    private func refreshEffectiveAccess() {
+#if DEBUG
+        isPurchased = hasStoreEntitlement || isAdminAccessEnabled
+#else
+        isPurchased = hasStoreEntitlement
+#endif
     }
 
     // MARK: - Verification helper

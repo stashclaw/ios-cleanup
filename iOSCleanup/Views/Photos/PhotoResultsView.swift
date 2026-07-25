@@ -311,15 +311,21 @@ struct PhotoResultsView: View {
     // MARK: - Group list
 
     private var groupList: some View {
-        VStack(spacing: 12) {
-            ForEach(Array(filteredGroups.enumerated()), id: \.element.id) { index, group in
+        let groups = filteredGroups
+        let indexByID = Dictionary(
+            uniqueKeysWithValues: groups.enumerated().map {
+                ($0.element.id, $0.offset)
+            }
+        )
+        return LazyVStack(spacing: 12) {
+            ForEach(groups) { group in
                 DuckCard {
                     VStack(spacing: 12) {
                         NavigationLink {
                             PhotoGroupDetailView(
                                 group: group,
-                                groupIndex: index,
-                                totalGroups: filteredGroups.count,
+                                groupIndex: indexByID[group.id] ?? 0,
+                                totalGroups: groups.count,
                                 onDeleteGroup: {
                                     withAnimation(SwiftUI.Animation.spring(response: 0.35, dampingFraction: 0.82)) {
                                         _ = hiddenGroupIDs.insert(group.id)
@@ -489,12 +495,12 @@ private struct AutoCleanDeleteThumbnail: View {
         }
         .accessibilityLabel("Selected for Recently Deleted")
         .task {
-            image = await asset.loadImage(
+            image = await PhotoImageRepository.shared.image(
+                for: asset,
                 targetSize: CGSize(width: 180, height: 180),
-                deliveryMode: .opportunistic,
-                allowNetwork: true,
                 contentMode: .aspectFill,
-                acceptsDegradedResult: true
+                qualityIntent: .thumbnail,
+                allowNetworkAccess: false
             )
         }
     }
@@ -548,8 +554,9 @@ private struct GroupOverviewCard: View {
     }
 
     private var thumbnailRow: some View {
-        HStack(spacing: 6) {
-            ForEach(Array(previewAssets.enumerated()), id: \.element.localIdentifier) { index, asset in
+        let assets = previewAssets
+        return HStack(spacing: 6) {
+            ForEach(assets, id: \.localIdentifier) { asset in
                 ZStack {
                     if let image = thumbnails[asset.localIdentifier] {
                         Image(uiImage: image)
@@ -580,8 +587,9 @@ private struct GroupOverviewCard: View {
                     }
                 }
                 .overlay(alignment: .bottomTrailing) {
-                    if index == previewAssets.count - 1, group.assets.count > previewAssets.count {
-                        Text("+\(group.assets.count - previewAssets.count)")
+                    if asset.localIdentifier == assets.last?.localIdentifier,
+                       group.assets.count > assets.count {
+                        Text("+\(group.assets.count - assets.count)")
                             .font(.duckMicro.weight(.bold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 7)
@@ -655,12 +663,12 @@ private struct GroupOverviewCard: View {
     }
 
     private func requestThumb(_ asset: PHAsset) async -> UIImage? {
-        await asset.loadImage(
+        await PhotoImageRepository.shared.image(
+            for: asset,
             targetSize: CGSize(width: 144, height: 144),
-            deliveryMode: .opportunistic,
-            allowNetwork: true,
             contentMode: .aspectFill,
-            acceptsDegradedResult: true
+            qualityIntent: .thumbnail,
+            allowNetworkAccess: false
         )
     }
 }

@@ -121,6 +121,36 @@ final class PhotoScanEngineTests: XCTestCase {
         )
     }
 
+    func testStoredEmbeddingValueDistanceMatchesNormalizedRMSContract() throws {
+        let lhsValues = [Float](
+            repeating: 0,
+            count: PhotoEmbeddingContract.elementCount
+        )
+        let rhsValues = [Float](
+            repeating: 0.25,
+            count: PhotoEmbeddingContract.elementCount
+        )
+        let lhs = lhsValues.withUnsafeBytes { Data($0) }
+        let rhs = rhsValues.withUnsafeBytes { Data($0) }
+
+        XCTAssertEqual(
+            try XCTUnwrap(
+                PhotoEmbeddingValueDistance.normalizedDistance(
+                    lhs: lhs,
+                    rhs: rhs
+                )
+            ),
+            0.25,
+            accuracy: 0.000_001
+        )
+        XCTAssertNil(
+            PhotoEmbeddingValueDistance.normalizedDistance(
+                lhs: Data(),
+                rhs: rhs
+            )
+        )
+    }
+
     func testPairDistanceResolverReportsCacheHit() {
         let key = SimilarityPairKey("left", "right")
         let cachedRecord = PairSimilarityRecord(
@@ -166,6 +196,31 @@ final class PhotoScanEngineTests: XCTestCase {
                 cachedRecords: [key: cachedRecord]
             )
         )
+    }
+
+    func testPhotoAssetIdentityRemovesRepeatedPhotoKitAssetsInOrder() {
+        let first = PhotoScanTestAsset(
+            localIdentifier: "first",
+            creationDate: Date(timeIntervalSinceReferenceDate: 1)
+        )
+        let repeatedFirst = PhotoScanTestAsset(
+            localIdentifier: "first",
+            creationDate: Date(timeIntervalSinceReferenceDate: 2)
+        )
+        let second = PhotoScanTestAsset(
+            localIdentifier: "second",
+            creationDate: Date(timeIntervalSinceReferenceDate: 3)
+        )
+
+        let unique = PhotoAssetIdentity.unique(
+            [first, repeatedFirst, second, first]
+        )
+
+        XCTAssertEqual(
+            unique.map(\.localIdentifier),
+            ["first", "second"]
+        )
+        XCTAssertTrue(unique[0] === first)
     }
 
     func testTuningConstantsStayPrecisionFirstAndBounded() {
@@ -357,6 +412,161 @@ final class PhotoScanEngineTests: XCTestCase {
         XCTAssertTrue(finalUpdate?.groups.isEmpty == true)
     }
 
+    func testExpectedNonemptyLibraryCannotCompleteAsZeroPhotos() async {
+        let engine = PhotoScanEngine(
+            assetProvider: StubPhotoScanAssetProvider(assets: [])
+        )
+
+        do {
+            for try await _ in engine.scan(
+                mode: .deepClean,
+                expectedLibraryPhotoCount: 48_680
+            ) {
+                XCTFail("A transient empty fetch must not publish completion")
+            }
+            XCTFail("Expected an unavailable-library error")
+        } catch let error as ScanError {
+            guard case .photoLibraryTemporarilyUnavailable(
+                expectedCount: 48_680,
+                receivedCount: 0
+            ) = error else {
+                return XCTFail("Unexpected scan error: \(error)")
+            }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testExpectedLibraryRejectsTruncatedNonemptyFetch() async {
+        let assets = (0..<3).map {
+            PhotoScanTestAsset(
+                localIdentifier: "partial-\($0)",
+                creationDate: Date(
+                    timeIntervalSinceReferenceDate: TimeInterval($0)
+                )
+            )
+        }
+        let engine = PhotoScanEngine(
+            assetProvider: StubPhotoScanAssetProvider(assets: assets)
+        )
+
+        do {
+            for try await _ in engine.scan(
+                mode: .deepClean,
+                expectedLibraryPhotoCount: 48_680
+            ) {
+                XCTFail("A truncated fetch must not publish completion")
+            }
+            XCTFail("Expected an unavailable-library error")
+        } catch let error as ScanError {
+            guard case .photoLibraryTemporarilyUnavailable(
+                expectedCount: 48_680,
+                receivedCount: 3
+            ) = error else {
+                return XCTFail("Unexpected scan error: \(error)")
+            }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testAnalysisWatchdogBoundsHungOperations() async {
+        let gate = PhotoScanTestGate()
+        let invocationCounter = LockedInvocationCounter()
+        let coordinator = PhotoScanAnalysisCoordinator(
+            maximumConcurrentOperationCount: 1,
+            timeoutNanoseconds: 50_000_000
+        )
+
+        let first = await coordinator.analyze {
+            invocationCounter.increment()
+            await gate.wait()
+            return PhotoScanAssetAnalysis(
+                observation: nil,
+                embedding: Data([1]),
+                perceptualHash: nil,
+                keeperSignals: nil
+            )
+        }
+        let second = await coordinator.analyze {
+            invocationCounter.increment()
+            return PhotoScanAssetAnalysis(
+                observation: nil,
+                embedding: Data([2]),
+                perceptualHash: nil,
+                keeperSignals: nil
+            )
+        }
+
+        // The watchdog bounds the hung operation…
+        XCTAssertNil(first.embedding)
+        // …and hands its slot back. Previously the timeout resolved the caller
+        // but kept the slot forever, so one hung asset permanently starved the
+        // coordinator and every later analyze() returned `.unavailable`
+        // without ever running — which silently defeated the iCloud retry pass.
+        XCTAssertEqual(second.embedding, Data([2]))
+        XCTAssertEqual(invocationCounter.value, 2)
+        await gate.open()
+    }
+
+    func testTimedOutSlotIsReleasedExactlyOnceWhenOperationLaterCompletes() async {
+        let gate = PhotoScanTestGate()
+        let coordinator = PhotoScanAnalysisCoordinator(
+            maximumConcurrentOperationCount: 1,
+            timeoutNanoseconds: 50_000_000
+        )
+
+        // Times out, then the underlying operation finishes afterwards. Both
+        // paths must not double-release the single slot.
+        let timedOut = await coordinator.analyze {
+            await gate.wait()
+            return PhotoScanAssetAnalysis(
+                observation: nil,
+                embedding: Data([1]),
+                perceptualHash: nil,
+                keeperSignals: nil
+            )
+        }
+        XCTAssertNil(timedOut.embedding)
+        await gate.open()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        // A double release would let two operations run concurrently against a
+        // coordinator declared with a maximum of one.
+        let follower = await coordinator.analyze {
+            PhotoScanAssetAnalysis(
+                observation: nil,
+                embedding: Data([2]),
+                perceptualHash: nil,
+                keeperSignals: nil
+            )
+        }
+        XCTAssertEqual(follower.embedding, Data([2]))
+
+        let blockedGate = PhotoScanTestGate()
+        async let blocking = coordinator.analyze {
+            await blockedGate.wait()
+            return PhotoScanAssetAnalysis(
+                observation: nil,
+                embedding: Data([3]),
+                perceptualHash: nil,
+                keeperSignals: nil
+            )
+        }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let rejected = await coordinator.analyze {
+            PhotoScanAssetAnalysis(
+                observation: nil,
+                embedding: Data([4]),
+                perceptualHash: nil,
+                keeperSignals: nil
+            )
+        }
+        XCTAssertNil(rejected.embedding)
+        await blockedGate.open()
+        _ = await blocking
+    }
+
     func testIncrementalScanWithUnchangedInventoryPerformsNoAnalysis() async throws {
         let asset = PhotoScanTestAsset(
             localIdentifier: "existing",
@@ -422,6 +632,79 @@ final class PhotoScanEngineTests: XCTestCase {
         XCTAssertEqual(finalUpdate?.processedPhotoCount, 2)
     }
 
+    func testWarmIncrementalScanReusesUnchangedContextAnalysis() async throws {
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "WarmAnalysisCacheTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+        let bridge = PhotoMLBridge(
+            store: PhotoMLStore(directoryURL: tempDirectory)
+        )
+        let existing = PhotoScanTestAsset(
+            localIdentifier: "warm-existing",
+            creationDate: Date(timeIntervalSinceReferenceDate: 10_000)
+        )
+        let added = PhotoScanTestAsset(
+            localIdentifier: "warm-added",
+            creationDate: Date(timeIntervalSinceReferenceDate: 10_001)
+        )
+        let invocationCounter = LockedInvocationCounter()
+        let embeddingValues = [Float](
+            repeating: 0.5,
+            count: PhotoEmbeddingContract.elementCount
+        )
+        let embedding = embeddingValues.withUnsafeBytes { Data($0) }
+        let keeperSignals = KeeperSignals(
+            sharpness: 0.8,
+            blurPenalty: 0.1,
+            motionBlurPenalty: 0.05,
+            eyesOpenScore: nil,
+            expressionScore: nil,
+            exposureScore: 0.9,
+            favoriteBonus: 0,
+            editedBonusOrPenalty: 0,
+            framingScore: 0.8,
+            resolutionTiebreaker: 0.1
+        )
+        let analyzer: PhotoScanAssetAnalyzer = { _, _ in
+            invocationCounter.increment()
+            return PhotoScanAssetAnalysis(
+                observation: nil,
+                embedding: embedding,
+                perceptualHash: 0x1234,
+                keeperSignals: keeperSignals
+            )
+        }
+
+        let initialEngine = PhotoScanEngine(
+            assetProvider: StubPhotoScanAssetProvider(assets: [existing]),
+            assetAnalyzer: analyzer,
+            mlBridge: bridge
+        )
+        for try await _ in initialEngine.scan(mode: .deepClean) {}
+
+        let incrementalEngine = PhotoScanEngine(
+            assetProvider: StubPhotoScanAssetProvider(
+                assets: [existing, added]
+            ),
+            assetAnalyzer: analyzer,
+            mlBridge: bridge
+        )
+        var finalUpdate: PhotoScanUpdate?
+        for try await update in incrementalEngine.scan(
+            mode: .deepClean,
+            requiredAssetIDs: [added.localIdentifier]
+        ) {
+            if update.isComplete { finalUpdate = update }
+        }
+
+        XCTAssertEqual(invocationCounter.value, 2)
+        XCTAssertEqual(finalUpdate?.evaluatedAssetIDs, [added.localIdentifier])
+        XCTAssertEqual(finalUpdate?.processedPhotoCount, 1)
+    }
+
     func testBufferedProgressCarriesDurableCheckpointIntoResumePlan() async throws {
         let assets = (0..<12).map {
             PhotoScanTestAsset(
@@ -476,6 +759,215 @@ final class PhotoScanEngineTests: XCTestCase {
 
         XCTAssertTrue(required.isDisjoint(with: update.evaluatedAssetIDs))
         XCTAssertEqual(required, allIDs.subtracting(update.evaluatedAssetIDs))
+    }
+
+    func testScanUpdateCountIsBoundedByBatchCount() async throws {
+        let assets = (0..<25).map {
+            PhotoScanTestAsset(
+                localIdentifier: "bounded-update-\($0)",
+                creationDate: Date(timeIntervalSinceReferenceDate: TimeInterval($0))
+            )
+        }
+        let engine = PhotoScanEngine(
+            assetProvider: StubPhotoScanAssetProvider(assets: assets),
+            assetAnalyzer: { _, _ in .unavailable }
+        )
+
+        var updateCount = 0
+        for try await _ in engine.scan(mode: .deepClean) {
+            updateCount += 1
+        }
+
+        let committedBatchCount = Int(
+            ceil(Double(assets.count) / Double(PhotoScanDefaults.analysisBatchSize))
+        )
+        print(
+            "PERF scan_updates assets=\(assets.count) updates=\(updateCount) batches=\(committedBatchCount)"
+        )
+        XCTAssertLessThanOrEqual(updateCount, committedBatchCount + 1)
+        XCTAssertLessThan(updateCount, assets.count)
+    }
+
+    func testCheckpointWritesCoalesceAndNeverEncodeConcurrently() async throws {
+        try await withIsolatedAnalysisCacheFile { _ in
+            let cache = PhotoAnalysisCache()
+            for count in 0..<20 {
+                let snapshot = makeAnalysisSnapshot(
+                    analyzedPhotoCount: min(count, 10),
+                    unanalyzedPhotoCount: 0,
+                    isComplete: false
+                )
+                await cache.scheduleSnapshot(snapshot)
+            }
+            let newest = makeAnalysisSnapshot(
+                analyzedPhotoCount: 10,
+                unanalyzedPhotoCount: 0
+            )
+            await cache.saveSnapshot(newest)
+
+            let loaded = await cache.loadSnapshot()
+            let maximumActive = await cache.maximumObservedActiveEncodeCount
+            let writeCount = await cache.completedWriteCount
+            let durationMilliseconds = await cache.lastEncodeWriteDuration * 1_000
+            let encodedByteCount = await cache.lastEncodedByteCount
+            print(
+                "PERF checkpoint_coalescing requests=21 writes=\(writeCount) max_active=\(maximumActive) last_bytes=\(encodedByteCount) last_ms=\(durationMilliseconds)"
+            )
+            XCTAssertEqual(maximumActive, 1)
+            XCTAssertLessThan(writeCount, 20)
+            XCTAssertEqual(loaded?.analyzedPhotoCount, 10)
+            XCTAssertGreaterThan(loaded?.persistenceGeneration ?? 0, 0)
+        }
+    }
+
+    func testExplicitStaleGenerationCannotReplaceNewerSnapshot() async throws {
+        try await withIsolatedAnalysisCacheFile { _ in
+            let cache = PhotoAnalysisCache()
+            let newer = makeAnalysisSnapshot(
+                analyzedPhotoCount: 9,
+                unanalyzedPhotoCount: 1
+            ).withPersistenceGeneration(20)
+            let stale = makeAnalysisSnapshot(
+                analyzedPhotoCount: 2,
+                unanalyzedPhotoCount: 8
+            ).withPersistenceGeneration(19)
+
+            await cache.saveSnapshot(newer)
+            await cache.saveSnapshot(stale)
+
+            let loaded = await cache.loadSnapshot()
+            XCTAssertEqual(loaded?.persistenceGeneration, 20)
+            XCTAssertEqual(loaded?.analyzedPhotoCount, 9)
+        }
+    }
+
+    func testFirstSaveHydratesExistingDiskGenerationBeforeEnqueue()
+        async throws {
+        try await withIsolatedAnalysisCacheFile { cacheURL in
+            let seeded = makeAnalysisSnapshot(
+                analyzedPhotoCount: 7,
+                unanalyzedPhotoCount: 0,
+                isComplete: false
+            ).withPersistenceGeneration(100)
+            try JSONEncoder().encode(seeded).write(
+                to: cacheURL,
+                options: .atomic
+            )
+
+            let cache = PhotoAnalysisCache()
+            let next = makeAnalysisSnapshot(
+                analyzedPhotoCount: 8,
+                unanalyzedPhotoCount: 0,
+                isComplete: false
+            )
+            await cache.saveSnapshot(next)
+
+            let loaded = await cache.loadSnapshot()
+            XCTAssertEqual(loaded?.persistenceGeneration, 101)
+            XCTAssertEqual(loaded?.analyzedPhotoCount, 8)
+        }
+    }
+
+    func testCacheLoadChoosesNewerBackupGeneration() async throws {
+        try await withIsolatedAnalysisCacheFile { cacheURL in
+            let backupURL = cacheURL
+                .deletingLastPathComponent()
+                .appendingPathComponent(
+                    "photo-analysis-cache.backup.json"
+                )
+            let primary = makeAnalysisSnapshot(
+                analyzedPhotoCount: 5,
+                unanalyzedPhotoCount: 0,
+                isComplete: false
+            ).withPersistenceGeneration(5)
+            let backup = makeAnalysisSnapshot(
+                analyzedPhotoCount: 6,
+                unanalyzedPhotoCount: 0,
+                isComplete: false
+            ).withPersistenceGeneration(6)
+            try JSONEncoder().encode(primary).write(
+                to: cacheURL,
+                options: .atomic
+            )
+            try JSONEncoder().encode(backup).write(
+                to: backupURL,
+                options: .atomic
+            )
+
+            let loaded = await PhotoAnalysisCache().loadSnapshot()
+
+            XCTAssertEqual(loaded?.persistenceGeneration, 6)
+            XCTAssertEqual(loaded?.analyzedPhotoCount, 6)
+        }
+    }
+
+    func testSavePreservesNewerBackupBeforeReplacingPrimary() async throws {
+        try await withIsolatedAnalysisCacheFile { cacheURL in
+            let backupURL = cacheURL
+                .deletingLastPathComponent()
+                .appendingPathComponent(
+                    "photo-analysis-cache.backup.json"
+                )
+            let stalePrimary = makeAnalysisSnapshot(
+                analyzedPhotoCount: 5,
+                unanalyzedPhotoCount: 0,
+                isComplete: false
+            ).withPersistenceGeneration(5)
+            let recoveryBackup = makeAnalysisSnapshot(
+                analyzedPhotoCount: 6,
+                unanalyzedPhotoCount: 0,
+                isComplete: false
+            ).withPersistenceGeneration(6)
+            try JSONEncoder().encode(stalePrimary).write(
+                to: cacheURL,
+                options: .atomic
+            )
+            try JSONEncoder().encode(recoveryBackup).write(
+                to: backupURL,
+                options: .atomic
+            )
+
+            let cache = PhotoAnalysisCache()
+            let next = makeAnalysisSnapshot(
+                analyzedPhotoCount: 7,
+                unanalyzedPhotoCount: 0,
+                isComplete: false
+            )
+            await cache.saveSnapshot(next)
+
+            let preservedBackup = try JSONDecoder().decode(
+                CachedPhotoAnalysisSnapshot.self,
+                from: Data(contentsOf: backupURL)
+            )
+            let loaded = await cache.loadSnapshot()
+            XCTAssertEqual(preservedBackup.persistenceGeneration, 6)
+            XCTAssertEqual(preservedBackup.analyzedPhotoCount, 6)
+            XCTAssertEqual(loaded?.persistenceGeneration, 7)
+            XCTAssertEqual(loaded?.analyzedPhotoCount, 7)
+        }
+    }
+
+    func testCorruptCurrentCheckpointFallsBackToPriorValidGeneration() async throws {
+        try await withIsolatedAnalysisCacheFile { cacheURL in
+            let cache = PhotoAnalysisCache()
+            let prior = makeAnalysisSnapshot(
+                analyzedPhotoCount: 7,
+                unanalyzedPhotoCount: 3
+            )
+            let newest = makeAnalysisSnapshot(
+                analyzedPhotoCount: 9,
+                unanalyzedPhotoCount: 1
+            )
+            await cache.saveSnapshot(prior)
+            await cache.saveSnapshot(newest)
+            try Data("partial-json".utf8).write(to: cacheURL, options: .atomic)
+
+            let recovered = await PhotoAnalysisCache().loadSnapshot()
+
+            XCTAssertEqual(recovered?.analyzedPhotoCount, 7)
+            XCTAssertEqual(recovered?.unanalyzedPhotoCount, 3)
+            XCTAssertGreaterThan(recovered?.persistenceGeneration ?? 0, 0)
+        }
     }
 
     func testScanCancellationPropagatesIntoInFlightAssetAnalysis() async {
@@ -635,6 +1127,335 @@ final class PhotoScanEngineTests: XCTestCase {
         XCTAssertEqual(repaired.scanTargetAssetIdentifiers.count, 4)
     }
 
+    func testCompletedZeroTargetWithNonemptyPhotoLibraryIsInconsistent() {
+        let metadata = makeLibraryMetadata(ids: ["asset-1", "asset-2"])
+        let snapshot = CachedPhotoAnalysisSnapshot(
+            libraryTotalCount: metadata.count,
+            scanTargetCount: 0,
+            processedPhotoCount: 0,
+            analyzedPhotoCount: 0,
+            unanalyzedPhotoCount: 0,
+            progressFraction: 1,
+            groupsFoundCount: 0,
+            reviewablePhotosCount: 0,
+            reclaimableBytesFoundSoFar: 0,
+            cleanupMode: .deepClean,
+            resultsFreshnessState: .live,
+            isComplete: true,
+            evaluatedAssetIdentifiers: [],
+            scanTargetAssetIdentifiers: [],
+            groups: [],
+            libraryAssetIdentifiers: metadata.keys.sorted(),
+            libraryAssets: metadata.values.sorted {
+                $0.localIdentifier < $1.localIdentifier
+            }
+        )
+
+        XCTAssertFalse(snapshot.hasConsistentCompletionState)
+        XCTAssertNil(
+            PhotoScanResumePlanner.requiredAssetIDs(
+                snapshot: snapshot,
+                currentAssetIDs: Set(metadata.keys),
+                currentMetadata: metadata,
+                mode: .deepClean,
+                forceFullRescan: false
+            )
+        )
+    }
+
+    func testCompletedZeroCountWithPersistedLibraryMetadataIsInconsistent() {
+        let metadata = makeLibraryMetadata(ids: ["asset-1"])
+        let snapshot = CachedPhotoAnalysisSnapshot(
+            libraryTotalCount: 0,
+            scanTargetCount: 0,
+            processedPhotoCount: 0,
+            analyzedPhotoCount: 0,
+            unanalyzedPhotoCount: 0,
+            progressFraction: 1,
+            groupsFoundCount: 0,
+            reviewablePhotosCount: 0,
+            reclaimableBytesFoundSoFar: 0,
+            cleanupMode: .deepClean,
+            resultsFreshnessState: .live,
+            isComplete: true,
+            evaluatedAssetIdentifiers: [],
+            groups: [],
+            libraryAssetIdentifiers: [],
+            libraryAssets: Array(metadata.values)
+        )
+
+        XCTAssertFalse(snapshot.hasConsistentCompletionState)
+    }
+
+    func testCompletedDeepCleanCannotCoverOnlyPartOfLibrary() {
+        let metadata = makeLibraryMetadata(
+            ids: ["asset-1", "asset-2", "asset-3"]
+        )
+        let snapshot = CachedPhotoAnalysisSnapshot(
+            libraryTotalCount: metadata.count,
+            scanTargetCount: 1,
+            processedPhotoCount: 1,
+            analyzedPhotoCount: 1,
+            unanalyzedPhotoCount: 0,
+            progressFraction: 1,
+            groupsFoundCount: 0,
+            reviewablePhotosCount: 0,
+            reclaimableBytesFoundSoFar: 0,
+            cleanupMode: .deepClean,
+            resultsFreshnessState: .live,
+            isComplete: true,
+            evaluatedAssetIdentifiers: ["asset-1"],
+            groups: [],
+            libraryAssetIdentifiers: metadata.keys.sorted(),
+            libraryAssets: metadata.values.sorted {
+                $0.localIdentifier < $1.localIdentifier
+            }
+        )
+
+        XCTAssertFalse(snapshot.hasConsistentCompletionState)
+        XCTAssertNil(
+            PhotoScanResumePlanner.requiredAssetIDs(
+                snapshot: snapshot,
+                currentAssetIDs: Set(metadata.keys),
+                currentMetadata: metadata,
+                mode: .deepClean,
+                forceFullRescan: false
+            )
+        )
+    }
+
+    func testCompletedDeepCleanRequiresEveryPersistedMetadataAsset() {
+        let metadata = makeLibraryMetadata(
+            ids: ["asset-1", "asset-2", "asset-3"]
+        )
+        let snapshot = CachedPhotoAnalysisSnapshot(
+            libraryTotalCount: metadata.count,
+            scanTargetCount: metadata.count,
+            processedPhotoCount: metadata.count,
+            analyzedPhotoCount: metadata.count,
+            unanalyzedPhotoCount: 0,
+            progressFraction: 1,
+            groupsFoundCount: 0,
+            reviewablePhotosCount: 0,
+            reclaimableBytesFoundSoFar: 0,
+            cleanupMode: .deepClean,
+            resultsFreshnessState: .live,
+            isComplete: true,
+            evaluatedAssetIdentifiers: [
+                "asset-1", "asset-2", "unrelated-asset"
+            ],
+            groups: [],
+            // Simulate a damaged redundant ID list while the metadata records
+            // still retain the authoritative library inventory.
+            libraryAssetIdentifiers: ["asset-1"],
+            libraryAssets: metadata.values.sorted {
+                $0.localIdentifier < $1.localIdentifier
+            }
+        )
+
+        XCTAssertFalse(snapshot.hasConsistentCompletionState)
+    }
+
+    func testCompletedBoundedSpeedCleanRemainsConsistent() {
+        let metadata = makeLibraryMetadata(
+            ids: ["asset-1", "asset-2", "asset-3"]
+        )
+        let snapshot = CachedPhotoAnalysisSnapshot(
+            libraryTotalCount: metadata.count,
+            scanTargetCount: 1,
+            processedPhotoCount: 1,
+            analyzedPhotoCount: 1,
+            unanalyzedPhotoCount: 0,
+            progressFraction: 1,
+            groupsFoundCount: 0,
+            reviewablePhotosCount: 0,
+            reclaimableBytesFoundSoFar: 0,
+            cleanupMode: .speedClean,
+            resultsFreshnessState: .live,
+            isComplete: true,
+            evaluatedAssetIdentifiers: ["asset-1"],
+            groups: [],
+            libraryAssetIdentifiers: metadata.keys.sorted(),
+            libraryAssets: metadata.values.sorted {
+                $0.localIdentifier < $1.localIdentifier
+            }
+        )
+
+        XCTAssertTrue(snapshot.hasConsistentCompletionState)
+        XCTAssertEqual(
+            PhotoScanResumePlanner.requiredAssetIDs(
+                snapshot: snapshot,
+                currentAssetIDs: Set(metadata.keys),
+                currentMetadata: metadata,
+                mode: .speedClean,
+                forceFullRescan: false
+            ),
+            []
+        )
+    }
+
+    func testCompletedZeroTargetIsValidForGenuinelyEmptyPhotoLibrary() {
+        let snapshot = CachedPhotoAnalysisSnapshot(
+            libraryTotalCount: 0,
+            scanTargetCount: 0,
+            processedPhotoCount: 0,
+            analyzedPhotoCount: 0,
+            unanalyzedPhotoCount: 0,
+            progressFraction: 1,
+            groupsFoundCount: 0,
+            reviewablePhotosCount: 0,
+            reclaimableBytesFoundSoFar: 0,
+            cleanupMode: .deepClean,
+            resultsFreshnessState: .live,
+            isComplete: true,
+            groups: [],
+            libraryAssetIdentifiers: [],
+            libraryAssets: []
+        )
+
+        XCTAssertTrue(snapshot.hasConsistentCompletionState)
+    }
+
+    func testScanRunCompletionWaitsForPhotoAndSupportingFinalization() {
+        XCTAssertFalse(
+            HomeViewModel.isScanRunComplete(
+                scanState: .completed,
+                isFinalizingPhotoScan: true,
+                isFinishingSupportingScans: false
+            )
+        )
+        XCTAssertFalse(
+            HomeViewModel.isScanRunComplete(
+                scanState: .completed,
+                isFinalizingPhotoScan: false,
+                isFinishingSupportingScans: true
+            )
+        )
+        XCTAssertTrue(
+            HomeViewModel.isScanRunComplete(
+                scanState: .completed,
+                isFinalizingPhotoScan: false,
+                isFinishingSupportingScans: false
+            )
+        )
+    }
+
+    func testScanCompletionLockOnlyBlocksTheFinalCompletionWindow() {
+        XCTAssertFalse(
+            HomeViewModel.isScanCompletionLocked(
+                scanState: .scanning,
+                isFinalizingPhotoScan: true,
+                isFinishingSupportingScans: false
+            )
+        )
+        XCTAssertTrue(
+            HomeViewModel.isScanCompletionLocked(
+                scanState: .completed,
+                isFinalizingPhotoScan: true,
+                isFinishingSupportingScans: false
+            )
+        )
+        XCTAssertTrue(
+            HomeViewModel.isScanCompletionLocked(
+                scanState: .completed,
+                isFinalizingPhotoScan: false,
+                isFinishingSupportingScans: true
+            )
+        )
+        XCTAssertFalse(
+            HomeViewModel.isScanCompletionLocked(
+                scanState: .completed,
+                isFinalizingPhotoScan: false,
+                isFinishingSupportingScans: false
+            )
+        )
+    }
+
+    func testSimilarPhotosPrimaryActionProtectsActiveScanProgress() {
+        XCTAssertEqual(
+            SimilarPhotosPrimaryAction.resolve(
+                scanState: .scanning,
+                hasResults: false
+            ),
+            .pause
+        )
+        XCTAssertEqual(
+            SimilarPhotosPrimaryAction.resolve(
+                scanState: .paused,
+                hasResults: false
+            ),
+            .resume
+        )
+        XCTAssertEqual(
+            SimilarPhotosPrimaryAction.resolve(
+                scanState: .completed,
+                hasResults: false
+            ),
+            .freshScan
+        )
+        XCTAssertEqual(
+            SimilarPhotosPrimaryAction.resolve(
+                scanState: .completed,
+                hasResults: true
+            ),
+            .review
+        )
+    }
+
+    func testTargetlessPartialCheckpointRebuildsScanPlan() {
+        let metadata = makeLibraryMetadata(ids: ["asset-1", "asset-2"])
+        let snapshot = makeAnalysisSnapshot(
+            analyzedPhotoCount: 0,
+            unanalyzedPhotoCount: 0,
+            isComplete: false,
+            evaluatedAssetIdentifiers: [],
+            scanTargetAssetIdentifiers: [],
+            libraryMetadata: metadata
+        )
+
+        XCTAssertNil(
+            PhotoScanResumePlanner.requiredAssetIDs(
+                snapshot: snapshot,
+                currentAssetIDs: Set(metadata.keys),
+                currentMetadata: metadata,
+                mode: .deepClean,
+                forceFullRescan: false
+            )
+        )
+    }
+
+    func testTargetlessPartialCheckpointRepairPreservesCommittedOffset() {
+        let metadata = makeLibraryMetadata(
+            ids: ["asset-1", "asset-2", "asset-3", "asset-4"]
+        )
+        let targetless = makeAnalysisSnapshot(
+            analyzedPhotoCount: 2,
+            unanalyzedPhotoCount: 0,
+            isComplete: false,
+            evaluatedAssetIdentifiers: [],
+            scanTargetAssetIdentifiers: [],
+            libraryMetadata: metadata
+        )
+        let repaired = targetless.repairingPrematureCompletion(
+            evaluatedAssetIdentifiers: ["asset-1", "asset-2"],
+            scanTargetAssetIdentifiers: [
+                "asset-1", "asset-2", "asset-3", "asset-4"
+            ]
+        )
+
+        let required = PhotoScanResumePlanner.requiredAssetIDs(
+            snapshot: repaired,
+            currentAssetIDs: Set(metadata.keys),
+            currentMetadata: metadata,
+            mode: .deepClean,
+            forceFullRescan: false
+        )
+
+        XCTAssertEqual(repaired.processedPhotoCount, 2)
+        XCTAssertEqual(repaired.scanTargetCount, 4)
+        XCTAssertEqual(required, Set(["asset-3", "asset-4"]))
+    }
+
     func testPartialScanResumePlannerOnlyRequestsUnfinishedAssets() {
         let metadata = makeLibraryMetadata(ids: ["asset-1", "asset-2", "asset-3"])
         let snapshot = makeAnalysisSnapshot(
@@ -681,6 +1502,46 @@ final class PhotoScanEngineTests: XCTestCase {
         XCTAssertEqual(required, ["asset-2", "asset-3"])
     }
 
+    func testPartialResumeIncludesNewChangedAndSelectedRetryAssets() {
+        let cachedMetadata = makeLibraryMetadata(
+            ids: ["done", "unfinished", "retry"]
+        )
+        var currentMetadata = cachedMetadata
+        currentMetadata["done"] = CachedPhotoAssetMetadata(
+            localIdentifier: "done",
+            modificationDate: Date(timeIntervalSinceReferenceDate: 9_999),
+            pixelWidth: 4_032,
+            pixelHeight: 3_024,
+            mediaSubtypesRawValue: 0
+        )
+        currentMetadata["new"] = CachedPhotoAssetMetadata(
+            localIdentifier: "new",
+            modificationDate: Date(),
+            pixelWidth: 4_032,
+            pixelHeight: 3_024,
+            mediaSubtypesRawValue: 0
+        )
+        let snapshot = makeAnalysisSnapshot(
+            analyzedPhotoCount: 1,
+            unanalyzedPhotoCount: 1,
+            isComplete: false,
+            evaluatedAssetIdentifiers: ["done", "retry"],
+            scanTargetAssetIdentifiers: ["done", "unfinished", "retry"],
+            libraryMetadata: cachedMetadata
+        )
+
+        let required = PhotoScanResumePlanner.requiredAssetIDs(
+            snapshot: snapshot,
+            currentAssetIDs: Set(currentMetadata.keys),
+            currentMetadata: currentMetadata,
+            mode: .deepClean,
+            forceFullRescan: false,
+            retryAssetIDs: ["retry"]
+        )
+
+        XCTAssertEqual(required, ["done", "unfinished", "retry", "new"])
+    }
+
     func testCompletedScanResumePlannerOnlyRequestsNewAssets() {
         let cachedMetadata = makeLibraryMetadata(ids: ["asset-1", "asset-2"])
         let currentMetadata = makeLibraryMetadata(ids: ["asset-1", "asset-2", "asset-3"])
@@ -689,7 +1550,9 @@ final class PhotoScanEngineTests: XCTestCase {
             unanalyzedPhotoCount: 0,
             isComplete: true,
             evaluatedAssetIdentifiers: ["asset-1", "asset-2"],
-            libraryMetadata: cachedMetadata
+            libraryMetadata: cachedMetadata,
+            libraryTotalCount: cachedMetadata.count,
+            scanTargetCount: 2
         )
 
         let required = PhotoScanResumePlanner.requiredAssetIDs(
@@ -1045,15 +1908,17 @@ final class PhotoScanEngineTests: XCTestCase {
         isComplete: Bool = true,
         evaluatedAssetIdentifiers: [String] = [],
         scanTargetAssetIdentifiers: [String] = [],
-        libraryMetadata: [String: CachedPhotoAssetMetadata]? = nil
+        libraryMetadata: [String: CachedPhotoAssetMetadata]? = nil,
+        libraryTotalCount: Int = 12,
+        scanTargetCount: Int = 10
     ) -> CachedPhotoAnalysisSnapshot {
         let resolvedMetadata = libraryMetadata ?? makeLibraryMetadata(
             ids: ["library-1", "library-2"]
         )
         return CachedPhotoAnalysisSnapshot(
             savedAt: Date(timeIntervalSinceReferenceDate: 123),
-            libraryTotalCount: 12,
-            scanTargetCount: 10,
+            libraryTotalCount: libraryTotalCount,
+            scanTargetCount: scanTargetCount,
             processedPhotoCount: analyzedPhotoCount + unanalyzedPhotoCount,
             analyzedPhotoCount: analyzedPhotoCount,
             unanalyzedPhotoCount: unanalyzedPhotoCount,
@@ -1110,18 +1975,28 @@ final class PhotoScanEngineTests: XCTestCase {
         let cacheURL = directoryURL.appendingPathComponent(
             "photo-analysis-cache.json"
         )
+        let backupURL = directoryURL.appendingPathComponent(
+            "photo-analysis-cache.backup.json"
+        )
         let originalData = try? Data(contentsOf: cacheURL)
+        let originalBackupData = try? Data(contentsOf: backupURL)
 
         try fileManager.createDirectory(
             at: directoryURL,
             withIntermediateDirectories: true
         )
         try? fileManager.removeItem(at: cacheURL)
+        try? fileManager.removeItem(at: backupURL)
         defer {
             if let originalData {
                 try? originalData.write(to: cacheURL, options: .atomic)
             } else {
                 try? fileManager.removeItem(at: cacheURL)
+            }
+            if let originalBackupData {
+                try? originalBackupData.write(to: backupURL, options: .atomic)
+            } else {
+                try? fileManager.removeItem(at: backupURL)
             }
         }
 
@@ -1211,6 +2086,25 @@ private final class LockedInvocationCounter: @unchecked Sendable {
         lock.lock()
         storedValue += 1
         lock.unlock()
+    }
+}
+
+private actor PhotoScanTestGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func open() {
+        isOpen = true
+        let continuations = waiters
+        waiters.removeAll()
+        continuations.forEach { $0.resume() }
     }
 }
 
