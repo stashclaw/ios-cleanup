@@ -994,6 +994,41 @@ final class FileScanEngineTests: XCTestCase {
         )
     }
 
+    func testCapacityReadingIgnoresZeroFromNonLocalVolumes() {
+        // External SSDs and iCloud Drive surface through the Files provider and
+        // report 0 for volumeAvailableCapacityForImportantUsage rather than
+        // reporting nothing. Trusting that zero aborted exports to drives with
+        // terabytes free, with "not enough free space".
+        XCTAssertEqual(
+            ExternalPhotoExportCapacity.firstTrustedCapacity([0, 2_000_000_000]),
+            2_000_000_000
+        )
+        XCTAssertEqual(
+            ExternalPhotoExportCapacity.firstTrustedCapacity([nil, 0, 512]),
+            512
+        )
+        XCTAssertEqual(
+            ExternalPhotoExportCapacity.firstTrustedCapacity([9_000, 1]),
+            9_000,
+            "The first trustworthy reading wins."
+        )
+    }
+
+    func testUnknownCapacityDoesNotBlockExport() {
+        // No source produced a believable figure. Blocking here would make a
+        // perfectly good destination permanently unusable, so the guard must
+        // stay permissive and let the real write surface any actual failure.
+        XCTAssertNil(
+            ExternalPhotoExportCapacity.firstTrustedCapacity([nil, 0, nil])
+        )
+        XCTAssertTrue(
+            ExternalPhotoExportCapacity.hasCapacity(
+                estimatedAssetBytes: 8_000_000_000,
+                availableBytes: nil
+            )
+        )
+    }
+
     func testExternalExportCapacityPreservesDriveReserve() {
         let reserve =
             ExternalPhotoExportCapacity.minimumFreeSpaceReserveBytes

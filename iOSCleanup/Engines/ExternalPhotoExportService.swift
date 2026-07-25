@@ -292,6 +292,23 @@ struct ExternalPhotoExportSessionRecord: Codable, Equatable, Sendable {
 enum ExternalPhotoExportCapacity {
     static let minimumFreeSpaceReserveBytes: Int64 = 268_435_456
 
+    /// Picks the first reading that can actually be believed.
+    ///
+    /// Volume capacity keys are only defined for the local device volume.
+    /// External drives and cloud providers (iCloud Drive, USB SSDs surfaced
+    /// through the Files provider) frequently report `0` instead of reporting
+    /// nothing, and a naive `if let` treats that as "completely full". Only a
+    /// positive value is trusted; nil means "unknown", which the capacity
+    /// check treats as permissive rather than blocking a legitimate export.
+    static func firstTrustedCapacity(_ readings: [Int64?]) -> Int64? {
+        for reading in readings {
+            if let reading, reading > 0 {
+                return reading
+            }
+        }
+        return nil
+    }
+
     static func hasCapacity(
         estimatedAssetBytes: Int64,
         availableBytes: Int64?
@@ -531,13 +548,32 @@ actor ExternalPhotoExportService {
             let recoverablePrefixBytes = recoverablePartialBytes(
                 in: directoryURL
             )
+            let neededBytes = max(
+                asset.estimatedFileSize - recoverablePrefixBytes,
+                0
+            )
+            let reportedFreeBytes = availableCapacity(at: directoryURL)
             guard ExternalPhotoExportCapacity.hasCapacity(
-                estimatedAssetBytes: max(
-                    asset.estimatedFileSize - recoverablePrefixBytes,
-                    0
-                ),
-                availableBytes: availableCapacity(at: directoryURL)
+                estimatedAssetBytes: neededBytes,
+                availableBytes: reportedFreeBytes
             ) else {
+                // State the actual numbers. A destination that reports an
+                // implausible figure is a reading problem, not a full drive,
+                // and the user needs to be able to tell those apart.
+                let freeLabel = reportedFreeBytes.map {
+                    ByteCountFormatter.string(
+                        fromByteCount: $0,
+                        countStyle: .file
+                    )
+                } ?? "an unknown amount"
+                let neededLabel = ByteCountFormatter.string(
+                    fromByteCount: neededBytes,
+                    countStyle: .file
+                )
+                let message =
+                    "Stopped before copying this item: the destination reports "
+                    + "\(freeLabel) free and this item needs about \(neededLabel). "
+                    + "Nothing was deleted."
                 for remainingAsset in assets[assetIndex...] where
                     !completedAssetIDSet.contains(
                         remainingAsset.localIdentifier
@@ -546,8 +582,7 @@ actor ExternalPhotoExportService {
                         ExternalPhotoExportItemFailure(
                             assetID: remainingAsset.localIdentifier,
                             filename: nil,
-                            message:
-                                "The selected drive does not have enough free space to safely continue."
+                            message: message
                         )
                     )
                 }
@@ -929,17 +964,36 @@ actor ExternalPhotoExportService {
         }
     }
 
+    /// Free space on the destination, or nil when it cannot be determined.
+    ///
+    /// `volumeAvailableCapacityForImportantUsage` is defined for the local
+    /// device volume. External drives surfaced through the Files provider
+    /// commonly report **0** for it rather than reporting nothing at all — and
+    /// because 0 is a valid non-nil value, trusting it aborted exports to a
+    /// drive with terabytes free. Only a positive reading is trusted, and each
+    /// source is tried in turn; nil means "unknown", which callers treat as
+    /// permissive rather than blocking a legitimate export.
     private func availableCapacity(at directoryURL: URL) -> Int64? {
-        if let values = try? directoryURL.resourceValues(
+        let importantUsage = (try? directoryURL.resourceValues(
             forKeys: [.volumeAvailableCapacityForImportantUsageKey]
-        ), let capacity =
-            values.volumeAvailableCapacityForImportantUsage {
-            return Int64(capacity)
-        }
-        let attributes = try? fileManager.attributesOfFileSystem(
-            forPath: directoryURL.path
-        )
-        return (attributes?[.systemFreeSize] as? NSNumber)?.int64Value
+        ))?.volumeAvailableCapacityForImportantUsage
+        // Plain available capacity is the meaningful key for external volumes.
+        let plainCapacity = (try? directoryURL.resourceValues(
+            forKeys: [.volumeAvailableCapacityKey]
+        ))?.volumeAvailableCapacity
+        let filesystemFree = (
+            try? fileManager.attributesOfFileSystem(
+                forPath: directoryURL.path
+            )
+        )?[.systemFreeSize] as? NSNumber
+
+        // `volumeAvailableCapacityForImportantUsage` is already Int64 while
+        // `volumeAvailableCapacity` is Int, so the conversions differ.
+        return ExternalPhotoExportCapacity.firstTrustedCapacity([
+            importantUsage,
+            plainCapacity.map { Int64($0) },
+            filesystemFree?.int64Value
+        ])
     }
 
     private func recoverablePartialBytes(
