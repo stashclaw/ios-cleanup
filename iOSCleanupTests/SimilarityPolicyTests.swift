@@ -298,9 +298,12 @@ final class SimilarityPolicyTests: XCTestCase {
         XCTAssertEqual(result.deleteCandidateIDs.count, 1)
     }
 
-    func testAutomaticActionWithoutExplicitDeletePlanDowngradesToReview() {
+    @MainActor
+    func testHighConfidenceNearDuplicateSelectsNonKeepersWhenPlanIsMissing() {
+        let keeper = TestPhotoAsset(localIdentifier: "keeper")
+        let other = TestPhotoAsset(localIdentifier: "other")
         let group = PhotoGroup(
-            assets: [],
+            assets: [keeper, other],
             similarity: 0.98,
             reason: .nearDuplicate,
             groupConfidence: .high,
@@ -313,9 +316,17 @@ final class SimilarityPolicyTests: XCTestCase {
             ]
         )
 
-        XCTAssertEqual(group.recommendedAction, .reviewManually)
-        XCTAssertTrue(group.deleteCandidateIDs.isEmpty)
-        XCTAssertFalse(group.isAutoCleanEligible)
+        XCTAssertEqual(group.recommendedAction, .keepBestTrashRest)
+        XCTAssertEqual(group.deleteCandidateIDs, ["other"])
+        XCTAssertTrue(group.isAutoCleanEligible)
+        XCTAssertEqual(
+            group.candidates.first { $0.photoId == "other" }?.selectionState,
+            .trash
+        )
+        XCTAssertTrue(
+            group.candidates.first { $0.photoId == "other" }?
+                .isSelectedForTrash == true
+        )
     }
 
     func testMalformedDeletePlanDowngradesInsteadOfSilentlyFiltering() {
@@ -669,6 +680,49 @@ final class SimilarityPolicyTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? PhotoDeletionGuardrailError, .duplicateDeleteAcrossGroups)
         }
+    }
+
+    @MainActor
+    func testAutoCleanPlannerSkipsConflictsAndKeepsSafeGroups() {
+        let keeperA = TestPhotoAsset(localIdentifier: "keeper-a")
+        let sharedTrash = TestPhotoAsset(localIdentifier: "shared-trash")
+        let keeperB = TestPhotoAsset(localIdentifier: "keeper-b")
+        let keeperC = TestPhotoAsset(localIdentifier: "keeper-c")
+        let trashC = TestPhotoAsset(localIdentifier: "trash-c")
+
+        let first = PhotoGroup(
+            assets: [keeperA, sharedTrash],
+            similarity: 0.99,
+            reason: .nearDuplicate,
+            groupConfidence: .high,
+            recommendedAction: .keepBestTrashRest,
+            keeperAssetID: keeperA.localIdentifier,
+            deleteCandidateIDs: [sharedTrash.localIdentifier]
+        )
+        let conflicting = PhotoGroup(
+            assets: [keeperB, sharedTrash],
+            similarity: 0.99,
+            reason: .nearDuplicate,
+            groupConfidence: .high,
+            recommendedAction: .keepBestTrashRest,
+            keeperAssetID: keeperB.localIdentifier,
+            deleteCandidateIDs: [sharedTrash.localIdentifier]
+        )
+        let safe = PhotoGroup(
+            assets: [keeperC, trashC],
+            similarity: 0.99,
+            reason: .nearDuplicate,
+            groupConfidence: .high,
+            recommendedAction: .keepBestTrashRest,
+            keeperAssetID: keeperC.localIdentifier,
+            deleteCandidateIDs: [trashC.localIdentifier]
+        )
+
+        let planned = PhotoDeletionGuardrails.compatibleAutoCleanGroups(
+            from: [first, conflicting, safe]
+        )
+
+        XCTAssertEqual(planned.map(\.id), [first.id, safe.id])
     }
 
     private func asset(

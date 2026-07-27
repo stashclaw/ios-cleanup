@@ -225,6 +225,38 @@ final class PhotoFeedbackLearningTests: XCTestCase {
         XCTAssertEqual(events[0].featureSchemaVersion, PhotoFeedbackStore.featureSchemaVersion)
     }
 
+    func testAutoCleanFeedbackPersistsAcrossBatchBoundary() async throws {
+        let (feedbackStore, _, directoryURL) = makeStores(
+            uniqueDirectorySuffix: "auto-clean-batch"
+        )
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let groups = (0..<205).map { index in
+            let keeperID = "keeper-\(index)"
+            let deleteID = "delete-\(index)"
+            return PhotoGroup(
+                assets: [],
+                similarity: 0.99,
+                reason: .nearDuplicate,
+                groupConfidence: .high,
+                recommendedAction: .keepBestTrashRest,
+                keeperAssetID: keeperID,
+                deleteCandidateIDs: [deleteID],
+                candidates: [
+                    makeCandidate(keeperID, isBestShot: true),
+                    makeCandidate(deleteID, isBestShot: false)
+                ]
+            )
+        }
+
+        await feedbackStore.recordAutoCleanDecisions(groups: groups)
+
+        let events = await feedbackStore.loadAllEvents()
+        XCTAssertEqual(events.count, 205)
+        XCTAssertTrue(events.allSatisfy { $0.stage == .committed })
+        XCTAssertTrue(events.allSatisfy { $0.recommendationAccepted == true })
+    }
+
     func testEventsPersistAndReloadWithoutImagePayloads() async throws {
         let (feedbackStore, profileStore, directoryURL) = makeStores()
         defer { try? FileManager.default.removeItem(at: directoryURL) }

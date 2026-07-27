@@ -11,6 +11,9 @@ struct PhotoResultsView: View {
     @State private var keepBestInFlightGroupIDs: Set<UUID> = []
     @State private var showPaywall = false
     @State private var showAutoCleanAllConfirm = false
+    @State private var isAutoCleaningAll = false
+    @State private var pendingAutoCleanGroups: [PhotoGroup] = []
+    @State private var startAutoCleanAfterDismiss = false
     @State private var deletionError: String?
     @State private var activeFilter: FilterPill = .all
     @State private var reviewLaterToastVisible = false
@@ -45,7 +48,9 @@ struct PhotoResultsView: View {
     }
 
     private var autoCleanEligibleGroups: [PhotoGroup] {
-        filteredGroups.filter(\.isAutoCleanEligible)
+        PhotoDeletionGuardrails.compatibleAutoCleanGroups(
+            from: filteredGroups.filter(\.isAutoCleanEligible)
+        )
     }
 
     private var totalPhotoCount: Int {
@@ -104,9 +109,19 @@ struct PhotoResultsView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
                     guard purchaseManager.isPurchased else { showPaywall = true; return }
+                    let plannedGroups = autoCleanEligibleGroups
+                    guard !plannedGroups.isEmpty else {
+                        deletionError = "No high-confidence duplicate groups are safe to auto-clean in this filter. Similar-only groups need review."
+                        DuckHaptics.rigid()
+                        return
+                    }
+                    deletionError = nil
+                    pendingAutoCleanGroups = plannedGroups
                     showAutoCleanAllConfirm = true
                 } label: {
-                    if purchaseManager.isPurchased {
+                    if isAutoCleaningAll {
+                        ProgressView()
+                    } else if purchaseManager.isPurchased {
                         Text("Auto-clean all")
                     } else {
                         Label("Auto-clean all", systemImage: "lock.fill")
@@ -114,19 +129,26 @@ struct PhotoResultsView: View {
                 }
                 .font(.duckCaption.weight(.semibold))
                 .foregroundStyle(Color.textSecondary)
-                .disabled(autoCleanEligibleGroups.isEmpty)
+                .disabled(isAutoCleaningAll)
                 .accessibilityHint(purchaseManager.isPurchased ? "" : "Requires PhotoDuck unlock")
             }
         }
-        .sheet(isPresented: $showAutoCleanAllConfirm) {
+        .sheet(
+            isPresented: $showAutoCleanAllConfirm,
+            onDismiss: { startPendingAutoCleanIfNeeded() }
+        ) {
             NavigationStack {
                 AutoCleanConfirmationSheet(
-                    groups: autoCleanEligibleGroups,
+                    groups: pendingAutoCleanGroups,
                     onConfirm: {
+                        // PhotoKit must present its own confirmation dialog.
+                        // Wait until this sheet has completely dismissed before
+                        // starting the request or iOS may suppress that dialog.
+                        startAutoCleanAfterDismiss = true
                         showAutoCleanAllConfirm = false
-                        Task { await autoCleanAll() }
                     },
                     onCancel: {
+                        startAutoCleanAfterDismiss = false
                         showAutoCleanAllConfirm = false
                     }
                 )
@@ -155,33 +177,59 @@ struct PhotoResultsView: View {
 
     // MARK: - Auto-clean all
 
-    private func autoCleanAll() async {
-        let groupsToClean = autoCleanEligibleGroups
-        guard !groupsToClean.isEmpty else { return }
+    private func startPendingAutoCleanIfNeeded() {
+        let groupsToClean = pendingAutoCleanGroups
+        let shouldStart = startAutoCleanAfterDismiss
+        pendingAutoCleanGroups = []
+        startAutoCleanAfterDismiss = false
+        guard shouldStart, !groupsToClean.isEmpty else { return }
+
+        Task {
+            // Give UIKit one run-loop turn after SwiftUI's sheet teardown so
+            // Photos can reliably present the system deletion confirmation.
+            await Task.yield()
+            await autoCleanAll(groups: groupsToClean)
+        }
+    }
+
+    private func autoCleanAll(groups groupsToClean: [PhotoGroup]) async {
+        guard !groupsToClean.isEmpty, !isAutoCleaningAll else {
+            return
+        }
+        isAutoCleaningAll = true
+        deletionError = nil
+        defer { isAutoCleaningAll = false }
 
         do {
-            try await deletionManager.keepBest(from: groupsToClean)
-            for group in groupsToClean {
-                _ = await PhotoFeedbackStore.shared.recordSimilarGroupDecision(
-                    group: group,
-                    kind: .keepBest,
-                    stage: .committed,
-                    selectedKeeperID: group.keeperAssetID,
-                    deletedAssetIDs: group.deleteCandidateIDs,
-                    keptAssetIDs: [group.keeperAssetID].compactMap { $0 },
-                    recommendationAccepted: true,
-                    note: "Auto-clean all from results list"
-                )
-            }
-
+            try await deletionManager.keepBestImmediately(
+                from: groupsToClean
+            )
             let cleanedIDs = Set(groupsToClean.map(\.id))
-            withAnimation(.duckSpring) {
+            if groupsToClean.count <= 100 {
+                withAnimation(.duckSpring) {
+                    hiddenGroupIDs.formUnion(cleanedIDs)
+                }
+            } else {
+                // Animating hundreds or thousands of rows at once can stall
+                // SwiftUI long after PhotoKit has completed the deletion.
                 hiddenGroupIDs.formUnion(cleanedIDs)
             }
+
+            recordAutoCleanFeedback(groupsToClean)
         } catch is CancellationError {
             deletionError = nil
         } catch {
-            deletionError = error.localizedDescription
+            deletionError = DeletionManager.isUserCancellation(error)
+                ? nil
+                : error.localizedDescription
+        }
+    }
+
+    private func recordAutoCleanFeedback(_ cleanedGroups: [PhotoGroup]) {
+        Task(priority: .utility) {
+            await PhotoFeedbackStore.shared.recordAutoCleanDecisions(
+                groups: cleanedGroups
+            )
         }
     }
 
@@ -409,19 +457,35 @@ struct PhotoResultsView: View {
 }
 
 private struct AutoCleanConfirmationSheet: View {
-    let groups: [PhotoGroup]
+    private static let previewLimit = 30
+
+    private let assets: [PHAsset]
+    private let potentialBytes: Int64
     let onConfirm: () -> Void
     let onCancel: () -> Void
 
-    private var assets: [PHAsset] {
+    init(
+        groups: [PhotoGroup],
+        onConfirm: @escaping () -> Void,
+        onCancel: @escaping () -> Void
+    ) {
         var seen = Set<String>()
-        return groups
+        assets = groups
             .flatMap(\.deleteCandidateAssets)
             .filter { seen.insert($0.localIdentifier).inserted }
+        potentialBytes = groups.reduce(into: Int64(0)) {
+            $0 += $1.reclaimableBytes
+        }
+        self.onConfirm = onConfirm
+        self.onCancel = onCancel
     }
 
-    private var potentialBytes: Int64 {
-        groups.reduce(into: Int64(0)) { $0 += $1.reclaimableBytes }
+    private var previewAssets: ArraySlice<PHAsset> {
+        assets.prefix(Self.previewLimit)
+    }
+
+    private var hiddenPreviewCount: Int {
+        max(assets.count - previewAssets.count, 0)
     }
 
     var body: some View {
@@ -443,9 +507,16 @@ private struct AutoCleanConfirmationSheet: View {
                     columns: [GridItem(.adaptive(minimum: 82), spacing: 8)],
                     spacing: 8
                 ) {
-                    ForEach(assets, id: \.localIdentifier) { asset in
+                    ForEach(previewAssets, id: \.localIdentifier) { asset in
                         AutoCleanDeleteThumbnail(asset: asset)
                     }
+                }
+
+                if hiddenPreviewCount > 0 {
+                    Text("+ \(hiddenPreviewCount.formatted()) more selected")
+                        .font(.duckCaption.weight(.semibold))
+                        .foregroundStyle(Color.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
                 }
 
                 Text("Recommended keepers are excluded. These photos move to Recently Deleted, and space is permanently reclaimed only after that album is emptied.")

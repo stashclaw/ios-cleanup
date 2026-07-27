@@ -263,3 +263,174 @@ enum FileScanPolicy {
         byteSize >= FileScanEngine.minimumFileSizeBytes
     }
 }
+
+struct CachedLargeVideoResult: Codable, Equatable, Sendable {
+    let id: UUID
+    let assetIdentifier: String
+    let displayName: String
+    let byteSize: Int64
+    let byteSizeIsEstimated: Bool
+    let creationDate: Date?
+}
+
+struct CachedLargeVideoSnapshot: Codable, Equatable, Sendable {
+    static let schemaVersion = 1
+
+    let schemaVersion: Int
+    let savedAt: Date
+    let totalVideoCount: Int
+    let results: [CachedLargeVideoResult]
+}
+
+struct RestoredLargeVideoResults: Sendable {
+    let files: [LargeFile]
+    let totalVideoCount: Int
+    let missingResultCount: Int
+}
+
+/// Persists the completed Large Videos result set independently from app/build
+/// versions. File-size measurements were already durable, but without this
+/// index every relaunch still enumerated the entire video library.
+actor LargeVideoResultCache {
+    static let shared = LargeVideoResultCache()
+
+    private let fileURL: URL
+    private var cachedSnapshot: CachedLargeVideoSnapshot?
+    private var hasLoaded = false
+
+    init(directoryURL: URL? = nil) {
+        let baseURL = directoryURL
+            ?? FileManager.default.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            ).first
+            ?? FileManager.default.temporaryDirectory
+        fileURL = baseURL
+            .appendingPathComponent("PhotoDuck", isDirectory: true)
+            .appendingPathComponent("large-video-results.json")
+    }
+
+    func load() async -> CachedLargeVideoSnapshot? {
+        if hasLoaded {
+            return cachedSnapshot
+        }
+        hasLoaded = true
+        let fileURL = fileURL
+        cachedSnapshot = await Task.detached(priority: .utility) {
+            guard let data = try? Data(
+                contentsOf: fileURL,
+                options: [.mappedIfSafe]
+            ),
+            let snapshot = try? JSONDecoder().decode(
+                CachedLargeVideoSnapshot.self,
+                from: data
+            ),
+            snapshot.schemaVersion == CachedLargeVideoSnapshot.schemaVersion
+            else {
+                return nil
+            }
+            return snapshot
+        }.value
+        return cachedSnapshot
+    }
+
+    func restoreFiles() async -> RestoredLargeVideoResults? {
+        guard let snapshot = await load() else { return nil }
+        let restored = await Task.detached(priority: .utility) {
+            let identifiers = snapshot.results.map(\.assetIdentifier)
+            let fetchResult = PHAsset.fetchAssets(
+                withLocalIdentifiers: identifiers,
+                options: nil
+            )
+            var assetsByID: [String: PHAsset] = [:]
+            assetsByID.reserveCapacity(fetchResult.count)
+            fetchResult.enumerateObjects { asset, _, _ in
+                assetsByID[asset.localIdentifier] = asset
+            }
+
+            let files = snapshot.results.compactMap { record -> LargeFile? in
+                guard let asset = assetsByID[record.assetIdentifier] else {
+                    return nil
+                }
+                return LargeFile(
+                    id: record.id,
+                    source: .photoLibrary(asset: asset),
+                    displayName: record.displayName,
+                    byteSize: record.byteSize,
+                    byteSizeIsEstimated: record.byteSizeIsEstimated,
+                    creationDate: record.creationDate
+                )
+            }
+            return RestoredLargeVideoResults(
+                files: files,
+                totalVideoCount: max(
+                    snapshot.totalVideoCount
+                        - (snapshot.results.count - files.count),
+                    files.count
+                ),
+                missingResultCount: snapshot.results.count - files.count
+            )
+        }.value
+        return restored
+    }
+
+    func save(files: [LargeFile], totalVideoCount: Int) async {
+        let snapshot = CachedLargeVideoSnapshot(
+            schemaVersion: CachedLargeVideoSnapshot.schemaVersion,
+            savedAt: Date(),
+            totalVideoCount: max(totalVideoCount, files.count),
+            results: files.map { file in
+                CachedLargeVideoResult(
+                    id: file.id,
+                    assetIdentifier: file.photoAsset.localIdentifier,
+                    displayName: file.displayName,
+                    byteSize: file.byteSize,
+                    byteSizeIsEstimated: file.byteSizeIsEstimated,
+                    creationDate: file.creationDate
+                )
+            }
+        )
+        cachedSnapshot = snapshot
+        hasLoaded = true
+
+        let fileURL = fileURL
+        await Task.detached(priority: .utility) {
+            do {
+                let data = try JSONEncoder().encode(snapshot)
+                try FileManager.default.createDirectory(
+                    at: fileURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try data.write(to: fileURL, options: [.atomic])
+            } catch {
+                // This cache is an optimization. Explicit Refresh can rebuild
+                // it if persistence is unavailable.
+            }
+        }.value
+    }
+
+    func remove(assetIdentifier: String) async {
+        guard let snapshot = await load() else { return }
+        let remaining = snapshot.results.filter {
+            $0.assetIdentifier != assetIdentifier
+        }
+        guard remaining.count != snapshot.results.count else { return }
+        let updated = CachedLargeVideoSnapshot(
+            schemaVersion: snapshot.schemaVersion,
+            savedAt: Date(),
+            totalVideoCount: max(snapshot.totalVideoCount - 1, 0),
+            results: remaining
+        )
+        cachedSnapshot = updated
+
+        let fileURL = fileURL
+        await Task.detached(priority: .utility) {
+            guard let data = try? JSONEncoder().encode(updated) else { return }
+            try? FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try? data.write(to: fileURL, options: [.atomic])
+        }.value
+    }
+}

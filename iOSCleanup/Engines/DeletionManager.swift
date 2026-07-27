@@ -103,30 +103,51 @@ final class DeletionManager: ObservableObject {
     // MARK: - Public API
 
     func keepBest(from group: PhotoGroup) async throws {
-        let toDelete = try PhotoDeletionGuardrails.deleteAssets(in: group)
-        try await scheduleDelete(
-            assets: toDelete,
-            protectedKeeperIDs: Set([group.keeperAssetID].compactMap { $0 })
-        )
+        try await keepBestImmediately(from: [group])
     }
 
     func keepBest(from groups: [PhotoGroup]) async throws {
+        try await keepBestImmediately(from: groups)
+    }
+
+    /// Photos presents the final destructive confirmation. PhotoDuck does not
+    /// add a second ten-second delay before asking the system to delete.
+    func keepBestImmediately(from groups: [PhotoGroup]) async throws {
         try PhotoDeletionGuardrails.validate(groups: groups)
         let assets = PhotoAssetIdentity.unique(
             groups.flatMap(\.deleteCandidateAssets)
         )
-        try await scheduleDelete(
-            assets: assets,
-            protectedKeeperIDs: Set(groups.compactMap(\.keeperAssetID))
+        guard !assets.isEmpty else {
+            throw PhotoDeletionGuardrailError.emptyDeleteCandidateList
+        }
+
+        let deleteIDs = Set(assets.map(\.localIdentifier))
+        let keeperIDs = Set(groups.compactMap(\.keeperAssetID))
+        let pendingDeleteIDs = Set(
+            pendingAssets.map(\.localIdentifier)
         )
+        guard pendingProtectedKeeperIDs.isDisjoint(with: deleteIDs),
+              pendingDeleteIDs.isDisjoint(with: deleteIDs),
+              pendingDeleteIDs.isDisjoint(with: keeperIDs) else {
+            throw PhotoDeletionGuardrailError.crossGroupKeeperConflict
+        }
+
+        let freedBytes = estimatedBytes(for: assets)
+        try await performDelete(assets: assets)
+        totalBytesFreed += freedBytes
+        totalItemsFreed += assets.count
+        recordConfirmedDeletion(
+            bytes: freedBytes,
+            itemCount: assets.count
+        )
+        DuckHaptics.success()
     }
 
     func delete(assets: [PHAsset]) async throws {
-        try await scheduleDelete(assets: assets)
+        try await deleteImmediately(assets: assets)
     }
 
-    /// Single-item review surfaces can opt into Photos' system confirmation
-    /// immediately instead of waiting behind PhotoDuck's deferred undo window.
+    /// Presents Photos' system confirmation immediately.
     func deleteImmediately(assets: [PHAsset]) async throws {
         let uniqueAssets = PhotoAssetIdentity.unique(assets)
         guard !uniqueAssets.isEmpty else {

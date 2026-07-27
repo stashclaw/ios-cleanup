@@ -361,14 +361,51 @@ enum ExternalPhotoExportNaming {
     }
 }
 
-actor ExternalPhotoExportService {
-    private struct RecoveryContext {
-        let directoryURL: URL
-        let session: ExternalPhotoExportSessionRecord
-        let manifestEntries: [
-            ExternalPhotoExportManifest.AssetEntry
-        ]
+enum ExternalPhotoExportResourcePolicy {
+    /// A Photos video can expose the current rendered video, its original
+    /// source, and adjustment metadata. Exporting all of them can copy the
+    /// same multi-gigabyte content more than once. Large-video export needs
+    /// one playable representation, preferring the current rendered version.
+    static func resources(
+        for asset: PHAsset,
+        available resources: [PHAssetResource]
+    ) -> [PHAssetResource] {
+        guard asset.mediaType == .video else {
+            return resources
+        }
+        guard let preferred = resources.enumerated().min(by: {
+            rank($0.element.type) < rank($1.element.type)
+        }), rank(preferred.element.type) < Int.max else {
+            return []
+        }
+        return [preferred.element]
     }
+
+    static func preferredVideoResourceIndex(
+        types: [PHAssetResourceType]
+    ) -> Int? {
+        types.enumerated().min {
+            rank($0.element) < rank($1.element)
+        }.flatMap {
+            rank($0.element) < Int.max ? $0.offset : nil
+        }
+    }
+
+    private static func rank(_ type: PHAssetResourceType) -> Int {
+        switch type {
+        case .fullSizeVideo:
+            return 0
+        case .video:
+            return 1
+        case .adjustmentBaseVideo:
+            return 2
+        default:
+            return Int.max
+        }
+    }
+}
+
+actor ExternalPhotoExportService {
 
     private static let manifestFilename =
         "PhotoDuck Export Manifest.json"
@@ -408,11 +445,19 @@ actor ExternalPhotoExportService {
         }
 
         let allSignatures = assetSignatures(for: assets)
+        // One destination, one manifest. Everything the user has ever exported
+        // here lives side by side in the folder they picked; a per-run
+        // timestamped subfolder made them hunt across directories to find a
+        // photo. The manifest is the accumulated record of that folder.
+        let existingManifestEntries = loadManifestEntries(
+            in: parentDirectoryURL
+        )
         // Re-copying gigabytes that are already verified on this drive is the
         // single most expensive avoidable operation in the app.
         let alreadyExported = previouslyExportedAssetIDs(
             in: parentDirectoryURL,
-            matching: allSignatures
+            matching: allSignatures,
+            manifestEntries: existingManifestEntries
         )
         let pendingAssets = assets.filter {
             !alreadyExported.contains($0.localIdentifier)
@@ -437,41 +482,21 @@ actor ExternalPhotoExportService {
 
         let assets = pendingAssets
         let signatures = assetSignatures(for: assets)
-        let recovery = resumableExport(
-            in: parentDirectoryURL,
-            matching: signatures
-        )
-        let exportDirectory: URL
-        let initialManifestEntries:
-            [ExternalPhotoExportManifest.AssetEntry]
-        let sessionCreatedAt: Date
-        if let recovery {
-            exportDirectory = recovery.directoryURL
-            initialManifestEntries = recovery.manifestEntries
-            sessionCreatedAt = recovery.session.createdAt
-        } else {
-            exportDirectory = uniqueExportDirectory(
-                in: parentDirectoryURL,
-                now: now
-            )
-            do {
-                try fileManager.createDirectory(
-                    at: exportDirectory,
-                    withIntermediateDirectories: false
-                )
-            } catch {
-                throw ExternalPhotoExportError.cannotCreateExportFolder
-            }
-            initialManifestEntries = []
-            sessionCreatedAt = now
-            try? writeSession(
-                signatures: signatures,
-                completedAssetIDs: [],
-                createdAt: sessionCreatedAt,
-                isComplete: false,
-                to: exportDirectory
-            )
+        let exportDirectory = parentDirectoryURL
+        guard fileManager.fileExists(atPath: exportDirectory.path) else {
+            throw ExternalPhotoExportError.cannotCreateExportFolder
         }
+        // An interrupted asset is resumed from its own `.partial` file rather
+        // than from a session record: anything that finished is already in the
+        // manifest and was filtered out by the dedupe above.
+        let sessionCreatedAt = now
+        try? writeSession(
+            signatures: signatures,
+            completedAssetIDs: existingManifestEntries.map(\.localIdentifier),
+            createdAt: sessionCreatedAt,
+            isComplete: false,
+            to: exportDirectory
+        )
 
         // Once an item has been copied and verified it is intentionally
         // durable. A later item failure must never remove earlier successes.
@@ -481,7 +506,7 @@ actor ExternalPhotoExportService {
             now: now,
             sessionCreatedAt: sessionCreatedAt,
             signatures: signatures,
-            initialManifestEntries: initialManifestEntries,
+            existingManifestEntries: existingManifestEntries,
             onProgress: onProgress
         )
         result.alreadyExportedAssetIDs = Array(alreadyExported)
@@ -494,35 +519,46 @@ actor ExternalPhotoExportService {
         now: Date,
         sessionCreatedAt: Date,
         signatures: [ExternalPhotoExportSessionRecord.AssetSignature],
-        initialManifestEntries: [
+        existingManifestEntries: [
             ExternalPhotoExportManifest.AssetEntry
         ],
         onProgress: @Sendable @escaping (ExternalPhotoExportProgress) -> Void
     ) async throws -> ExternalPhotoExportResult {
-        var manifestEntries = initialManifestEntries
-        var exportedAssetIDs = manifestEntries.map(\.localIdentifier)
-        let resumedAssetCount = exportedAssetIDs.count
-        var completedAssetIDSet = Set(exportedAssetIDs)
+        // Only this run's items count toward the result; the manifest is the
+        // folder's full history and is merged at write time.
+        var manifestEntries: [ExternalPhotoExportManifest.AssetEntry] = []
+        var exportedAssetIDs: [String] = []
+        let resumedAssetCount = 0
+        var completedAssetIDSet = Set<String>()
+        // Reserve every name the folder already uses — from the manifest and
+        // from the directory itself — so a new export can never overwrite an
+        // earlier one now that everything shares a single folder.
         var usedNames = Set(
-            manifestEntries
+            existingManifestEntries
                 .flatMap(\.resources)
                 .map { $0.exportedFilename.lowercased() }
         )
+        usedNames.formUnion(existingFilenames(in: directoryURL))
         var failures: [ExternalPhotoExportItemFailure] = []
-        var totalBytes = manifestEntries
+        var totalBytes = [ExternalPhotoExportManifest.AssetEntry]()
             .flatMap(\.resources)
             .reduce(into: Int64(0)) {
                 let addition = $0.addingReportingOverflow($1.byteCount)
                 $0 = addition.overflow ? .max : addition.partialValue
             }
-        var fileCount = manifestEntries.flatMap(\.resources).count
+        var fileCount = 0
         var processedFileCount = fileCount
         var wasCancelled = false
         let progressEmitter = ExternalPhotoExportProgressEmitter(
             handler: onProgress
         )
 
-        let resourcesByAsset = assets.map { PHAssetResource.assetResources(for: $0) }
+        let resourcesByAsset = assets.map { asset in
+            ExternalPhotoExportResourcePolicy.resources(
+                for: asset,
+                available: PHAssetResource.assetResources(for: asset)
+            )
+        }
         let totalFileCount = resourcesByAsset.reduce(0) { $0 + $1.count }
 
         assetLoop: for (assetIndex, asset) in assets.enumerated() {
@@ -738,6 +774,7 @@ actor ExternalPhotoExportService {
             // already durable on the chosen drive.
             try? writeManifest(
                 entries: manifestEntries,
+                existingEntries: existingManifestEntries,
                 exportedAt: now,
                 to: directoryURL
             )
@@ -752,6 +789,7 @@ actor ExternalPhotoExportService {
 
         try? writeManifest(
             entries: manifestEntries,
+            existingEntries: existingManifestEntries,
             exportedAt: now,
             to: directoryURL
         )
@@ -777,14 +815,21 @@ actor ExternalPhotoExportService {
         )
     }
 
+    /// Writes the folder's single manifest: everything previously recorded
+    /// there, with this run's entries added and any re-exported asset replaced.
     private func writeManifest(
         entries: [ExternalPhotoExportManifest.AssetEntry],
+        existingEntries: [ExternalPhotoExportManifest.AssetEntry] = [],
         exportedAt: Date,
         to directoryURL: URL
     ) throws {
+        let replacedIDs = Set(entries.map(\.localIdentifier))
+        let merged = existingEntries.filter {
+            !replacedIDs.contains($0.localIdentifier)
+        } + entries
         let manifest = ExternalPhotoExportManifest(
             exportedAt: exportedAt,
-            assets: entries
+            assets: merged
         )
         let manifestURL = directoryURL.appendingPathComponent(
             Self.manifestFilename
@@ -794,6 +839,34 @@ actor ExternalPhotoExportService {
         )
         try manifestData.write(to: manifestURL, options: .atomic)
         _ = try verifiedByteCount(at: manifestURL)
+    }
+
+    /// The one manifest for a destination folder.
+    func loadManifestEntries(
+        in directoryURL: URL
+    ) -> [ExternalPhotoExportManifest.AssetEntry] {
+        let manifestURL = directoryURL.appendingPathComponent(
+            Self.manifestFilename
+        )
+        guard let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONDecoder.photoDuckExportDecoder.decode(
+                ExternalPhotoExportManifest.self,
+                from: data
+              ) else {
+            return []
+        }
+        return manifest.assets
+    }
+
+    /// Names already occupying the destination, so a new export never
+    /// overwrites a file that is already sitting there.
+    private func existingFilenames(in directoryURL: URL) -> Set<String> {
+        guard let contents = try? fileManager.contentsOfDirectory(
+            atPath: directoryURL.path
+        ) else {
+            return []
+        }
+        return Set(contents.map { $0.lowercased() })
     }
 
     private func writeSession(
@@ -830,85 +903,6 @@ actor ExternalPhotoExportService {
         }
     }
 
-    private func resumableExport(
-        in parentDirectoryURL: URL,
-        matching signatures:
-            [ExternalPhotoExportSessionRecord.AssetSignature]
-    ) -> RecoveryContext? {
-        guard let childURLs = try? fileManager.contentsOfDirectory(
-            at: parentDirectoryURL,
-            includingPropertiesForKeys: [
-                .isDirectoryKey,
-                .contentModificationDateKey
-            ],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return nil
-        }
-
-        let recovery = childURLs
-            .filter {
-                $0.lastPathComponent.hasPrefix("PhotoDuck Export ")
-            }
-            .compactMap { directoryURL -> RecoveryContext? in
-                let sessionURL = directoryURL.appendingPathComponent(
-                    Self.sessionFilename
-                )
-                let manifestURL = directoryURL.appendingPathComponent(
-                    Self.manifestFilename
-                )
-                guard
-                    let sessionData = try? Data(contentsOf: sessionURL),
-                    let session = try? JSONDecoder.photoDuckExportDecoder.decode(
-                        ExternalPhotoExportSessionRecord.self,
-                        from: sessionData
-                    ),
-                    session.schemaVersion
-                        == ExternalPhotoExportSessionRecord.schemaVersion,
-                    !session.isComplete,
-                    Set(session.requestedAssets) == Set(signatures)
-                else {
-                    return nil
-                }
-                let manifestEntries: [
-                    ExternalPhotoExportManifest.AssetEntry
-                ]
-                if let manifestData = try? Data(contentsOf: manifestURL),
-                   let manifest =
-                    try? JSONDecoder.photoDuckExportDecoder.decode(
-                        ExternalPhotoExportManifest.self,
-                        from: manifestData
-                   ),
-                   validateManifest(
-                        manifest,
-                        in: directoryURL,
-                        completedAssetIDs: Set(
-                            session.completedAssetIDs
-                        )
-                   ) {
-                    manifestEntries = manifest.assets
-                } else if session.completedAssetIDs.isEmpty {
-                    manifestEntries = []
-                } else {
-                    return nil
-                }
-                return RecoveryContext(
-                    directoryURL: directoryURL,
-                    session: session,
-                    manifestEntries: manifestEntries
-                )
-            }
-            .max {
-                $0.session.createdAt < $1.session.createdAt
-            }
-        if let recovery {
-            prepareRecoveryDirectory(
-                recovery.directoryURL,
-                preserving: recovery.manifestEntries
-            )
-        }
-        return recovery
-    }
 
     private func validateManifest(
         _ manifest: ExternalPhotoExportManifest,
@@ -933,36 +927,6 @@ actor ExternalPhotoExportService {
         }
     }
 
-    private func prepareRecoveryDirectory(
-        _ directoryURL: URL,
-        preserving entries: [
-            ExternalPhotoExportManifest.AssetEntry
-        ]
-    ) {
-        let preservedFilenames = Set(
-            entries.flatMap(\.resources).map(\.exportedFilename)
-        )
-        guard let URLs = try? fileManager.contentsOfDirectory(
-            at: directoryURL,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: []
-        ) else {
-            return
-        }
-        for URL in URLs {
-            let filename = URL.lastPathComponent
-            guard filename != Self.manifestFilename,
-                  filename != Self.sessionFilename,
-                  !filename.hasPrefix("."),
-                  !preservedFilenames.contains(filename) else {
-                continue
-            }
-            // This is an app-owned export folder. A visible file not present
-            // in the last verified manifest was interrupted between rename
-            // and checkpoint, so remove it before retrying that resource.
-            try? fileManager.removeItem(at: URL)
-        }
-    }
 
     /// Free space on the destination, or nil when it cannot be determined.
     ///
@@ -1031,14 +995,60 @@ actor ExternalPhotoExportService {
             existingByteCount =
                 (try? verifiedByteCount(at: destinationURL)) ?? 0
         } else {
-            guard fileManager.createFile(
-                atPath: destinationURL.path,
-                contents: nil
-            ) else {
-                throw CocoaError(.fileWriteUnknown)
-            }
             existingByteCount = 0
         }
+        if existingByteCount == 0 {
+            // Let PhotoKit stream directly to the destination. Routing every
+            // byte of a multi-gigabyte video through Swift Data buffers adds
+            // avoidable copies, locks, and file writes. Some external Files
+            // providers reject PhotoKit's direct writer, however, so retry
+            // through requestData when that provider-specific fast path fails.
+            try? fileManager.removeItem(at: destinationURL)
+            do {
+                return try await writeDirect(
+                    resource: resource,
+                    to: destinationURL,
+                    onProgress: onProgress
+                )
+            } catch {
+                if Task.isCancelled || error is CancellationError {
+                    throw CancellationError()
+                }
+                // A failed direct write may leave an unverified prefix. Start
+                // the compatible writer cleanly so Export & Delete can never
+                // treat that prefix as a finished video.
+                try? fileManager.removeItem(at: destinationURL)
+                guard fileManager.createFile(
+                    atPath: destinationURL.path,
+                    contents: nil
+                ) else {
+                    throw ExternalPhotoExportError.resourceWriteFailed(
+                        resource.originalFilename
+                    )
+                }
+                return try await writeResumable(
+                    resource: resource,
+                    to: destinationURL,
+                    existingByteCount: 0,
+                    onProgress: onProgress
+                )
+            }
+        }
+
+        return try await writeResumable(
+            resource: resource,
+            to: destinationURL,
+            existingByteCount: existingByteCount,
+            onProgress: onProgress
+        )
+    }
+
+    private func writeResumable(
+        resource: PHAssetResource,
+        to destinationURL: URL,
+        existingByteCount: Int64,
+        onProgress: @Sendable @escaping (Double) -> Void
+    ) async throws -> Int64 {
         let fileHandle = try FileHandle(forWritingTo: destinationURL)
         try fileHandle.seekToEnd()
         let state = ExternalPhotoResourceWriteState(
@@ -1069,61 +1079,71 @@ actor ExternalPhotoExportService {
         return state.expectedTotalByteCount
     }
 
+    private func writeDirect(
+        resource: PHAssetResource,
+        to destinationURL: URL,
+        onProgress: @Sendable @escaping (Double) -> Void
+    ) async throws -> Int64 {
+        try Task.checkCancellation()
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.progressHandler = onProgress
+
+        try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Void, Error>) in
+            resourceManager.writeData(
+                for: resource,
+                toFile: destinationURL,
+                options: options
+            ) { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+        try Task.checkCancellation()
+        return try verifiedByteCount(at: destinationURL)
+    }
+
     /// Assets this destination already holds. Every prior export folder keeps a
     /// manifest; an asset counts as already exported only when the recorded
     /// version matches the current one **and** every file it listed is still
     /// present and non-empty. A missing or edited file re-exports.
+    /// Assets this destination already holds, according to its single
+    /// manifest. An asset counts as already exported only when the recorded
+    /// version matches the current one **and** every file it listed is still
+    /// present at the recorded size. A missing or edited file re-exports.
     func previouslyExportedAssetIDs(
-        in parentDirectoryURL: URL,
-        matching signatures: [ExternalPhotoExportSessionRecord.AssetSignature]
+        in directoryURL: URL,
+        matching signatures: [ExternalPhotoExportSessionRecord.AssetSignature],
+        manifestEntries: [ExternalPhotoExportManifest.AssetEntry]? = nil
     ) -> Set<String> {
         guard !signatures.isEmpty else { return [] }
+        let entries = manifestEntries ?? loadManifestEntries(in: directoryURL)
+        guard !entries.isEmpty else { return [] }
+
         let wantedVersions = Dictionary(
             signatures.map { ($0.localIdentifier, $0.modificationDate) },
             uniquingKeysWith: { first, _ in first }
         )
-        guard let children = try? fileManager.contentsOfDirectory(
-            at: parentDirectoryURL,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return []
-        }
-
         var exported = Set<String>()
-        let decoder = JSONDecoder.photoDuckExportDecoder
-        for directory in children {
-            guard (try? directory.resourceValues(forKeys: [.isDirectoryKey]))?
-                .isDirectory == true else {
+        for entry in entries {
+            guard let wantedVersion = wantedVersions[entry.localIdentifier],
+                  !exported.contains(entry.localIdentifier),
+                  entry.modificationDate == wantedVersion,
+                  !entry.resources.isEmpty else {
                 continue
             }
-            let manifestURL = directory.appendingPathComponent(
-                Self.manifestFilename
-            )
-            guard let data = try? Data(contentsOf: manifestURL),
-                  let manifest = try? decoder.decode(
-                    ExternalPhotoExportManifest.self,
-                    from: data
-                  ) else {
-                continue
+            let filesIntact = entry.resources.allSatisfy { resource in
+                let fileURL = directoryURL.appendingPathComponent(
+                    resource.exportedFilename
+                )
+                return (try? verifiedByteCount(at: fileURL)) == resource.byteCount
             }
-            for entry in manifest.assets {
-                guard let wantedVersion = wantedVersions[entry.localIdentifier],
-                      !exported.contains(entry.localIdentifier),
-                      entry.modificationDate == wantedVersion,
-                      !entry.resources.isEmpty else {
-                    continue
-                }
-                let filesIntact = entry.resources.allSatisfy { resource in
-                    let fileURL = directory.appendingPathComponent(
-                        resource.exportedFilename
-                    )
-                    let size = try? verifiedByteCount(at: fileURL)
-                    return size == resource.byteCount
-                }
-                if filesIntact {
-                    exported.insert(entry.localIdentifier)
-                }
+            if filesIntact {
+                exported.insert(entry.localIdentifier)
             }
         }
         return exported
@@ -1145,28 +1165,6 @@ actor ExternalPhotoExportService {
         return Int64(fileSize)
     }
 
-    private func uniqueExportDirectory(
-        in parentDirectoryURL: URL,
-        now: Date
-    ) -> URL {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd HH-mm-ss"
-        let baseName = "PhotoDuck Export \(formatter.string(from: now))"
-        var candidate = parentDirectoryURL.appendingPathComponent(
-            baseName,
-            isDirectory: true
-        )
-        var suffix = 2
-        while fileManager.fileExists(atPath: candidate.path) {
-            candidate = parentDirectoryURL.appendingPathComponent(
-                "\(baseName) \(suffix)",
-                isDirectory: true
-            )
-            suffix += 1
-        }
-        return candidate
-    }
 }
 
 /// PhotoKit may report hundreds of progress samples for one large resource.

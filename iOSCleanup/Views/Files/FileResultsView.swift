@@ -1208,6 +1208,16 @@ struct FileResultsView: View {
             } else {
                 completedExportTitle = "Export Complete"
             }
+            let firstFailure = result.failures.first.map { failure in
+                let itemName = failure.filename ?? "Video"
+                let additionalFailureCount = result.failures.count - 1
+                return " \(itemName): \(failure.message)"
+                    + (
+                        additionalFailureCount > 0
+                            ? " (+\(additionalFailureCount) more)"
+                            : ""
+                    )
+            } ?? ""
             completedExportMessage =
                 "Verified \(result.assetCount) of \(result.requestedAssetCount) videos"
                 + " (\(ByteCountFormatter.string(fromByteCount: result.totalBytes, countStyle: .file))) "
@@ -1221,6 +1231,7 @@ struct FileResultsView: View {
                                 : "\(remainingAssetIDs.count) unfinished videos remain selected so you can retry them."
                         )
                 )
+                + firstFailure
             let activityPhase:
                 PhotoDuckExportActivityAttributes.ContentState.Phase =
                     result.wasCancelled
@@ -1948,7 +1959,7 @@ private struct LargeVideoPlayerView: View {
         errorMessage = nil
         loadingProgress = nil
         do {
-            let item = try await requestPlayerItem(
+            let item = try await requestPlayableItem(
                 for: file.photoAsset
             ) { progress in
                 loadingProgress = progress
@@ -1966,6 +1977,90 @@ private struct LargeVideoPlayerView: View {
         }
     }
 
+    private func requestPlayableItem(
+        for asset: PHAsset,
+        progress: @escaping @MainActor @Sendable (Double) -> Void
+    ) async throws -> AVPlayerItem {
+        do {
+            let avAsset = try await requestAVAsset(
+                for: asset,
+                progress: progress
+            )
+            try Task.checkCancellation()
+            guard try await avAsset.load(.isPlayable) else {
+                throw VideoPlaybackLoadingError.notPlayable
+            }
+            return AVPlayerItem(asset: avAsset)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Some Photos providers expose only a prepared player item rather
+            // than a directly playable AVAsset. Keep that route as a fallback.
+            let item = try await requestPlayerItem(
+                for: asset,
+                progress: progress
+            )
+            try Task.checkCancellation()
+            guard try await item.asset.load(.isPlayable) else {
+                throw VideoPlaybackLoadingError.notPlayable
+            }
+            return item
+        }
+    }
+
+    private func requestAVAsset(
+        for asset: PHAsset,
+        progress: @escaping @MainActor @Sendable (Double) -> Void
+    ) async throws -> AVAsset {
+        let manager = PHImageManager.default()
+        let state = VideoPlaybackAssetRequestState()
+
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<Void, Error>) in
+                guard state.install(continuation: continuation) else { return }
+
+                let options = PHVideoRequestOptions()
+                options.version = .current
+                // Playback should begin with the best immediately available
+                // representation; forcing highQualityFormat can require a
+                // complete multi-gigabyte iCloud download before playing.
+                options.deliveryMode = .automatic
+                options.isNetworkAccessAllowed = true
+                options.progressHandler = { value, _, _, _ in
+                    Task { @MainActor in
+                        progress(min(max(value, 0), 1))
+                    }
+                }
+
+                let requestID = manager.requestAVAsset(
+                    forVideo: asset,
+                    options: options
+                ) { avAsset, _, info in
+                    if let error = info?[PHImageErrorKey] as? Error {
+                        state.complete(.failure(error))
+                    } else if (info?[PHImageCancelledKey] as? Bool) == true {
+                        state.complete(.failure(CancellationError()))
+                    } else if let avAsset {
+                        state.complete(.success(avAsset))
+                    } else {
+                        state.complete(
+                            .failure(VideoPlaybackLoadingError.unavailable)
+                        )
+                    }
+                }
+                state.setRequestID(requestID, manager: manager)
+            }
+        } onCancel: {
+            state.cancel(manager: manager)
+        }
+
+        guard let asset = state.asset else {
+            throw VideoPlaybackLoadingError.unavailable
+        }
+        return asset
+    }
+
     private func requestPlayerItem(
         for asset: PHAsset,
         progress: @escaping @MainActor @Sendable (Double) -> Void
@@ -1980,7 +2075,7 @@ private struct LargeVideoPlayerView: View {
 
                 let options = PHVideoRequestOptions()
                 options.version = .current
-                options.deliveryMode = .highQualityFormat
+                options.deliveryMode = .automatic
                 options.isNetworkAccessAllowed = true
                 options.progressHandler = { value, _, _, _ in
                     Task { @MainActor in
@@ -2017,9 +2112,93 @@ private struct LargeVideoPlayerView: View {
 
 private enum VideoPlaybackLoadingError: Error, LocalizedError {
     case unavailable
+    case notPlayable
 
     var errorDescription: String? {
-        "PhotoDuck couldn’t load this video from Photos or iCloud."
+        switch self {
+        case .unavailable:
+            return "PhotoDuck couldn’t load this video from Photos or iCloud."
+        case .notPlayable:
+            return "Photos returned this video, but iOS could not play its current version."
+        }
+    }
+}
+
+private final class VideoPlaybackAssetRequestState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var requestID = PHInvalidImageRequestID
+    private var isFinished = false
+    private var isCancelled = false
+    private var storedAsset: AVAsset?
+
+    var asset: AVAsset? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedAsset
+    }
+
+    func install(continuation: CheckedContinuation<Void, Error>) -> Bool {
+        lock.lock()
+        guard !isCancelled else {
+            lock.unlock()
+            continuation.resume(throwing: CancellationError())
+            return false
+        }
+        self.continuation = continuation
+        lock.unlock()
+        return true
+    }
+
+    func setRequestID(_ requestID: PHImageRequestID, manager: PHImageManager) {
+        lock.lock()
+        self.requestID = requestID
+        let shouldCancel = isCancelled
+        lock.unlock()
+        if shouldCancel {
+            manager.cancelImageRequest(requestID)
+        }
+    }
+
+    func complete(_ result: Result<AVAsset, Error>) {
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            return
+        }
+        isFinished = true
+        if case .success(let asset) = result {
+            storedAsset = asset
+        }
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+
+        switch result {
+        case .success:
+            continuation?.resume()
+        case .failure(let error):
+            continuation?.resume(throwing: error)
+        }
+    }
+
+    func cancel(manager: PHImageManager) {
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            return
+        }
+        isCancelled = true
+        isFinished = true
+        let requestID = requestID
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+
+        if requestID != PHInvalidImageRequestID {
+            manager.cancelImageRequest(requestID)
+        }
+        continuation?.resume(throwing: CancellationError())
     }
 }
 

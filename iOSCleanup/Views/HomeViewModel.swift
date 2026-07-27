@@ -286,11 +286,14 @@ final class HomeViewModel: ObservableObject {
     private var checkpointAnalyzedPhotoCount = 0
     private var checkpointUnanalyzedPhotoCount = 0
     private let analysisCache = PhotoAnalysisCache.shared
+    private let largeVideoResultCache = LargeVideoResultCache.shared
     private let mlBridge = PhotoMLBridge.shared
     private var photoLibraryObserver: PhotoLibraryChangeObserverProxy?
     private var hasBootstrappedLibraryState = false
     private var hasHydratedAnalysisCache = false
+    private var hasHydratedLargeVideoCache = false
     private var analysisCacheHydrationTask: Task<Void, Never>?
+    private var largeVideoCacheHydrationTask: Task<Void, Never>?
 
     init() {
         loadPersistedCleanupState()
@@ -319,6 +322,7 @@ final class HomeViewModel: ObservableObject {
         hasBootstrappedLibraryState = true
         startPhotoLibraryObservationIfDetermined()
         Task(priority: .utility) {
+            await restoreCachedLargeVideosIfNeeded()
             await restoreCachedAnalysisIfNeeded()
             await scanNewPhotosIfNeeded()
             await refreshPersistenceHealth()
@@ -1365,6 +1369,9 @@ final class HomeViewModel: ObservableObject {
 
 
     func scanFiles(force: Bool = false) async {
+        if !force {
+            await restoreCachedLargeVideosIfNeeded()
+        }
         // Large-video enumeration competes for the same PhotoKit resources as
         // image analysis. Never let a tab switch start it while the primary
         // photo run is still planning, scanning, paused in-memory, or flushing.
@@ -1397,10 +1404,15 @@ final class HomeViewModel: ObservableObject {
         )
         let engine = FileScanEngine()
         do {
-            _ = try await engine.scan { [weak self] update in
+            let scannedFiles = try await engine.scan { [weak self] update in
                 await self?.publishFileScanUpdate(update)
             }
+            largeFiles = scannedFiles
             fileScanState = .completed
+            await largeVideoResultCache.save(
+                files: scannedFiles,
+                totalVideoCount: fileScanProgress.totalVideoCount
+            )
         } catch let error as FileScanError {
             let nsError = error as NSError
             fileScanState = .permissionRequired
@@ -1508,6 +1520,9 @@ final class HomeViewModel: ObservableObject {
         _storageInfo = nil
         publishProgressSnapshot()
         persistCleanupState()
+        Task(priority: .utility) { [largeVideoResultCache] in
+            await largeVideoResultCache.remove(assetIdentifier: assetID)
+        }
     }
 
     // MARK: - Scene / refresh
@@ -2113,6 +2128,55 @@ final class HomeViewModel: ObservableObject {
         }
         analysisCacheHydrationTask = hydrationTask
         await hydrationTask.value
+    }
+
+    private func restoreCachedLargeVideosIfNeeded() async {
+        if hasHydratedLargeVideoCache {
+            return
+        }
+        if let largeVideoCacheHydrationTask {
+            await largeVideoCacheHydrationTask.value
+            return
+        }
+
+        let hydrationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performCachedLargeVideoRestore()
+            self.hasHydratedLargeVideoCache = true
+            self.largeVideoCacheHydrationTask = nil
+        }
+        largeVideoCacheHydrationTask = hydrationTask
+        await hydrationTask.value
+    }
+
+    private func performCachedLargeVideoRestore() async {
+        guard largeFiles.isEmpty,
+              photoAuthorizationStatus == .authorized
+                || photoAuthorizationStatus == .limited,
+              let restored = await largeVideoResultCache.restoreFiles()
+        else {
+            return
+        }
+
+        largeFiles = restored.files
+        fileScanState = .completed
+        fileScanProgress = FileScanProgress(
+            totalVideoCount: restored.totalVideoCount,
+            processedVideoCount: restored.totalVideoCount,
+            cacheHitCount: restored.totalVideoCount,
+            isComplete: true,
+            statusMessage: restored.files.isEmpty
+                ? "No large videos in the saved scan."
+                : "\(restored.files.count.formatted()) large videos restored."
+        )
+
+        if restored.missingResultCount > 0 {
+            await largeVideoResultCache.save(
+                files: restored.files,
+                totalVideoCount: restored.totalVideoCount
+            )
+        }
+        publishProgressSnapshot()
     }
 
     private func performCachedAnalysisRestore() async {

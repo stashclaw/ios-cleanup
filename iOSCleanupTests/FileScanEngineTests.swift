@@ -191,6 +191,43 @@ final class FileScanEngineTests: XCTestCase {
         )
     }
 
+    func testLargeVideoResultsPersistAcrossCacheInstances() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "LargeVideoResultCacheTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let asset = ExternalExportTestAsset(
+            localIdentifier: "persisted-large-video"
+        )
+        let fileID = UUID()
+        let file = LargeFile(
+            id: fileID,
+            source: .photoLibrary(asset: asset),
+            displayName: "persisted.mov",
+            byteSize: 900_000_000,
+            byteSizeIsEstimated: false,
+            creationDate: Date(timeIntervalSince1970: 123)
+        )
+
+        let writer = LargeVideoResultCache(directoryURL: directoryURL)
+        await writer.save(files: [file], totalVideoCount: 42)
+
+        let reader = LargeVideoResultCache(directoryURL: directoryURL)
+        let snapshot = await reader.load()
+
+        XCTAssertEqual(snapshot?.totalVideoCount, 42)
+        XCTAssertEqual(snapshot?.results.count, 1)
+        XCTAssertEqual(snapshot?.results.first?.id, fileID)
+        XCTAssertEqual(
+            snapshot?.results.first?.assetIdentifier,
+            "persisted-large-video"
+        )
+        XCTAssertEqual(snapshot?.results.first?.byteSize, 900_000_000)
+    }
+
     func testLargeVideoReviewDefaultsToLargestFirst() {
         let files = [
             reviewFile(name: "medium.mov", bytes: 300),
@@ -813,6 +850,31 @@ final class FileScanEngineTests: XCTestCase {
         XCTAssertEqual(aboveOne.overallFraction, 0.75, accuracy: 0.000_001)
     }
 
+    func testExternalVideoExportChoosesOnePlayableResource() {
+        XCTAssertEqual(
+            ExternalPhotoExportResourcePolicy.preferredVideoResourceIndex(
+                types: [
+                    .adjustmentData,
+                    .video,
+                    .fullSizeVideo,
+                    .adjustmentBaseVideo
+                ]
+            ),
+            2
+        )
+        XCTAssertEqual(
+            ExternalPhotoExportResourcePolicy.preferredVideoResourceIndex(
+                types: [.adjustmentData, .video]
+            ),
+            1
+        )
+        XCTAssertNil(
+            ExternalPhotoExportResourcePolicy.preferredVideoResourceIndex(
+                types: [.adjustmentData]
+            )
+        )
+    }
+
     @MainActor
     func testExternalExportSessionGateAllowsOnlyOneActiveExport() throws {
         let gate = ExternalPhotoExportSessionGate.shared
@@ -992,6 +1054,217 @@ final class FileScanEngineTests: XCTestCase {
             try Data(contentsOf: fileURL),
             Data("abcdefgh".utf8)
         )
+    }
+
+    // MARK: - Single-folder export layout
+
+    private static let exportManifestFilename = "PhotoDuck Export Manifest.json"
+
+    private func makeExportTemporaryDirectory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("photoduck-export-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: url,
+            withIntermediateDirectories: true
+        )
+        return url
+    }
+
+    private func writeExportManifest(
+        _ entries: [ExternalPhotoExportManifest.AssetEntry],
+        to directoryURL: URL
+    ) throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(
+            ExternalPhotoExportManifest(exportedAt: Date(), assets: entries)
+        )
+        try data.write(
+            to: directoryURL.appendingPathComponent(
+                Self.exportManifestFilename
+            )
+        )
+    }
+
+    private func makeManifestEntry(
+        assetID: String,
+        filename: String,
+        byteCount: Int64,
+        modificationDate: Date?
+    ) -> ExternalPhotoExportManifest.AssetEntry {
+        ExternalPhotoExportManifest.AssetEntry(
+            localIdentifier: assetID,
+            creationDate: nil,
+            pixelWidth: 100,
+            pixelHeight: 100,
+            modificationDate: modificationDate,
+            resources: [
+                .init(
+                    originalFilename: filename,
+                    exportedFilename: filename,
+                    resourceType: 1,
+                    byteCount: byteCount
+                )
+            ]
+        )
+    }
+
+    func testDedupeReadsTheSingleFolderManifest() async throws {
+        let directory = try makeExportTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let modified = Date(timeIntervalSinceReferenceDate: 1_000)
+        let payload = Data("photo-bytes".utf8)
+        try payload.write(
+            to: directory.appendingPathComponent("IMG_1.HEIC")
+        )
+        try writeExportManifest(
+            [
+                makeManifestEntry(
+                    assetID: "asset-1",
+                    filename: "IMG_1.HEIC",
+                    byteCount: Int64(payload.count),
+                    modificationDate: modified
+                )
+            ],
+            to: directory
+        )
+
+        let service = ExternalPhotoExportService()
+        let exported = await service.previouslyExportedAssetIDs(
+            in: directory,
+            matching: [
+                .init(localIdentifier: "asset-1", modificationDate: modified)
+            ]
+        )
+
+        XCTAssertEqual(exported, ["asset-1"])
+    }
+
+    func testDedupeReExportsWhenTheFileIsMissingOrTruncated() async throws {
+        let directory = try makeExportTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let modified = Date(timeIntervalSinceReferenceDate: 1_000)
+        let signature = ExternalPhotoExportSessionRecord.AssetSignature(
+            localIdentifier: "asset-1",
+            modificationDate: modified
+        )
+        let service = ExternalPhotoExportService()
+
+        // Recorded in the manifest, but the file is gone.
+        try writeExportManifest(
+            [
+                makeManifestEntry(
+                    assetID: "asset-1",
+                    filename: "IMG_1.HEIC",
+                    byteCount: 11,
+                    modificationDate: modified
+                )
+            ],
+            to: directory
+        )
+        var exported = await service.previouslyExportedAssetIDs(
+            in: directory,
+            matching: [signature]
+        )
+        XCTAssertTrue(
+            exported.isEmpty,
+            "A manifest entry without its file must re-export."
+        )
+
+        // Present, but shorter than the manifest recorded.
+        try Data("short".utf8).write(
+            to: directory.appendingPathComponent("IMG_1.HEIC")
+        )
+        exported = await service.previouslyExportedAssetIDs(
+            in: directory,
+            matching: [signature]
+        )
+        XCTAssertTrue(
+            exported.isEmpty,
+            "A truncated copy must never count as already exported."
+        )
+    }
+
+    func testDedupeReExportsAnEditedAsset() async throws {
+        let directory = try makeExportTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let payload = Data("photo-bytes".utf8)
+        try payload.write(
+            to: directory.appendingPathComponent("IMG_1.HEIC")
+        )
+        try writeExportManifest(
+            [
+                makeManifestEntry(
+                    assetID: "asset-1",
+                    filename: "IMG_1.HEIC",
+                    byteCount: Int64(payload.count),
+                    modificationDate: Date(timeIntervalSinceReferenceDate: 1_000)
+                )
+            ],
+            to: directory
+        )
+
+        let service = ExternalPhotoExportService()
+        let exported = await service.previouslyExportedAssetIDs(
+            in: directory,
+            matching: [
+                .init(
+                    localIdentifier: "asset-1",
+                    // Edited since it was exported.
+                    modificationDate: Date(timeIntervalSinceReferenceDate: 2_000)
+                )
+            ]
+        )
+
+        XCTAssertTrue(exported.isEmpty)
+    }
+
+    func testManifestAccumulatesAcrossRunsInOneFolder() async throws {
+        let directory = try makeExportTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try writeExportManifest(
+            [
+                makeManifestEntry(
+                    assetID: "asset-1",
+                    filename: "IMG_1.HEIC",
+                    byteCount: 11,
+                    modificationDate: nil
+                ),
+                makeManifestEntry(
+                    assetID: "asset-2",
+                    filename: "IMG_2.HEIC",
+                    byteCount: 22,
+                    modificationDate: nil
+                )
+            ],
+            to: directory
+        )
+
+        let service = ExternalPhotoExportService()
+        let entries = await service.loadManifestEntries(in: directory)
+
+        XCTAssertEqual(
+            Set(entries.map(\.localIdentifier)),
+            ["asset-1", "asset-2"],
+            "One folder keeps one manifest describing everything in it."
+        )
+    }
+
+    func testExportedNamesNeverOverwriteFilesAlreadyInTheFolder() {
+        // Camera filenames repeat across years. With every export sharing a
+        // single folder, a colliding name must be suffixed rather than
+        // clobbering an earlier export.
+        var usedNames: Set<String> = ["img_0001.heic"]
+        let candidate = ExternalPhotoExportNaming.uniqueFilename(
+            preferredName: "IMG_0001.HEIC",
+            assetIndex: 3,
+            resourceIndex: 0,
+            usedNames: &usedNames
+        )
+
+        XCTAssertNotEqual(candidate.lowercased(), "img_0001.heic")
+        XCTAssertTrue(candidate.hasSuffix(".HEIC"))
+        XCTAssertTrue(usedNames.contains(candidate.lowercased()))
     }
 
     func testCapacityReadingIgnoresZeroFromNonLocalVolumes() {

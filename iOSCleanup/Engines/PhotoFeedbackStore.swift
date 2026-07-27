@@ -78,6 +78,66 @@ actor PhotoFeedbackStore {
         recommendationAccepted: Bool? = nil,
         note: String? = nil
     ) async -> Bool {
+        let event = makeSimilarGroupDecisionEvent(
+            group: group,
+            source: source,
+            kind: kind,
+            stage: stage,
+            selectedKeeperID: selectedKeeperID,
+            deletedAssetIDs: deletedAssetIDs,
+            keptAssetIDs: keptAssetIDs,
+            skipped: skipped,
+            recommendationAccepted: recommendationAccepted,
+            note: note
+        )
+        return await append(event)
+    }
+
+    /// Records a large Auto-clean result in bounded journal/SQLite batches.
+    /// This avoids thousands of individual disk writes while keeping peak
+    /// memory bounded for very large photo libraries.
+    func recordAutoCleanDecisions(groups: [PhotoGroup]) async {
+        let batchSize = 200
+        var startIndex = groups.startIndex
+
+        while startIndex < groups.endIndex {
+            let endIndex = groups.index(
+                startIndex,
+                offsetBy: batchSize,
+                limitedBy: groups.endIndex
+            ) ?? groups.endIndex
+            let events = groups[startIndex..<endIndex].map { group in
+                makeSimilarGroupDecisionEvent(
+                    group: group,
+                    source: .similarGroupReview,
+                    kind: .keepBest,
+                    stage: .committed,
+                    selectedKeeperID: group.keeperAssetID,
+                    deletedAssetIDs: group.deleteCandidateIDs,
+                    keptAssetIDs: [group.keeperAssetID].compactMap { $0 },
+                    skipped: false,
+                    recommendationAccepted: true,
+                    note: "Auto-clean all from results list"
+                )
+            }
+            await append(events)
+            startIndex = endIndex
+            await Task.yield()
+        }
+    }
+
+    private func makeSimilarGroupDecisionEvent(
+        group: PhotoGroup,
+        source: PhotoReviewFeedbackSource,
+        kind: PhotoReviewDecisionKind,
+        stage: PhotoReviewDecisionStage,
+        selectedKeeperID: String?,
+        deletedAssetIDs: [String],
+        keptAssetIDs: [String],
+        skipped: Bool,
+        recommendationAccepted: Bool?,
+        note: String?
+    ) -> PhotoReviewFeedbackEvent {
         let decisionTimestamp = Date()
         let decisionToken = nextDecisionToken(at: decisionTimestamp)
         let keeperID = selectedKeeperID ?? group.keeperAssetID
@@ -131,7 +191,7 @@ actor PhotoFeedbackStore {
             assets: assets,
             note: note
         )
-        return await append(event)
+        return event
     }
 
     func recordSwipeDecision(

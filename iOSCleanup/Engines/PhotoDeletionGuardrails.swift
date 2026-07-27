@@ -51,6 +51,35 @@ enum PhotoDeletionGuardrailError: Error, LocalizedError, Equatable {
 }
 
 enum PhotoDeletionGuardrails {
+    /// Builds a safe ordered subset of individually valid groups without
+    /// allowing an asset to be both protected and deleted, or deleted twice.
+    /// A malformed/overlapping result must not make the entire Auto-clean
+    /// button appear to do nothing.
+    static func compatibleAutoCleanGroups(
+        from groups: [PhotoGroup]
+    ) -> [PhotoGroup] {
+        var accepted: [PhotoGroup] = []
+        var keeperIDs = Set<String>()
+        var deleteIDs = Set<String>()
+
+        for group in groups {
+            guard (try? validate(group: group)) != nil,
+                  let keeperID = group.keeperAssetID else {
+                continue
+            }
+            let groupDeleteIDs = Set(group.deleteCandidateIDs)
+            guard groupDeleteIDs.isDisjoint(with: deleteIDs),
+                  groupDeleteIDs.isDisjoint(with: keeperIDs),
+                  !deleteIDs.contains(keeperID) else {
+                continue
+            }
+            accepted.append(group)
+            keeperIDs.insert(keeperID)
+            deleteIDs.formUnion(groupDeleteIDs)
+        }
+        return accepted
+    }
+
     static func validate(group: PhotoGroup) throws {
         try validate(
             keeperAssetID: group.keeperAssetID,
