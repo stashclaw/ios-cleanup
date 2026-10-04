@@ -1267,6 +1267,190 @@ final class FileScanEngineTests: XCTestCase {
         XCTAssertTrue(usedNames.contains(candidate.lowercased()))
     }
 
+    // MARK: - Legacy export folder migration
+
+    private func makeLegacyExportFolder(
+        named name: String,
+        in parent: URL,
+        entries: [ExternalPhotoExportManifest.AssetEntry],
+        files: [String: Data]
+    ) throws -> URL {
+        let folder = parent.appendingPathComponent(name)
+        try FileManager.default.createDirectory(
+            at: folder,
+            withIntermediateDirectories: true
+        )
+        for (filename, payload) in files {
+            try payload.write(to: folder.appendingPathComponent(filename))
+        }
+        try writeExportManifest(entries, to: folder)
+        return folder
+    }
+
+    func testMigrationLiftsLegacyFoldersIntoTheDestination() async throws {
+        let directory = try makeExportTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let payload = Data("legacy-photo".utf8)
+        let legacy = try makeLegacyExportFolder(
+            named: "PhotoDuck Export 2026-01-02 03-04-05",
+            in: directory,
+            entries: [
+                makeManifestEntry(
+                    assetID: "asset-1",
+                    filename: "IMG_1.HEIC",
+                    byteCount: Int64(payload.count),
+                    modificationDate: nil
+                )
+            ],
+            files: ["IMG_1.HEIC": payload]
+        )
+
+        let service = ExternalPhotoExportService()
+        let result = await service.migrateLegacyExportFolders(in: directory)
+
+        XCTAssertEqual(result.movedFileCount, 1)
+        XCTAssertEqual(result.mergedAssetCount, 1)
+        XCTAssertEqual(result.removedFolderCount, 1)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: legacy.path),
+            "An emptied legacy folder should be retired."
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent("IMG_1.HEIC").path
+            )
+        )
+
+        // The merged manifest must make dedupe recognise the migrated asset.
+        let exported = await service.previouslyExportedAssetIDs(
+            in: directory,
+            matching: [
+                .init(localIdentifier: "asset-1", modificationDate: nil)
+            ]
+        )
+        XCTAssertEqual(exported, ["asset-1"])
+    }
+
+    func testMigrationNeverOverwritesAFileAlreadyInTheDestination() async throws {
+        let directory = try makeExportTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Same camera filename, different photo — the hazard of one folder.
+        let existingPayload = Data("already-here".utf8)
+        try existingPayload.write(
+            to: directory.appendingPathComponent("IMG_1.HEIC")
+        )
+        try writeExportManifest(
+            [
+                makeManifestEntry(
+                    assetID: "asset-existing",
+                    filename: "IMG_1.HEIC",
+                    byteCount: Int64(existingPayload.count),
+                    modificationDate: nil
+                )
+            ],
+            to: directory
+        )
+        let legacyPayload = Data("different-photo-entirely".utf8)
+        _ = try makeLegacyExportFolder(
+            named: "PhotoDuck Export 2026-01-02 03-04-05",
+            in: directory,
+            entries: [
+                makeManifestEntry(
+                    assetID: "asset-legacy",
+                    filename: "IMG_1.HEIC",
+                    byteCount: Int64(legacyPayload.count),
+                    modificationDate: nil
+                )
+            ],
+            files: ["IMG_1.HEIC": legacyPayload]
+        )
+
+        let service = ExternalPhotoExportService()
+        let result = await service.migrateLegacyExportFolders(in: directory)
+
+        XCTAssertEqual(result.movedFileCount, 1)
+        XCTAssertEqual(
+            try Data(
+                contentsOf: directory.appendingPathComponent("IMG_1.HEIC")
+            ),
+            existingPayload,
+            "The file already in the destination must survive untouched."
+        )
+        let entries = await service.loadManifestEntries(in: directory)
+        XCTAssertEqual(entries.count, 2)
+        let migrated = entries.first { $0.localIdentifier == "asset-legacy" }
+        XCTAssertNotEqual(
+            migrated?.resources.first?.exportedFilename,
+            "IMG_1.HEIC",
+            "The migrated copy must be renamed, and the manifest must say so."
+        )
+    }
+
+    func testMigrationKeepsFoldersWhoseContentsCouldNotBeMoved() async throws {
+        let directory = try makeExportTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // The manifest claims a file that is not on disk.
+        let legacy = try makeLegacyExportFolder(
+            named: "PhotoDuck Export 2026-01-02 03-04-05",
+            in: directory,
+            entries: [
+                makeManifestEntry(
+                    assetID: "asset-1",
+                    filename: "IMG_MISSING.HEIC",
+                    byteCount: 42,
+                    modificationDate: nil
+                )
+            ],
+            files: ["Untracked.HEIC": Data("keep-me".utf8)]
+        )
+
+        let service = ExternalPhotoExportService()
+        let result = await service.migrateLegacyExportFolders(in: directory)
+
+        XCTAssertEqual(result.movedFileCount, 0)
+        XCTAssertEqual(result.removedFolderCount, 0)
+        XCTAssertEqual(
+            result.failedFolderNames,
+            ["PhotoDuck Export 2026-01-02 03-04-05"]
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: legacy.appendingPathComponent("Untracked.HEIC").path
+            ),
+            "A file the manifest never mentioned must not be abandoned."
+        )
+    }
+
+    func testMigrationIsIdempotent() async throws {
+        let directory = try makeExportTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let payload = Data("legacy-photo".utf8)
+        _ = try makeLegacyExportFolder(
+            named: "PhotoDuck Export 2026-01-02 03-04-05",
+            in: directory,
+            entries: [
+                makeManifestEntry(
+                    assetID: "asset-1",
+                    filename: "IMG_1.HEIC",
+                    byteCount: Int64(payload.count),
+                    modificationDate: nil
+                )
+            ],
+            files: ["IMG_1.HEIC": payload]
+        )
+
+        let service = ExternalPhotoExportService()
+        _ = await service.migrateLegacyExportFolders(in: directory)
+        let second = await service.migrateLegacyExportFolders(in: directory)
+
+        XCTAssertFalse(
+            second.didChangeAnything,
+            "Re-running migration on a migrated folder must be a no-op."
+        )
+        let entries = await service.loadManifestEntries(in: directory)
+        XCTAssertEqual(entries.count, 1)
+    }
+
     func testCapacityReadingIgnoresZeroFromNonLocalVolumes() {
         // External SSDs and iCloud Drive surface through the Files provider and
         // report 0 for volumeAvailableCapacityForImportantUsage rather than

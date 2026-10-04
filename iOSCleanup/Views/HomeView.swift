@@ -1303,7 +1303,8 @@ struct ExternalPhotoExportProgressStatusView: View {
             Text(progressLabel)
                 .font(.duckCaption.weight(.semibold))
                 .foregroundStyle(Color.textPrimary)
-                .lineLimit(1)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
                 .truncationMode(.middle)
 
             Button("Cancel Export", action: onCancel)
@@ -1326,10 +1327,40 @@ struct ExternalPhotoExportProgressStatusView: View {
             max(progress.totalFileCount, 1)
         )
         if let filename = progress.currentFilename {
-            let percent = Int(
-                (progress.currentFileFraction * 100).rounded()
+            let copied = ByteCountFormatter.string(
+                fromByteCount: progress.currentBytesWritten,
+                countStyle: .file
             )
-            return "File \(position) of \(progress.totalFileCount) · \(filename) · \(percent)%"
+            let byteProgress: String
+            if let expected = progress.currentBytesExpected,
+               expected > 0 {
+                let expectedLabel = ByteCountFormatter.string(
+                    fromByteCount: expected,
+                    countStyle: .file
+                )
+                byteProgress = "\(copied) of \(expectedLabel)"
+            } else {
+                byteProgress = "\(copied) copied"
+            }
+            let speedLabel: String
+            if let bytesPerSecond = store.bytesPerSecond,
+               bytesPerSecond >= 1 {
+                let formattedSpeed = ByteCountFormatter.string(
+                    fromByteCount: Int64(bytesPerSecond),
+                    countStyle: .file
+                )
+                speedLabel = " · \(formattedSpeed)/s"
+            } else {
+                speedLabel = ""
+            }
+            let percent = max(
+                0,
+                min(
+                    99,
+                    Int((progress.currentFileFraction * 100).rounded())
+                )
+            )
+            return "\(byteProgress)\(speedLabel) · \(percent)%\nFile \(position) of \(progress.totalFileCount) · \(filename)"
         }
         return "\(progress.completedFileCount) of \(progress.totalFileCount) files done · verifying…"
     }
@@ -1867,18 +1898,21 @@ struct ExportAlbumView: View {
             let skippedNote = result.alreadyExportedAssetIDs.isEmpty
                 ? ""
                 : " \(result.alreadyExportedAssetIDs.count) already on this drive — skipped."
+            let migratedNote = result.migratedLegacyFileCount == 0
+                ? ""
+                : " Moved \(result.migratedLegacyFileCount) files here from earlier export folders."
             if result.wasCancelled {
                 exportStatus =
-                    "Stopped after verifying \(result.assetCount) of \(result.requestedAssetCount) items.\(skippedNote)"
+                    "Stopped after verifying \(result.assetCount) of \(result.requestedAssetCount) items.\(skippedNote)\(migratedNote)"
             } else if result.failedAssetCount > 0 {
                 exportStatus =
-                    "Verified \(result.assetCount) items; \(result.failedAssetCount) need another try.\(skippedNote)"
+                    "Verified \(result.assetCount) items; \(result.failedAssetCount) need another try.\(skippedNote)\(migratedNote)"
             } else if result.assetCount == 0, !result.alreadyExportedAssetIDs.isEmpty {
                 exportStatus =
-                    "Everything selected is already on this drive — nothing needed copying."
+                    "Everything selected is already on this drive — nothing needed copying.\(migratedNote)"
             } else {
                 exportStatus =
-                    "Verified all \(result.assetCount) items in \(result.directoryURL.lastPathComponent).\(skippedNote)"
+                    "Verified all \(result.assetCount) items in \(result.directoryURL.lastPathComponent).\(skippedNote)\(migratedNote)"
             }
             let activityPhase:
                 PhotoDuckExportActivityAttributes.ContentState.Phase =

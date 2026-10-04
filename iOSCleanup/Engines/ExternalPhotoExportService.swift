@@ -141,6 +141,8 @@ struct ExternalPhotoExportResult: Sendable {
     /// Assets skipped because this destination already holds a verified copy
     /// of the same version. They are safe to delete from Photos.
     var alreadyExportedAssetIDs: [String] = []
+    /// Files lifted out of folders written by the old per-run export layout.
+    var migratedLegacyFileCount: Int = 0
     let failures: [ExternalPhotoExportItemFailure]
     let wasCancelled: Bool
     let fileCount: Int
@@ -176,6 +178,24 @@ struct ExternalPhotoExportProgress: Sendable {
     let totalFileCount: Int
     let currentFilename: String?
     let currentFileFraction: Double
+    let currentBytesWritten: Int64
+    let currentBytesExpected: Int64?
+
+    init(
+        completedFileCount: Int,
+        totalFileCount: Int,
+        currentFilename: String?,
+        currentFileFraction: Double,
+        currentBytesWritten: Int64 = 0,
+        currentBytesExpected: Int64? = nil
+    ) {
+        self.completedFileCount = completedFileCount
+        self.totalFileCount = totalFileCount
+        self.currentFilename = currentFilename
+        self.currentFileFraction = currentFileFraction
+        self.currentBytesWritten = max(currentBytesWritten, 0)
+        self.currentBytesExpected = currentBytesExpected
+    }
 
     var overallFraction: Double {
         guard totalFileCount > 0 else { return 0 }
@@ -190,13 +210,37 @@ struct ExternalPhotoExportProgress: Sendable {
 @MainActor
 final class ExternalPhotoExportProgressStore: ObservableObject {
     @Published private(set) var progress: ExternalPhotoExportProgress?
+    private(set) var bytesPerSecond: Double?
+    private var lastByteSample:
+        (filename: String?, bytes: Int64, date: Date)?
 
     func update(_ progress: ExternalPhotoExportProgress) {
+        let now = Date()
+        if let sample = lastByteSample,
+           sample.filename == progress.currentFilename {
+            let elapsed = now.timeIntervalSince(sample.date)
+            let byteDelta = progress.currentBytesWritten - sample.bytes
+            if elapsed > 0, byteDelta >= 0 {
+                let instantaneous = Double(byteDelta) / elapsed
+                bytesPerSecond = bytesPerSecond.map {
+                    ($0 * 0.7) + (instantaneous * 0.3)
+                } ?? instantaneous
+            }
+        } else {
+            bytesPerSecond = nil
+        }
+        lastByteSample = (
+            progress.currentFilename,
+            progress.currentBytesWritten,
+            now
+        )
         self.progress = progress
     }
 
     func reset() {
         progress = nil
+        bytesPerSecond = nil
+        lastByteSample = nil
     }
 }
 
@@ -407,6 +451,11 @@ enum ExternalPhotoExportResourcePolicy {
 
 actor ExternalPhotoExportService {
 
+    /// Checkpoint cadence. A manifest rewrite costs O(folder history), so it
+    /// runs on a boundary rather than after every asset.
+    private static let checkpointAssetInterval = 8
+    private static let checkpointSecondsInterval: TimeInterval = 20
+
     private static let manifestFilename =
         "PhotoDuck Export Manifest.json"
     private static let sessionFilename =
@@ -444,6 +493,11 @@ actor ExternalPhotoExportService {
             }
         }
 
+        // Fold any folders written by the old per-run layout into this one
+        // first, so photos exported before the change are recognised by the
+        // dedupe below instead of being copied a second time.
+        let migration = await migrateLegacyExportFolders(in: parentDirectoryURL)
+
         let allSignatures = assetSignatures(for: assets)
         // One destination, one manifest. Everything the user has ever exported
         // here lives side by side in the folder they picked; a per-run
@@ -471,6 +525,7 @@ actor ExternalPhotoExportService {
                 resumedAssetCount: 0,
                 exportedAssetIDs: [],
                 alreadyExportedAssetIDs: Array(alreadyExported),
+                migratedLegacyFileCount: migration.movedFileCount,
                 failures: [],
                 wasCancelled: false,
                 fileCount: 0,
@@ -510,6 +565,7 @@ actor ExternalPhotoExportService {
             onProgress: onProgress
         )
         result.alreadyExportedAssetIDs = Array(alreadyExported)
+        result.migratedLegacyFileCount = migration.movedFileCount
         return result
     }
 
@@ -540,6 +596,8 @@ actor ExternalPhotoExportService {
         )
         usedNames.formUnion(existingFilenames(in: directoryURL))
         var failures: [ExternalPhotoExportItemFailure] = []
+        var checkpointedAssetCount = 0
+        var lastCheckpointAt = Date()
         var totalBytes = [ExternalPhotoExportManifest.AssetEntry]()
             .flatMap(\.resources)
             .reduce(into: Int64(0)) {
@@ -581,49 +639,13 @@ actor ExternalPhotoExportService {
                 )
                 continue
             }
-            let recoverablePrefixBytes = recoverablePartialBytes(
-                in: directoryURL
-            )
-            let neededBytes = max(
-                asset.estimatedFileSize - recoverablePrefixBytes,
-                0
-            )
-            let reportedFreeBytes = availableCapacity(at: directoryURL)
-            guard ExternalPhotoExportCapacity.hasCapacity(
-                estimatedAssetBytes: neededBytes,
-                availableBytes: reportedFreeBytes
-            ) else {
-                // State the actual numbers. A destination that reports an
-                // implausible figure is a reading problem, not a full drive,
-                // and the user needs to be able to tell those apart.
-                let freeLabel = reportedFreeBytes.map {
-                    ByteCountFormatter.string(
-                        fromByteCount: $0,
-                        countStyle: .file
-                    )
-                } ?? "an unknown amount"
-                let neededLabel = ByteCountFormatter.string(
-                    fromByteCount: neededBytes,
-                    countStyle: .file
-                )
-                let message =
-                    "Stopped before copying this item: the destination reports "
-                    + "\(freeLabel) free and this item needs about \(neededLabel). "
-                    + "Nothing was deleted."
-                for remainingAsset in assets[assetIndex...] where
-                    !completedAssetIDSet.contains(
-                        remainingAsset.localIdentifier
-                    ) {
-                    failures.append(
-                        ExternalPhotoExportItemFailure(
-                            assetID: remainingAsset.localIdentifier,
-                            filename: nil,
-                            message: message
-                        )
-                    )
-                }
-                break
-            }
+            // Do not preflight free space here. Security-scoped URLs returned
+            // by the Files picker can report the phone/provider cache's free
+            // space instead of the selected USB drive's capacity. That false
+            // reading prevented multi-gigabyte exports from even starting.
+            // The destination's real writer remains authoritative: a genuinely
+            // full volume fails the current item, the error is shown, and the
+            // original is retained because only verified files are committed.
 
             var resourceEntries: [ExternalPhotoExportManifest.AssetEntry.ResourceEntry] = []
             var committedAssetFiles: [URL] = []
@@ -653,7 +675,9 @@ actor ExternalPhotoExportService {
                         completedFileCount: completedSoFar,
                         totalFileCount: totalFileCount,
                         currentFilename: filename,
-                        currentFileFraction: 0
+                        currentFileFraction: 0,
+                        currentBytesWritten: 0,
+                        currentBytesExpected: asset.estimatedFileSize
                     ),
                     force: true
                 )
@@ -662,13 +686,24 @@ actor ExternalPhotoExportService {
                     let deliveredByteCount = try await write(
                         resource: resource,
                         to: partialURL
-                    ) { fraction in
+                    ) { fraction, bytesWritten in
+                        let expectedBytes = asset.estimatedFileSize
+                        let byteFraction =
+                            expectedBytes > 0
+                                ? Double(bytesWritten)
+                                    / Double(expectedBytes)
+                                : 0
                         progressEmitter.send(
                             ExternalPhotoExportProgress(
                                 completedFileCount: completedSoFar,
                                 totalFileCount: totalFileCount,
                                 currentFilename: filename,
-                                currentFileFraction: fraction
+                                currentFileFraction: max(
+                                    fraction,
+                                    min(byteFraction, 0.99)
+                                ),
+                                currentBytesWritten: bytesWritten,
+                                currentBytesExpected: expectedBytes
                             )
                         )
                     }
@@ -769,22 +804,37 @@ actor ExternalPhotoExportService {
             let addition = totalBytes.addingReportingOverflow(assetBytes)
             totalBytes = addition.overflow ? .max : addition.partialValue
 
-            // Checkpoint after every verified asset. If iOS later suspends or
-            // terminates the process, completed items and their manifest are
-            // already durable on the chosen drive.
-            try? writeManifest(
-                entries: manifestEntries,
-                existingEntries: existingManifestEntries,
-                exportedAt: now,
-                to: directoryURL
-            )
-            try? writeSession(
-                signatures: signatures,
-                completedAssetIDs: exportedAssetIDs,
-                createdAt: sessionCreatedAt,
-                isComplete: false,
-                to: directoryURL
-            )
+            // Checkpoint so a later suspend or termination keeps completed
+            // items durable — but not after literally every asset. The
+            // manifest describes the folder's entire history, so re-encoding
+            // it each time is quadratic once a destination holds thousands of
+            // files, and that cost lands between every copy. Checkpointing on
+            // a size/time boundary keeps the same durability guarantee for a
+            // fraction of the work: the most a crash can cost is the few
+            // verified items since the last checkpoint, and those are
+            // re-detected as already-exported on the next run anyway.
+            let assetsSinceCheckpoint =
+                exportedAssetIDs.count - checkpointedAssetCount
+            let secondsSinceCheckpoint = Date()
+                .timeIntervalSince(lastCheckpointAt)
+            if assetsSinceCheckpoint >= Self.checkpointAssetInterval
+                || secondsSinceCheckpoint >= Self.checkpointSecondsInterval {
+                try? writeManifest(
+                    entries: manifestEntries,
+                    existingEntries: existingManifestEntries,
+                    exportedAt: now,
+                    to: directoryURL
+                )
+                try? writeSession(
+                    signatures: signatures,
+                    completedAssetIDs: exportedAssetIDs,
+                    createdAt: sessionCreatedAt,
+                    isComplete: false,
+                    to: directoryURL
+                )
+                checkpointedAssetCount = exportedAssetIDs.count
+                lastCheckpointAt = Date()
+            }
         }
 
         try? writeManifest(
@@ -839,6 +889,176 @@ actor ExternalPhotoExportService {
         )
         try manifestData.write(to: manifestURL, options: .atomic)
         _ = try verifiedByteCount(at: manifestURL)
+    }
+
+
+    // MARK: - Legacy folder migration
+
+    struct ExternalPhotoExportMigrationResult: Sendable, Equatable {
+        var movedFileCount: Int = 0
+        var mergedAssetCount: Int = 0
+        var removedFolderCount: Int = 0
+        var failedFolderNames: [String] = []
+
+        var didChangeAnything: Bool {
+            movedFileCount > 0 || mergedAssetCount > 0 || removedFolderCount > 0
+        }
+    }
+
+    /// Folders written by the old per-run layout, newest first so that when the
+    /// same photo was exported more than once the most recent copy is the one
+    /// that keeps its original filename.
+    private func legacyExportFolders(in directoryURL: URL) -> [URL] {
+        guard let children = try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        return children
+            .filter { url in
+                (try? url.resourceValues(forKeys: [.isDirectoryKey]))?
+                    .isDirectory == true
+                    && url.lastPathComponent.hasPrefix("PhotoDuck Export ")
+            }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+    }
+
+    /// Lifts files out of the old timestamped folders into the destination
+    /// itself and merges their manifests into the single one, so photos
+    /// exported before the layout change are found by dedupe instead of being
+    /// copied a second time.
+    ///
+    /// Safety: a source file is only removed once its copy exists at the
+    /// recorded size. Anything that cannot be moved is left exactly where it
+    /// is, and its folder is kept.
+    @discardableResult
+    func migrateLegacyExportFolders(
+        in directoryURL: URL
+    ) async -> ExternalPhotoExportMigrationResult {
+        var result = ExternalPhotoExportMigrationResult()
+        let folders = legacyExportFolders(in: directoryURL)
+        guard !folders.isEmpty else { return result }
+
+        let accessedSecurityScope =
+            directoryURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessedSecurityScope {
+                directoryURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        var mergedEntries = loadManifestEntries(in: directoryURL)
+        var knownAssetIDs = Set(mergedEntries.map(\.localIdentifier))
+        var usedNames = Set(
+            mergedEntries.flatMap(\.resources).map {
+                $0.exportedFilename.lowercased()
+            }
+        )
+        usedNames.formUnion(existingFilenames(in: directoryURL))
+
+        for folder in folders {
+            var folderFullyMigrated = true
+            let folderEntries = loadManifestEntries(in: folder)
+
+            for entry in folderEntries {
+                // The newest copy of a repeated export wins; older duplicates
+                // are left in place rather than silently discarded.
+                guard !knownAssetIDs.contains(entry.localIdentifier) else {
+                    folderFullyMigrated = false
+                    continue
+                }
+
+                var movedResources:
+                    [ExternalPhotoExportManifest.AssetEntry.ResourceEntry] = []
+                var entryFullyMoved = true
+                for resource in entry.resources {
+                    let sourceURL = folder.appendingPathComponent(
+                        resource.exportedFilename
+                    )
+                    guard (try? verifiedByteCount(at: sourceURL))
+                        == resource.byteCount else {
+                        entryFullyMoved = false
+                        break
+                    }
+                    let destinationName =
+                        ExternalPhotoExportNaming.uniqueFilename(
+                            preferredName: resource.exportedFilename,
+                            assetIndex: 0,
+                            resourceIndex: 0,
+                            usedNames: &usedNames
+                        )
+                    let destinationURL = directoryURL.appendingPathComponent(
+                        destinationName
+                    )
+                    do {
+                        try fileManager.moveItem(
+                            at: sourceURL,
+                            to: destinationURL
+                        )
+                        guard (try? verifiedByteCount(at: destinationURL))
+                            == resource.byteCount else {
+                            entryFullyMoved = false
+                            break
+                        }
+                        result.movedFileCount += 1
+                        movedResources.append(
+                            .init(
+                                originalFilename: resource.originalFilename,
+                                exportedFilename: destinationName,
+                                resourceType: resource.resourceType,
+                                byteCount: resource.byteCount
+                            )
+                        )
+                    } catch {
+                        entryFullyMoved = false
+                        break
+                    }
+                }
+
+                guard entryFullyMoved,
+                      movedResources.count == entry.resources.count else {
+                    folderFullyMigrated = false
+                    continue
+                }
+                mergedEntries.append(
+                    ExternalPhotoExportManifest.AssetEntry(
+                        localIdentifier: entry.localIdentifier,
+                        creationDate: entry.creationDate,
+                        pixelWidth: entry.pixelWidth,
+                        pixelHeight: entry.pixelHeight,
+                        modificationDate: entry.modificationDate,
+                        resources: movedResources
+                    )
+                )
+                knownAssetIDs.insert(entry.localIdentifier)
+                result.mergedAssetCount += 1
+            }
+
+            // Only retire a folder once nothing of value is left in it.
+            let leftovers = (
+                try? fileManager.contentsOfDirectory(atPath: folder.path)
+            )?.filter {
+                $0 != Self.manifestFilename && $0 != Self.sessionFilename
+            } ?? []
+            if folderFullyMigrated, leftovers.isEmpty {
+                if (try? fileManager.removeItem(at: folder)) != nil {
+                    result.removedFolderCount += 1
+                }
+            } else {
+                result.failedFolderNames.append(folder.lastPathComponent)
+            }
+        }
+
+        if result.mergedAssetCount > 0 {
+            try? writeManifest(
+                entries: mergedEntries,
+                exportedAt: Date(),
+                to: directoryURL
+            )
+        }
+        return result
     }
 
     /// The one manifest for a destination folder.
@@ -928,67 +1148,11 @@ actor ExternalPhotoExportService {
     }
 
 
-    /// Free space on the destination, or nil when it cannot be determined.
-    ///
-    /// `volumeAvailableCapacityForImportantUsage` is defined for the local
-    /// device volume. External drives surfaced through the Files provider
-    /// commonly report **0** for it rather than reporting nothing at all — and
-    /// because 0 is a valid non-nil value, trusting it aborted exports to a
-    /// drive with terabytes free. Only a positive reading is trusted, and each
-    /// source is tried in turn; nil means "unknown", which callers treat as
-    /// permissive rather than blocking a legitimate export.
-    private func availableCapacity(at directoryURL: URL) -> Int64? {
-        let importantUsage = (try? directoryURL.resourceValues(
-            forKeys: [.volumeAvailableCapacityForImportantUsageKey]
-        ))?.volumeAvailableCapacityForImportantUsage
-        // Plain available capacity is the meaningful key for external volumes.
-        let plainCapacity = (try? directoryURL.resourceValues(
-            forKeys: [.volumeAvailableCapacityKey]
-        ))?.volumeAvailableCapacity
-        let filesystemFree = (
-            try? fileManager.attributesOfFileSystem(
-                forPath: directoryURL.path
-            )
-        )?[.systemFreeSize] as? NSNumber
-
-        // `volumeAvailableCapacityForImportantUsage` is already Int64 while
-        // `volumeAvailableCapacity` is Int, so the conversions differ.
-        return ExternalPhotoExportCapacity.firstTrustedCapacity([
-            importantUsage,
-            plainCapacity.map { Int64($0) },
-            filesystemFree?.int64Value
-        ])
-    }
-
-    private func recoverablePartialBytes(
-        in directoryURL: URL
-    ) -> Int64 {
-        guard let URLs = try? fileManager.contentsOfDirectory(
-            at: directoryURL,
-            includingPropertiesForKeys: [.fileSizeKey],
-            options: []
-        ) else {
-            return 0
-        }
-        return URLs.reduce(into: Int64(0)) { total, URL in
-            guard URL.lastPathComponent.hasPrefix("."),
-                  URL.pathExtension == "partial",
-                  let size = try? URL.resourceValues(
-                    forKeys: [.fileSizeKey]
-                  ).fileSize,
-                  size > 0 else {
-                return
-            }
-            let addition = total.addingReportingOverflow(Int64(size))
-            total = addition.overflow ? .max : addition.partialValue
-        }
-    }
-
     @discardableResult
     private func write(
         resource: PHAssetResource,
         to destinationURL: URL,
-        onProgress: @Sendable @escaping (Double) -> Void = { _ in }
+        onProgress: @Sendable @escaping (Double, Int64) -> Void = { _, _ in }
     ) async throws -> Int64 {
         let existingByteCount: Int64
         if fileManager.fileExists(atPath: destinationURL.path) {
@@ -1047,18 +1211,23 @@ actor ExternalPhotoExportService {
         resource: PHAssetResource,
         to destinationURL: URL,
         existingByteCount: Int64,
-        onProgress: @Sendable @escaping (Double) -> Void
+        onProgress: @Sendable @escaping (Double, Int64) -> Void
     ) async throws -> Int64 {
         let fileHandle = try FileHandle(forWritingTo: destinationURL)
         try fileHandle.seekToEnd()
         let state = ExternalPhotoResourceWriteState(
             fileHandle: fileHandle,
             resourceManager: resourceManager,
-            bytesToSkip: existingByteCount
+            bytesToSkip: existingByteCount,
+            onByteProgress: { byteCount in
+                onProgress(0, byteCount)
+            }
         )
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true
-        options.progressHandler = onProgress
+        options.progressHandler = { fraction in
+            onProgress(fraction, state.expectedTotalByteCount)
+        }
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation {
                 (continuation: CheckedContinuation<Void, Error>) in
@@ -1082,26 +1251,48 @@ actor ExternalPhotoExportService {
     private func writeDirect(
         resource: PHAssetResource,
         to destinationURL: URL,
-        onProgress: @Sendable @escaping (Double) -> Void
+        onProgress: @Sendable @escaping (Double, Int64) -> Void
     ) async throws -> Int64 {
         try Task.checkCancellation()
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true
-        options.progressHandler = onProgress
+        let destinationPath = destinationURL.path
+        options.progressHandler = { fraction in
+            let byteCount = (
+                try? FileManager.default.attributesOfItem(
+                    atPath: destinationPath
+                )[.size] as? NSNumber
+            )??.int64Value ?? 0
+            onProgress(fraction, byteCount)
+        }
+
+        let byteMonitor = Task.detached {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled else { break }
+                let byteCount = (
+                    try? FileManager.default.attributesOfItem(
+                        atPath: destinationPath
+                    )[.size] as? NSNumber
+                )??.int64Value ?? 0
+                onProgress(0, byteCount)
+            }
+        }
+        defer { byteMonitor.cancel() }
 
         try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, Error>) in
-            resourceManager.writeData(
-                for: resource,
-                toFile: destinationURL,
-                options: options
-            ) { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume()
+                (continuation: CheckedContinuation<Void, Error>) in
+                resourceManager.writeData(
+                    for: resource,
+                    toFile: destinationURL,
+                    options: options
+                ) { error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume()
+                    }
                 }
-            }
         }
         try Task.checkCancellation()
         return try verifiedByteCount(at: destinationURL)
@@ -1199,6 +1390,10 @@ private final class ExternalPhotoExportProgressEmitter: @unchecked Sendable {
             progress.overallFraction
                 - (lastProgress?.overallFraction ?? -1)
         )
+        let byteDelta = abs(
+            progress.currentBytesWritten
+                - (lastProgress?.currentBytesWritten ?? 0)
+        )
         let crossedFileBoundary =
             progress.completedFileCount
                 != lastProgress?.completedFileCount
@@ -1207,7 +1402,13 @@ private final class ExternalPhotoExportProgressEmitter: @unchecked Sendable {
             force
             || lastProgress == nil
             || crossedFileBoundary
-            || (elapsed >= 0.25 && fractionDelta >= 0.002)
+            || (
+                elapsed >= 0.25
+                    && (
+                        fractionDelta >= 0.002
+                            || byteDelta >= 1_048_576
+                    )
+            )
         guard shouldEmit else {
             lock.unlock()
             return
@@ -1224,11 +1425,14 @@ private final class ExternalPhotoExportProgressEmitter: @unchecked Sendable {
 /// handle operation is protected by `lock`; the continuation is consumed
 /// exactly once. This narrow unchecked conformance documents that invariant.
 final class ExternalPhotoResourceWriteState: @unchecked Sendable {
-    private static let writeBufferByteCount = 1_048_576
+    // Larger sequential writes materially improve throughput on USB drives
+    // and Files providers, where each write can carry substantial overhead.
+    private static let writeBufferByteCount = 32 * 1_048_576
 
     private let lock = NSLock()
     private let fileHandle: FileHandle
     private let resourceManager: PHAssetResourceManager
+    private let onByteProgress: @Sendable (Int64) -> Void
     private var pendingData = Data()
     private var continuation: CheckedContinuation<Void, Error>?
     private var requestID = PHInvalidAssetResourceDataRequestID
@@ -1240,10 +1444,12 @@ final class ExternalPhotoResourceWriteState: @unchecked Sendable {
     init(
         fileHandle: FileHandle,
         resourceManager: PHAssetResourceManager,
-        bytesToSkip: Int64 = 0
+        bytesToSkip: Int64 = 0,
+        onByteProgress: @Sendable @escaping (Int64) -> Void = { _ in }
     ) {
         self.fileHandle = fileHandle
         self.resourceManager = resourceManager
+        self.onByteProgress = onByteProgress
         remainingBytesToSkip = max(bytesToSkip, 0)
         resumedPrefixByteCount = max(bytesToSkip, 0)
     }
@@ -1288,50 +1494,73 @@ final class ExternalPhotoResourceWriteState: @unchecked Sendable {
             CheckedContinuation<Void, Error>?
         var failure: Error?
         var requestToCancel = PHInvalidAssetResourceDataRequestID
+        var reportedByteCount: Int64?
 
         lock.lock()
         guard !isFinished else {
             lock.unlock()
             return
         }
-        do {
-            let writableData: Data
-            if remainingBytesToSkip > 0 {
-                let skippedByteCount = min(
-                    remainingBytesToSkip,
-                    Int64(data.count)
+        // Buffer under the lock, but never write under it. Writing a
+        // multi-megabyte block to an external drive can take a long time, and
+        // holding the lock across it stalled the PhotoKit delivery thread —
+        // the download and the disk write ended up serialised instead of
+        // overlapping, which is exactly the wrong shape for multi-GB video.
+        var blockToWrite: Data?
+        let writableData: Data
+        if remainingBytesToSkip > 0 {
+            let skippedByteCount = min(
+                remainingBytesToSkip,
+                Int64(data.count)
+            )
+            remainingBytesToSkip -= skippedByteCount
+            writableData = data.count == Int(skippedByteCount)
+                ? Data()
+                : data.subdata(
+                    in: data.startIndex
+                        .advanced(by: Int(skippedByteCount))..<data.endIndex
                 )
-                remainingBytesToSkip -= skippedByteCount
-                writableData = Data(
-                    data.dropFirst(Int(skippedByteCount))
-                )
-            } else {
-                writableData = data
-            }
+        } else {
+            writableData = data
+        }
 
-            if writableData.isEmpty {
-                // The prefix already exists in the interrupted partial file.
-            } else if writableData.count >= Self.writeBufferByteCount {
-                try flushPendingData()
-                try fileHandle.write(contentsOf: writableData)
-                writtenByteCount += Int64(writableData.count)
-            } else {
-                pendingData.append(writableData)
-                writtenByteCount += Int64(writableData.count)
-                if pendingData.count >= Self.writeBufferByteCount {
-                    try flushPendingData()
-                }
+        if writableData.isEmpty {
+            // The prefix already exists in the interrupted partial file.
+        } else {
+            pendingData.append(writableData)
+            writtenByteCount += Int64(writableData.count)
+            reportedByteCount =
+                resumedPrefixByteCount + writtenByteCount
+            if pendingData.count >= Self.writeBufferByteCount {
+                blockToWrite = pendingData
+                pendingData = Data()
+                pendingData.reserveCapacity(Self.writeBufferByteCount)
             }
-        } catch {
-            failure = error
-            isFinished = true
-            completion = continuation
-            continuation = nil
-            requestToCancel = requestID
-            pendingData.removeAll(keepingCapacity: false)
-            try? fileHandle.close()
         }
         lock.unlock()
+        if let reportedByteCount {
+            onByteProgress(reportedByteCount)
+        }
+
+        // PhotoKit delivers data on a serial queue, so ordering is preserved
+        // even though the write now happens outside the lock.
+        if let blockToWrite {
+            do {
+                try fileHandle.write(contentsOf: blockToWrite)
+            } catch {
+                lock.lock()
+                if !isFinished {
+                    isFinished = true
+                    failure = error
+                    completion = continuation
+                    continuation = nil
+                    requestToCancel = requestID
+                    pendingData.removeAll(keepingCapacity: false)
+                    try? fileHandle.close()
+                }
+                lock.unlock()
+            }
+        }
 
         if requestToCancel != PHInvalidAssetResourceDataRequestID {
             resourceManager.cancelDataRequest(requestToCancel)
