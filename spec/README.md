@@ -560,7 +560,7 @@ Status values: `todo` · `in-progress` · `done` · `blocked (reason)` · `needs
 
 | WS | Workstream | Track | Ms | Size | Verify-first | Depends on | Chapter | Status |
 |---|---|---|---|---|---|---|---|---|
-| WS-01 | Repo consolidation and WIP commit | A | M0 | S |  | — | [01](01-foundation-upload-blockers-p0s.md) | todo |
+| WS-01 | Repo consolidation and WIP commit | A | M0 | S |  | — | [01](01-foundation-upload-blockers-p0s.md) | done 2026-10-04 (local; pushes and outer-repo retirement await owner approval) |
 | WS-02 | App Store upload blockers | A | M0 | S |  | WS-01 | [01](01-foundation-upload-blockers-p0s.md) | todo |
 | WS-03 | Test foundation: DeletionManager seam, isolated test host, shared doubles | A | M0 | M |  | WS-01 | [01](01-foundation-upload-blockers-p0s.md) | todo |
 | WS-04 | P0 photo-review hotfixes | A | M0 | M |  | WS-03 | [01](01-foundation-upload-blockers-p0s.md) | todo |
