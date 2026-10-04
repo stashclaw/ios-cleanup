@@ -5,6 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 **PhotoDuck** — an iOS photo storage cleaner. On-device only, no server, no third-party SDKs. Swift strict concurrency throughout, iOS 16.0 minimum.
 
+## Implementation plan (read first)
+All implementation work follows `spec/README.md`, the v1 spec from the 2026-09-27 review: 64 workstreams in 13 chapters, with operating rules, a decision log and a status table. It supersedes `FIXSPEC.md` and `PERFORMANCE_MASTER_PROMPT.md`. Work one workstream at a time from its chapter, and update the status table when you finish.
+
+Known gaps between this file and the code, until the listed workstream fixes them:
+- **Undo window (WS-11):** the "10-second undo window" described below is dead code. `DeletionManager.scheduleDelete` has no callers, so every deletion goes straight to the iOS confirmation prompt. The spec's default decision (D-UNDO) is to retire the window.
+- **Simulator (WS-07):** Vision cannot create an inference context in the simulator, so every photo is "unanalyzed" there until WS-07's fixture analyzer lands.
+
 ## Build & Test
 
 ```bash
