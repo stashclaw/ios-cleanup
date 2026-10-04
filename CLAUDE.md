@@ -12,6 +12,13 @@ Known gaps between this file and the code, until the listed workstream fixes the
 - **Undo window (WS-11):** the "10-second undo window" described below is dead code. `DeletionManager.scheduleDelete` has no callers, so every deletion goes straight to the iOS confirmation prompt. The spec's default decision (D-UNDO) is to retire the window.
 - **Simulator (WS-07):** Vision cannot create an inference context in the simulator, so every photo is "unanalyzed" there until WS-07's fixture analyzer lands.
 
+## Git workflow
+- This nested repo (`/Users/justinwong/iOSCLEANER/ios-cleanup`) is the app. The parent directory is not a repository of the app; never edit or commit from it.
+- `main` is the only long-lived branch. Work happens on `ws/NN-slug` branches cut from `main`, with one concern per commit.
+- Never force-push `main`, and never `git reset --hard origin/main`.
+- The March 2026 prototype line is archived at `archive/prototype-main-2026-03-27` (tag, plus a branch once pushed). Do not cherry-pick from it.
+- Pushing, merging to `main` and remote branch changes need the owner's approval.
+
 ## Build & Test
 
 ```bash

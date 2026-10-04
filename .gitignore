@@ -26,3 +26,13 @@ fastlane/test_output
 
 # Generated design intermediates
 tmp/
+
+# Local artifacts
+*.xcresult
+build/TestResults*
+MLTraining/trained-models/
+**/PhotoDuck-ML-Export/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.claude/settings.local.json
